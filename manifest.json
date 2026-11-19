@@ -1,0 +1,140 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Passimoritz/hostwerk-public/main/sdk/manifest.schema.json",
+  "id": "office",
+  "name": {
+    "de": "Office",
+    "en": "Office"
+  },
+  "description": {
+    "de": "Dokumente, Tabellen, Präsentationen und PDFs direkt in Hostwerks „Dateien“ erstellen, bearbeiten und lesen – Microsoft Office (docx, xlsx, pptx, auch alte doc/xls/ppt), OpenDocument (odt, ods, odp), Google-Dateien, RTF, Markdown, CSV und mehr. Ein Klick öffnet die Datei, „Neu“ legt Dokumente an, Hostwerk erscheint unter „Öffnen mit“ und wird auf Wunsch Standard-App. Mit Vorlagen, Versionen, Suche, Umwandeln, Teilen und Einstellungen.",
+    "en": "Create, edit and read documents, spreadsheets, presentations and PDFs right in Hostwerk's Files – Microsoft Office (docx, xlsx, pptx, also legacy doc/xls/ppt), OpenDocument (odt, ods, odp), Google files, RTF, Markdown, CSV and more. A click opens the file, “New” creates documents, Hostwerk appears under “Open with” and can be the default app. With templates, versions, search, conversion, sharing and settings."
+  },
+  "version": "1.0.0",
+  "author": "Hostwerk",
+  "homepage": "https://github.com/Passimoritz/hostwerk-ext-office",
+  "license": "MIT",
+  "icon": "icon.svg",
+  "banner": "banner.svg",
+  "color": "#2563eb",
+  "category": "other",
+  "hostwerk": ">=3.2.2",
+  "sdkVersion": "3.15",
+  "permissions": [
+    "native"
+  ],
+  "data": {
+    "folders": [
+      "data/office-data",
+      "data/office-engine",
+      "data/office"
+    ]
+  },
+  "page": {
+    "title": {
+      "de": "Office",
+      "en": "Office"
+    },
+    "description": {
+      "de": "Office-Dokumente in „Dateien“ – Einstellungen und Editor.",
+      "en": "Office documents in Files – settings and editor."
+    },
+    "icon": "file",
+    "nav": false
+  },
+  "backend": "server/index.js",
+  "ui": "ui/index.js",
+  "screenshots": [
+    "docs/screenshot.png",
+    "docs/screenshot.de.png",
+    "docs/screenshot-docs.webp",
+    "docs/screenshot-sheets.webp",
+    "docs/screenshot-slides.webp",
+    "docs/screenshot-pdf.webp"
+  ],
+  "contributes": {
+    "new": [
+      {
+        "id": "new-docs",
+        "title": {
+          "de": "Dokument",
+          "en": "Document"
+        },
+        "description": {
+          "de": "Neues Textdokument (Word, OpenDocument …)",
+          "en": "New text document (Word, OpenDocument …)"
+        },
+        "icon": "file"
+      },
+      {
+        "id": "new-sheets",
+        "title": {
+          "de": "Tabelle",
+          "en": "Spreadsheet"
+        },
+        "description": {
+          "de": "Neue Tabelle (Excel, OpenDocument, CSV …)",
+          "en": "New spreadsheet (Excel, OpenDocument, CSV …)"
+        },
+        "icon": "table"
+      },
+      {
+        "id": "new-slides",
+        "title": {
+          "de": "Präsentation",
+          "en": "Presentation"
+        },
+        "description": {
+          "de": "Neue Präsentation (PowerPoint, OpenDocument …)",
+          "en": "New presentation (PowerPoint, OpenDocument …)"
+        },
+        "icon": "tv"
+      }
+    ]
+  },
+  "synergies": [
+    {
+      "with": "file-share",
+      "title": {
+        "de": "Große Dokumente per Link weitergeben",
+        "en": "Hand over large documents by link"
+      },
+      "text": {
+        "de": "„Office-Dokumente“ ist ein Bereich in Dateien – mit Dateifreigabe gibst du ganze Ordner per SFTP oder Link weiter.",
+        "en": "“Office documents” is a root in Files – with File share you hand over whole folders by SFTP or link."
+      }
+    },
+    {
+      "with": "team",
+      "title": {
+        "de": "Gemeinsam an Dokumenten arbeiten",
+        "en": "Work on documents together"
+      },
+      "text": {
+        "de": "Gib Team-Mitgliedern „Dateien“ frei – Office merkt, wenn eine Datei schon woanders offen ist, und fragt vor dem Überschreiben.",
+        "en": "Share Files with team members – Office notices when a file is already open elsewhere and asks before overwriting."
+      }
+    },
+    {
+      "with": "passwords",
+      "title": {
+        "de": "Zugänge im Tresor",
+        "en": "Logins in the vault"
+      },
+      "text": {
+        "de": "Passwörter für Freigabe-Links, den ONLYOFFICE-Schlüssel und den Google-Client sicher im Passwort-Tresor ablegen.",
+        "en": "Keep passwords of share links, the ONLYOFFICE secret and the Google client safe in the password vault."
+      }
+    },
+    {
+      "with": "ai-media",
+      "title": {
+        "de": "Bilder für Präsentationen",
+        "en": "Pictures for presentations"
+      },
+      "text": {
+        "de": "Mit KI-Medien erzeugte Bilder in Dokumente und Folien einfügen.",
+        "en": "Insert pictures made with AI media into documents and slides."
+      }
+    }
+  ]
+}

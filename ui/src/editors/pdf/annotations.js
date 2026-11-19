@@ -1,0 +1,288 @@
+/*
+ * Own annotations of the PDF editor – pure data + geometry + pdf-lib output (no DOM, testable in Node).
+ *
+ * Every annotation lives in the PDF user space of its page (points, origin bottom-left, y up – exactly what
+ * pdf.js' viewport.convertToPdfPoint returns and what pdf-lib draws with). Types:
+ *
+ *   highlight | underline | strike  { quads: [{ x, y, w, h }], color }
+ *   ink        { paths: [[x, y, x, y, …]], color, width }
+ *   rect | ellipse { x, y, w, h, color, width, fill? }
+ *   line | arrow   { x1, y1, x2, y2, color, width }
+ *   text       { x, y (baseline of the first line), text, size, color, rot }
+ *   note       { x, y (bottom-left of the icon), text, color }
+ *   stamp      { x, y, w, h, text, color, rot }
+ *   image      { x, y, w, h, rot, png: Uint8Array, signature? }   (also signatures)
+ *
+ * `rot` (0/90/180/270) is the page's view rotation when the item was placed – text/stamp/image are drawn turned by
+ * it so they appear upright the way the user saw them. (x, y) is then the bottom-left corner in that turned frame.
+ */
+import {
+  rgb, degrees, PDFName, PDFHexString, PDFString, PDFNumber,
+  drawRectangle, drawEllipse, drawLine, drawSvgPath, drawText, drawImage,
+  pushGraphicsState, popGraphicsState, setGraphicsState, LineCapStyle,
+} from 'pdf-lib';
+
+export const COLORS = ['#ffd400', '#5fd068', '#4ea8ff', '#ff6b9a', '#ff5d3a', '#a46bff', '#111111', '#ffffff'];
+export const STAMPS = [
+  { text: 'APPROVED', color: '#1d8a4b' }, { text: 'DRAFT', color: '#2463c9' }, { text: 'CONFIDENTIAL', color: '#c42a3c' },
+  { text: 'REJECTED', color: '#c42a3c' }, { text: 'PAID', color: '#1d8a4b' }, { text: 'FINAL', color: '#6a46ff' },
+  { text: 'COPY', color: '#555555' }, { text: 'RECEIVED', color: '#946000' },
+];
+export const MARKUP = ['highlight', 'underline', 'strike'];
+const SUBTYPE = { highlight: 'Highlight', underline: 'Underline', strike: 'StrikeOut', ink: 'Ink', rect: 'Square', ellipse: 'Circle', line: 'Line', arrow: 'Line', text: 'FreeText', note: 'Text', stamp: 'Stamp', image: 'Stamp' };
+
+let seq = 0;
+export const newId = () => `a${Date.now().toString(36)}${(seq++).toString(36)}`;
+
+export function hexToRgb(hex) {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(hex || ''));
+  if (!m) return [0, 0, 0];
+  let h = m[1];
+  if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+  return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+}
+const col = (hex) => { const [r, g, b] = hexToRgb(hex); return rgb(r, g, b); };
+
+const rad = (d) => (d * Math.PI) / 180;
+/** local frame (dx right, dy up, turned by rot) → page space offset */
+export function turn(dx, dy, rot = 0) {
+  const c = Math.cos(rad(rot)); const s = Math.sin(rad(rot));
+  return [dx * c - dy * s, dx * s + dy * c];
+}
+
+/** corners of a turned box anchored at its bottom-left (x, y) */
+function boxCorners(a) {
+  const pts = [[0, 0], [a.w, 0], [a.w, a.h], [0, a.h]];
+  return pts.map(([dx, dy]) => { const [ox, oy] = turn(dx, dy, a.rot || 0); return [a.x + ox, a.y + oy]; });
+}
+
+export function textLines(a) { return String(a.text || '').split(/\r?\n/); }
+/** rough text width (Helvetica average) – the exact width comes from the font when saving */
+export const approxWidth = (s, size) => String(s).length * size * 0.52;
+export function textBoxSize(a) {
+  const lines = textLines(a);
+  return { w: Math.max(...lines.map((l) => approxWidth(l, a.size)), a.size), h: lines.length * a.size * 1.2 };
+}
+
+/** axis-aligned bounding box in page space: { x, y, w, h } */
+export function bbox(a) {
+  let pts;
+  switch (a.type) {
+    case 'highlight': case 'underline': case 'strike':
+      pts = a.quads.flatMap((q) => [[q.x, q.y], [q.x + q.w, q.y + q.h]]); break;
+    case 'ink': pts = []; for (const p of a.paths) for (let i = 0; i < p.length; i += 2) pts.push([p[i], p[i + 1]]); break;
+    case 'rect': case 'ellipse': pts = [[a.x, a.y], [a.x + a.w, a.y + a.h]]; break;
+    case 'line': case 'arrow': pts = [[a.x1, a.y1], [a.x2, a.y2]]; break;
+    case 'text': {
+      const { w, h } = textBoxSize(a);
+      // the box starts one ascent above the baseline of the first line
+      pts = [[0, a.size * 0.95], [w, a.size * 0.95], [w, a.size * 0.95 - h], [0, a.size * 0.95 - h]].map(([dx, dy]) => { const [ox, oy] = turn(dx, dy, a.rot || 0); return [a.x + ox, a.y + oy]; });
+      break;
+    }
+    case 'note': pts = [[a.x, a.y], [a.x + 20, a.y + 20]]; break;
+    default: pts = boxCorners(a);
+  }
+  if (!pts.length) return { x: 0, y: 0, w: 0, h: 0 };
+  const xs = pts.map((p) => p[0]); const ys = pts.map((p) => p[1]);
+  const pad = a.width ? a.width / 2 + (a.type === 'arrow' ? a.width * 3 : 0) : 0;
+  const x = Math.min(...xs) - pad; const y = Math.min(...ys) - pad;
+  return { x, y, w: Math.max(...xs) + pad - x, h: Math.max(...ys) + pad - y };
+}
+
+export function center(a) { const b = bbox(a); return [b.x + b.w / 2, b.y + b.h / 2]; }
+
+/** move by (dx, dy) in page space – returns a new object */
+export function translate(a, dx, dy) {
+  switch (a.type) {
+    case 'highlight': case 'underline': case 'strike': return { ...a, quads: a.quads.map((q) => ({ ...q, x: q.x + dx, y: q.y + dy })) };
+    case 'ink': return { ...a, paths: a.paths.map((p) => p.map((v, i) => v + (i % 2 ? dy : dx))) };
+    case 'line': case 'arrow': return { ...a, x1: a.x1 + dx, y1: a.y1 + dy, x2: a.x2 + dx, y2: a.y2 + dy };
+    default: return { ...a, x: a.x + dx, y: a.y + dy };
+  }
+}
+
+/** scale around the item's centre by factor f (uniform, works for every rotation) */
+export function scale(a, f) {
+  if (!(f > 0)) return a;
+  const [cx, cy] = center(a);
+  const sx = (x) => cx + (x - cx) * f; const sy = (y) => cy + (y - cy) * f;
+  switch (a.type) {
+    case 'highlight': case 'underline': case 'strike': return a; // bound to the text
+    case 'ink': return { ...a, paths: a.paths.map((p) => p.map((v, i) => (i % 2 ? sy(v) : sx(v)))) };
+    case 'line': case 'arrow': return { ...a, x1: sx(a.x1), y1: sy(a.y1), x2: sx(a.x2), y2: sy(a.y2) };
+    case 'note': return a;
+    case 'text': return { ...a, x: sx(a.x), y: sy(a.y), size: Math.max(4, Math.min(144, a.size * f)) };
+    case 'rect': case 'ellipse': return { ...a, x: sx(a.x), y: sy(a.y), w: a.w * f, h: a.h * f };
+    default: return { ...a, x: sx(a.x), y: sy(a.y), w: a.w * f, h: a.h * f };
+  }
+}
+
+/** merge selection rectangles that sit on the same line into one quad each */
+export function mergeQuads(rects) {
+  const rs = rects.filter((r) => r.w > 0.5 && r.h > 0.5).map((r) => ({ ...r })).sort((a, b) => (b.y + b.h / 2) - (a.y + a.h / 2) || a.x - b.x);
+  const out = [];
+  for (const r of rs) {
+    const last = out[out.length - 1];
+    if (last && Math.abs((last.y + last.h / 2) - (r.y + r.h / 2)) < Math.min(last.h, r.h) * 0.5 && r.x <= last.x + last.w + r.h) {
+      const x = Math.min(last.x, r.x); const y = Math.min(last.y, r.y);
+      last.w = Math.max(last.x + last.w, r.x + r.w) - x; last.h = Math.max(last.y + last.h, r.y + r.h) - y; last.x = x; last.y = y;
+    } else out.push(r);
+  }
+  return out;
+}
+
+/** "M x y L …" in page space for an ink path (y up) – used by the SVG overlay too */
+export function inkPath(p) {
+  if (p.length < 2) return '';
+  let d = `M${p[0].toFixed(2)} ${p[1].toFixed(2)}`;
+  if (p.length === 2) d += `L${(p[0] + 0.1).toFixed(2)} ${p[1].toFixed(2)}`;
+  for (let i = 2; i < p.length; i += 2) d += `L${p[i].toFixed(2)} ${p[i + 1].toFixed(2)}`;
+  return d;
+}
+/** pdf-lib's drawSvgPath flips y (SVG is y down) – give it the path with y negated */
+const flipPath = (p) => inkPath(p.map((v, i) => (i % 2 ? -v : v)));
+
+/** arrow head polygon points (page space) at (x2, y2) */
+export function arrowHead(a) {
+  const ang = Math.atan2(a.y2 - a.y1, a.x2 - a.x1);
+  const len = Math.max(8, (a.width || 2) * 4);
+  const p1 = [a.x2 - len * Math.cos(ang - 0.45), a.y2 - len * Math.sin(ang - 0.45)];
+  const p2 = [a.x2 - len * Math.cos(ang + 0.45), a.y2 - len * Math.sin(ang + 0.45)];
+  return [p1, [a.x2, a.y2], p2];
+}
+
+/* ------------------------------------------------------------------------------------------------------------ */
+/* pdf-lib output                                                                                                */
+/* ------------------------------------------------------------------------------------------------------------ */
+
+/** text → hex string the standard font can show (characters outside WinAnsi become '?') */
+export function encodeSafe(font, s) {
+  try { return font.encodeText(s); } catch { /* fall through */ }
+  let out = '';
+  for (const ch of String(s)) { try { font.encodeText(ch); out += ch; } catch { out += '?'; } }
+  return font.encodeText(out);
+}
+function safeWidth(font, s, size) { try { return font.widthOfTextAtSize(s, size); } catch { return approxWidth(s, size); } }
+
+/**
+ * Drawing operators for one annotation in page space.
+ * res: { font (PDFFont), fontName, gs (graphics state name for opacity or null), img (XObject name) }
+ */
+export function operatorsFor(a, res) {
+  const c = col(a.color);
+  switch (a.type) {
+    case 'highlight':
+      return a.quads.flatMap((q) => drawRectangle({ x: q.x, y: q.y, width: q.w, height: q.h, color: c, borderWidth: 0, rotate: degrees(0), xSkew: degrees(0), ySkew: degrees(0), graphicsState: res.gs || undefined }));
+    case 'underline': case 'strike':
+      return a.quads.flatMap((q) => {
+        const t = Math.max(0.8, q.h * 0.07);
+        const y = a.type === 'underline' ? q.y + t : q.y + q.h * 0.45;
+        return drawLine({ start: { x: q.x, y }, end: { x: q.x + q.w, y }, thickness: t, color: c, lineCap: LineCapStyle.Butt });
+      });
+    case 'ink':
+      return a.paths.flatMap((p) => drawSvgPath(flipPath(p), { x: 0, y: 0, scale: 1, borderColor: c, borderWidth: a.width || 2, borderLineCap: LineCapStyle.Round, rotate: degrees(0), graphicsState: res.gs || undefined }));
+    case 'rect':
+      return drawRectangle({ x: a.x, y: a.y, width: a.w, height: a.h, borderColor: c, borderWidth: a.width || 2, color: a.fill ? col(a.fill) : undefined, rotate: degrees(0), xSkew: degrees(0), ySkew: degrees(0), graphicsState: res.gs || undefined });
+    case 'ellipse':
+      return drawEllipse({ x: a.x + a.w / 2, y: a.y + a.h / 2, xScale: a.w / 2, yScale: a.h / 2, borderColor: c, borderWidth: a.width || 2, color: a.fill ? col(a.fill) : undefined, rotate: degrees(0), graphicsState: res.gs || undefined });
+    case 'line': case 'arrow': {
+      const ops = drawLine({ start: { x: a.x1, y: a.y1 }, end: { x: a.x2, y: a.y2 }, thickness: a.width || 2, color: c, lineCap: LineCapStyle.Round });
+      if (a.type === 'arrow') {
+        const [p1, p2, p3] = arrowHead(a);
+        ops.push(...drawSvgPath(`M${p1[0]} ${-p1[1]}L${p2[0]} ${-p2[1]}L${p3[0]} ${-p3[1]}Z`, { x: 0, y: 0, color: c, borderColor: c, borderWidth: 1, rotate: degrees(0) }));
+      }
+      return ops;
+    }
+    case 'text': {
+      const lh = a.size * 1.2;
+      return textLines(a).flatMap((line, i) => {
+        const [ox, oy] = turn(0, -i * lh, a.rot || 0);
+        return drawText(encodeSafe(res.font, line), { x: a.x + ox, y: a.y + oy, size: a.size, font: res.fontName, color: c, rotate: degrees(a.rot || 0), xSkew: degrees(0), ySkew: degrees(0) });
+      });
+    }
+    case 'note': {
+      const ops = drawRectangle({ x: a.x, y: a.y, width: 20, height: 20, color: col(a.color || '#ffd400'), borderColor: rgb(0.45, 0.35, 0), borderWidth: 0.8, rotate: degrees(0), xSkew: degrees(0), ySkew: degrees(0) });
+      for (const k of [0, 1, 2]) ops.push(...drawLine({ start: { x: a.x + 4, y: a.y + 14 - k * 4 }, end: { x: a.x + (k === 2 ? 11 : 16), y: a.y + 14 - k * 4 }, thickness: 1, color: rgb(0.45, 0.35, 0) }));
+      return ops;
+    }
+    case 'stamp': {
+      const bw = Math.max(1.5, a.h * 0.07);
+      const [ix, iy] = turn(bw / 2, bw / 2, a.rot || 0);
+      const ops = drawRectangle({ x: a.x + ix, y: a.y + iy, width: a.w - bw, height: a.h - bw, borderColor: c, borderWidth: bw, rotate: degrees(a.rot || 0), xSkew: degrees(0), ySkew: degrees(0), graphicsState: res.gs || undefined });
+      const size = a.h * 0.5;
+      const tw = safeWidth(res.font, a.text, size);
+      const [tx, ty] = turn((a.w - tw) / 2, a.h * 0.3, a.rot || 0);
+      ops.push(...drawText(encodeSafe(res.font, a.text), { x: a.x + tx, y: a.y + ty, size, font: res.fontName, color: c, rotate: degrees(a.rot || 0), xSkew: degrees(0), ySkew: degrees(0), graphicsState: res.gs || undefined }));
+      return ops;
+    }
+    case 'image':
+      return drawImage(res.img, { x: a.x, y: a.y, width: a.w, height: a.h, rotate: degrees(a.rot || 0), xSkew: degrees(0), ySkew: degrees(0) });
+    default: return [];
+  }
+}
+
+const opacityOf = (a) => (a.type === 'highlight' ? 0.4 : a.opacity != null ? a.opacity : null);
+
+/**
+ * Writes the annotations of one page. mode 'burn' = into the page content (everyone sees them, nobody can edit them),
+ * 'annot' = real PDF annotations with an appearance stream (other apps can show, move and delete them; images and
+ * signatures are always burned in so they cannot be removed by accident).
+ */
+export async function writeAnnotations(doc, page, list, { mode = 'annot', font, author = '' } = {}) {
+  if (!list || !list.length) return;
+  const ctx = doc.context;
+  const fontName = page.node.newFontDictionary('OfHelv', font.ref);
+  for (const a of list) {
+    let imgRef = null;
+    if (a.type === 'image') imgRef = (await doc.embedPng(a.png)).ref;
+    const op = opacityOf(a);
+    const gsRef = op != null ? ctx.register(ctx.obj({ Type: 'ExtGState', ca: op, CA: op, ...(a.type === 'highlight' ? { BM: 'Multiply' } : {}) })) : null;
+    const asAnnot = mode === 'annot' && a.type !== 'image';
+    if (!asAnnot) {
+      const gs = gsRef ? page.node.newExtGState('OfGS', gsRef) : null;
+      const img = imgRef ? page.node.newXObject('OfImg', imgRef) : null;
+      const ops = operatorsFor(a, { font, fontName, gs, img });
+      page.pushOperators(pushGraphicsState(), ...(gs ? [setGraphicsState(gs)] : []), ...ops, popGraphicsState());
+      continue;
+    }
+    // appearance stream in page coordinates: BBox = Rect, identity matrix
+    const b = bbox(a);
+    const pad = 2;
+    const rect = [b.x - pad, b.y - pad, b.x + b.w + pad, b.y + b.h + pad];
+    const resDict = { Font: { OfHelv: font.ref } };
+    if (gsRef) resDict.ExtGState = { OfGS: gsRef };
+    const ops = operatorsFor(a, { font, fontName: 'OfHelv', gs: gsRef ? 'OfGS' : null });
+    const ap = ctx.register(ctx.formXObject([pushGraphicsState(), ...(gsRef ? [setGraphicsState('OfGS')] : []), ...ops, popGraphicsState()], { BBox: rect, Resources: resDict }));
+    const [r, g, bl] = hexToRgb(a.color || '#000000');
+    const dict = {
+      Type: 'Annot', Subtype: SUBTYPE[a.type], Rect: rect, F: 4, C: [r, g, bl], AP: { N: ap }, NM: PDFString.of(a.id || newId()),
+      M: PDFString.fromDate(new Date()), P: page.ref,
+    };
+    if (op != null) dict.CA = op;
+    if (a.width) dict.BS = { W: a.width, S: 'S' };
+    if (a.type === 'highlight' || a.type === 'underline' || a.type === 'strike') {
+      dict.QuadPoints = a.quads.flatMap((q) => [q.x, q.y + q.h, q.x + q.w, q.y + q.h, q.x, q.y, q.x + q.w, q.y]);
+    } else if (a.type === 'ink') {
+      dict.InkList = a.paths;
+    } else if (a.type === 'line' || a.type === 'arrow') {
+      dict.L = [a.x1, a.y1, a.x2, a.y2];
+      if (a.type === 'arrow') dict.LE = ['None', 'ClosedArrow'];
+      dict.IC = [r, g, bl];
+    } else if (a.type === 'note') {
+      dict.Name = 'Comment'; dict.Rect = [a.x, a.y, a.x + 20, a.y + 20];
+    } else if (a.type === 'text') {
+      dict.DA = PDFString.of(`/Helv ${a.size} Tf ${r.toFixed(3)} ${g.toFixed(3)} ${bl.toFixed(3)} rg`);
+      if (a.rot) dict.Rotate = a.rot;
+    }
+    if (a.fill && (a.type === 'rect' || a.type === 'ellipse')) dict.IC = hexToRgb(a.fill);
+    Object.keys(dict).forEach((k) => dict[k] === undefined && delete dict[k]);
+    const annot = ctx.obj(dict);
+    // texts must be strings, not names
+    const contents = a.type === 'stamp' ? a.text : a.text || '';
+    if (contents) annot.set(PDFName.of('Contents'), PDFHexString.fromText(contents));
+    if (author) annot.set(PDFName.of('T'), PDFHexString.fromText(author));
+    if (a.type === 'stamp') annot.set(PDFName.of('Name'), PDFName.of(String(a.text || 'Draft').replace(/[^A-Za-z0-9]/g, '') || 'Draft'));
+    if (a.rot && a.type === 'text') annot.set(PDFName.of('Rotate'), PDFNumber.of(a.rot));
+    page.node.addAnnot(ctx.register(annot));
+  }
+}

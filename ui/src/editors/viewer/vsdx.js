@@ -1,0 +1,443 @@
+/*
+ * Visio (vsdx / vsdm / vstx) → SVG, pure (no DOM): pages, masters (stencil inheritance incl. group sub-shapes),
+ * style sheets, geometry sections (MoveTo/LineTo/ArcTo/EllipticalArcTo/Ellipse, the Rel… rows, NURBSTo, PolylineTo, splines),
+ * fills with transparency, line weight/colour/pattern, arrows, text blocks (size, colour, bold/italic, alignment,
+ * wrapping, rotation), images (ForeignData) and background pages.
+ *
+ *   readVsdx(files)               files = { 'visio/pages/pages.xml': '<…>', …, media: { 'visio/media/image1.png': url } }
+ *                                 → { pages: [{ name, w, h, svg, texts: [] }] }   (w, h in inches)
+ *   geometryToPath(rows, w, h, tf) → SVG path data of one geometry section (tf maps local inches → output coords)
+ */
+import { parseXml, kids, kid } from '../_shared/xmltree.js';
+
+const S = 72; // output units per inch
+const num = (v, d = 0) => { const n = parseFloat(v); return Number.isFinite(n) ? n : d; };
+
+/* ---------------- cells, sections, inheritance ---------------- */
+
+/** <Shape> element → { cells: {N: V}, sections: { Geometry: [{ IX, cells, rows: [{ T, IX, cells, del }] }], Character: … }, text } */
+function readSheet(el) {
+  const cells = {}; const sections = {};
+  for (const c of kids(el)) {
+    if (c.n === 'Cell') cells[c.a.N] = c.a.V !== undefined ? c.a.V : c.a.F;
+    else if (c.n === 'Section') {
+      const name = c.a.N;
+      const sec = { IX: c.a.IX != null ? Number(c.a.IX) : 0, del: c.a.Del === '1', cells: {}, rows: [] };
+      for (const r of kids(c)) {
+        if (r.n === 'Cell') sec.cells[r.a.N] = r.a.V !== undefined ? r.a.V : r.a.F;
+        else if (r.n === 'Row') {
+          const row = { T: r.a.T || '', N: r.a.N || '', IX: r.a.IX != null ? Number(r.a.IX) : sec.rows.length, del: r.a.Del === '1', cells: {} };
+          for (const rc of kids(r, 'Cell')) row.cells[rc.a.N] = rc.a.V !== undefined ? rc.a.V : rc.a.F;
+          sec.rows.push(row);
+        }
+      }
+      (sections[name] = sections[name] || []).push(sec);
+    }
+  }
+  return { cells, sections };
+}
+
+function mergeRows(base, over) {
+  const map = new Map(base.map((r) => [r.IX, r]));
+  for (const r of over) {
+    if (r.del) { map.delete(r.IX); continue; }
+    const b = map.get(r.IX);
+    map.set(r.IX, b ? { ...b, T: r.T || b.T, cells: { ...b.cells, ...r.cells } } : r);
+  }
+  return [...map.values()].sort((a, b) => a.IX - b.IX);
+}
+function mergeSections(base = [], over = []) {
+  const map = new Map(base.map((s) => [s.IX, s]));
+  for (const s of over) {
+    if (s.del) { map.delete(s.IX); continue; }
+    const b = map.get(s.IX);
+    map.set(s.IX, b ? { ...s, cells: { ...b.cells, ...s.cells }, rows: mergeRows(b.rows, s.rows) } : s);
+  }
+  return [...map.values()].sort((a, b) => a.IX - b.IX);
+}
+function mergeSheet(base, over) {
+  if (!base) return over;
+  const sections = { ...base.sections };
+  for (const [k, v] of Object.entries(over.sections)) sections[k] = k === 'Geometry' || k === 'Character' || k === 'Paragraph' ? mergeSections(base.sections[k], v) : v;
+  return { cells: { ...base.cells, ...over.cells }, sections };
+}
+
+/* ---------------- colours and patterns ---------------- */
+
+const PALETTE = ['#000000', '#ffffff', '#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff', '#800000', '#008000', '#000080', '#808000', '#800080', '#008080', '#c0c0c0', '#e6e6e6', '#cdcdcd', '#b3b3b3', '#9a9a9a', '#808080', '#666666', '#4d4d4d', '#333333', '#1a1a1a'];
+export function color(v, fallback) {
+  if (v == null || v === '') return fallback;
+  const s = String(v).trim();
+  if (/^#[0-9a-f]{6}$/i.test(s)) return s.toLowerCase();
+  const rgbm = /^RGB\((\d+),\s*(\d+),\s*(\d+)\)$/i.exec(s);
+  if (rgbm) return `#${[rgbm[1], rgbm[2], rgbm[3]].map((x) => Number(x).toString(16).padStart(2, '0')).join('')}`;
+  if (/^\d+$/.test(s) && PALETTE[Number(s)]) return PALETTE[Number(s)];
+  return fallback;
+}
+const DASH = { 2: [6, 3], 3: [1.5, 3], 4: [6, 3, 1.5, 3], 5: [6, 3, 1.5, 3, 1.5, 3], 6: [9, 3, 6, 3], 7: [12, 3], 9: [4, 4], 10: [1.5, 1.5], 16: [12, 6] };
+
+/* ---------------- geometry ---------------- */
+
+const fmt = (n) => (Math.round(n * 100) / 100).toString();
+
+/** sample an elliptical arc through p0 → (via control point c) → p1 (Visio EllipticalArcTo) into points */
+function ellipticalArcPoints(x0, y0, x, y, cx, cy, angle, ratio) {
+  // transform into a space where the ellipse is a circle: rotate by -angle, scale x by 1/ratio
+  const ca = Math.cos(-angle); const sa = Math.sin(-angle);
+  const tr = (px, py) => { const rx = px * ca - py * sa; const ry = px * sa + py * ca; return [rx / (ratio || 1), ry]; };
+  const inv = (px, py) => { const sx = px * (ratio || 1); const c2 = Math.cos(angle); const s2 = Math.sin(angle); return [sx * c2 - py * s2, sx * s2 + py * c2]; };
+  const [ax, ay] = tr(x0, y0); const [bx, by] = tr(cx, cy); const [ex, ey] = tr(x, y);
+  // circle through three points
+  const d = 2 * (ax * (by - ey) + bx * (ey - ay) + ex * (ay - by));
+  if (Math.abs(d) < 1e-12) return [[x, y]];
+  const ux = ((ax * ax + ay * ay) * (by - ey) + (bx * bx + by * by) * (ey - ay) + (ex * ex + ey * ey) * (ay - by)) / d;
+  const uy = ((ax * ax + ay * ay) * (ex - bx) + (bx * bx + by * by) * (ax - ex) + (ex * ex + ey * ey) * (bx - ax)) / d;
+  const r = Math.hypot(ax - ux, ay - uy);
+  let a0 = Math.atan2(ay - uy, ax - ux); let a1 = Math.atan2(by - uy, bx - ux); let a2 = Math.atan2(ey - uy, ex - ux);
+  // go from a0 to a2 passing a1
+  const norm = (a) => { while (a < 0) a += 2 * Math.PI; while (a >= 2 * Math.PI) a -= 2 * Math.PI; return a; };
+  const ccw = norm(a1 - a0) < norm(a2 - a0);
+  let sweep = ccw ? norm(a2 - a0) : -norm(a0 - a2);
+  if (sweep === 0) sweep = 2 * Math.PI;
+  const n = Math.max(8, Math.ceil(Math.abs(sweep) / (Math.PI / 24)));
+  const pts = [];
+  for (let i = 1; i <= n; i++) { const a = a0 + (sweep * i) / n; pts.push(inv(ux + r * Math.cos(a), uy + r * Math.sin(a))); }
+  void a1; void a2;
+  return pts;
+}
+
+/** numbers inside "NURBS(…)" / "POLYLINE(…)" */
+const fnArgs = (s) => { const m = /\(([^)]*)\)/.exec(String(s || '')); return m ? m[1].split(',').map((x) => num(x)) : []; };
+
+/**
+ * One geometry section → path data. rows: [{ T, cells }], w/h: shape size (for Rel* rows and NURBS/POLYLINE type 0),
+ * tf(x, y) → [X, Y] output coordinates. Returns { d, closed }.
+ */
+export function geometryToPath(rows, w, h, tf = (x, y) => [x, y]) {
+  let d = ''; let cx = 0; let cy = 0; let start = null; let closed = false;
+  const P = (x, y) => { const [X, Y] = tf(x, y); return `${fmt(X)} ${fmt(Y)}`; };
+  const move = (x, y) => { d += `M${P(x, y)}`; cx = x; cy = y; start = [x, y]; };
+  const line = (x, y) => { if (start == null) { move(x, y); return; } d += `L${P(x, y)}`; cx = x; cy = y; };
+  for (const r of rows) {
+    const c = r.cells; const X = num(c.X); const Y = num(c.Y); const A = num(c.A); const B = num(c.B); const C = num(c.C); const D = num(c.D);
+    switch (r.T) {
+      case 'MoveTo': move(X, Y); break;
+      case 'RelMoveTo': move(X * w, Y * h); break;
+      case 'LineTo': line(X, Y); break;
+      case 'RelLineTo': line(X * w, Y * h); break;
+      case 'ArcTo': {
+        // bow A: distance from the chord midpoint to the arc; positive = arc to the left when walking cx,cy → X,Y? (Visio: counter-clockwise)
+        if (Math.abs(A) < 1e-9) { line(X, Y); break; }
+        const mx = (cx + X) / 2; const my = (cy + Y) / 2; const dx = X - cx; const dy = Y - cy; const len = Math.hypot(dx, dy) || 1;
+        // control point on the arc: midpoint moved by A along the chord's normal (to the right of the direction for positive A)
+        const nx = dy / len; const ny = -dx / len;
+        const px = mx + nx * A; const py = my + ny * A;
+        for (const [x, y] of ellipticalArcPoints(cx, cy, X, Y, px, py, 0, 1)) line(x, y);
+        cx = X; cy = Y;
+        break;
+      }
+      case 'EllipticalArcTo': case 'RelEllipticalArcTo': {
+        const k = r.T === 'RelEllipticalArcTo';
+        const ex = k ? X * w : X; const ey = k ? Y * h : Y; const ax = k ? A * w : A; const ay = k ? B * h : B;
+        for (const [x, y] of ellipticalArcPoints(cx, cy, ex, ey, ax, ay, C, D)) line(x, y);
+        cx = ex; cy = ey;
+        break;
+      }
+      case 'Ellipse': {
+        // centre X,Y; (A,B) end of one axis; (C,D) end of the other
+        const ux = A - X; const uy = B - Y; const vx = C - X; const vy = D - Y;
+        const n = 48;
+        for (let i = 0; i <= n; i++) {
+          const t = (2 * Math.PI * i) / n;
+          const x = X + ux * Math.cos(t) + vx * Math.sin(t); const y = Y + uy * Math.cos(t) + vy * Math.sin(t);
+          if (i === 0) move(x, y); else line(x, y);
+        }
+        d += 'Z'; closed = true;
+        break;
+      }
+      case 'RelCubBezTo': {
+        const p1 = tf(A * w, B * h); const p2 = tf(C * w, D * h); const p3 = tf(X * w, Y * h);
+        if (start == null) move(cx, cy);
+        d += `C${fmt(p1[0])} ${fmt(p1[1])} ${fmt(p2[0])} ${fmt(p2[1])} ${fmt(p3[0])} ${fmt(p3[1])}`; cx = X * w; cy = Y * h;
+        break;
+      }
+      case 'RelQuadBezTo': {
+        const p1 = tf(A * w, B * h); const p2 = tf(X * w, Y * h);
+        if (start == null) move(cx, cy);
+        d += `Q${fmt(p1[0])} ${fmt(p1[1])} ${fmt(p2[0])} ${fmt(p2[1])}`; cx = X * w; cy = Y * h;
+        break;
+      }
+      case 'NURBSTo': {
+        // E = NURBS(knotLast, degree, xType, yType, x1, y1, knot1, weight1, …) – approximated through the control points
+        const a = fnArgs(c.E);
+        const xType = a[2]; const yType = a[3];
+        for (let i = 4; i + 3 < a.length; i += 4) line(xType === 0 ? a[i] * w : a[i], yType === 0 ? a[i + 1] * h : a[i + 1]);
+        // A/B: second-to-last control point
+        if (c.A != null && c.B != null && a.length < 8) line(A, B);
+        line(X, Y);
+        break;
+      }
+      case 'PolylineTo': {
+        const a = fnArgs(c.A);
+        const xType = a[0]; const yType = a[1];
+        for (let i = 2; i + 1 < a.length; i += 2) line(xType === 0 ? a[i] * w : a[i], yType === 0 ? a[i + 1] * h : a[i + 1]);
+        line(X, Y);
+        break;
+      }
+      case 'SplineStart': case 'SplineKnot': line(X, Y); break;
+      case 'InfiniteLine': break;
+      default: if (c.X != null && c.Y != null) line(X, Y);
+    }
+  }
+  if (start && Math.abs(cx - start[0]) < 1e-6 && Math.abs(cy - start[1]) < 1e-6 && d && !closed) { d += 'Z'; closed = true; }
+  return { d, closed };
+}
+
+/* ---------------- transforms ---------------- */
+
+/** local → parent matrix [a, b, c, d, e, f] (x' = a x + c y + e, y' = b x + d y + f) */
+function shapeMatrix(cells) {
+  const pinX = num(cells.PinX); const pinY = num(cells.PinY);
+  const lx = num(cells.LocPinX, num(cells.Width) / 2); const ly = num(cells.LocPinY, num(cells.Height) / 2);
+  const ang = num(cells.Angle); const fx = cells.FlipX === '1' ? -1 : 1; const fy = cells.FlipY === '1' ? -1 : 1;
+  const co = Math.cos(ang); const si = Math.sin(ang);
+  // R * F * (p - L) + Pin
+  const a = co * fx; const b = si * fx; const c = -si * fy; const d = co * fy;
+  return [a, b, c, d, pinX - (a * lx + c * ly), pinY - (b * lx + d * ly)];
+}
+const mul = (m, n) => [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3], m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5]];
+const apply = (m, x, y) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
+
+/* ---------------- text ---------------- */
+
+/** <Text> element → plain text (fields keep their stored value) */
+export function shapeText(el) {
+  if (!el) return '';
+  let s = '';
+  const walk = (n) => { for (const c of n.c || []) { if (typeof c === 'string') s += c; else if (c.n === 'fld' || c.n === 'cp' || c.n === 'pp' || c.n === 'tp') walk(c); else walk(c); } };
+  walk(el);
+  return s.replace(/\r\n?/g, '\n').replace(/\u2028|\u2029/g, '\n').replace(/\n+$/, '');
+}
+
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+
+function wrapLines(text, width, size) {
+  const out = [];
+  const maxChars = Math.max(1, Math.floor(width / (size * 0.52)));
+  for (const para of text.split('\n')) {
+    if (!width || para.length <= maxChars) { out.push(para); continue; }
+    let line = '';
+    for (const w of para.split(/\s+/)) {
+      if (!line) line = w;
+      else if ((`${line} ${w}`).length <= maxChars) line += ` ${w}`;
+      else { out.push(line); line = w; }
+    }
+    if (line) out.push(line);
+  }
+  return out;
+}
+
+/* ---------------- the whole file ---------------- */
+
+function relsOf(files, partPath) {
+  const dir = partPath.slice(0, partPath.lastIndexOf('/') + 1);
+  const name = partPath.slice(partPath.lastIndexOf('/') + 1);
+  const xml = files[`${dir}_rels/${name}.rels`];
+  const map = {};
+  if (!xml) return map;
+  const root = parseXml(xml);
+  for (const r of kids(root, 'Relationship')) {
+    let target = r.a.Target || '';
+    if (!target.startsWith('/')) {
+      const parts = (dir + target).split('/'); const outp = [];
+      for (const p of parts) { if (p === '..') outp.pop(); else if (p !== '.') outp.push(p); }
+      target = outp.join('/');
+    } else target = target.slice(1);
+    map[r.a.Id] = target;
+  }
+  return map;
+}
+const relId = (el) => { const r = kid(el, 'Rel'); return r ? r.a['r:id'] || Object.entries(r.a).find(([k]) => /:id$/.test(k))?.[1] : null; };
+
+export function readVsdx(files) {
+  const media = files.media || {};
+  // style sheets
+  const styles = new Map();
+  if (files['visio/document.xml']) {
+    const doc = parseXml(files['visio/document.xml']);
+    const ss = kid(doc, 'StyleSheets');
+    for (const s of kids(ss, 'StyleSheet')) styles.set(s.a.ID, { ...readSheet(s), parents: [s.a.LineStyle, s.a.FillStyle, s.a.TextStyle] });
+  }
+  const styleCell = (id, name, depth = 0) => {
+    const st = id != null && styles.get(String(id));
+    if (!st || depth > 12) return undefined;
+    if (st.cells[name] !== undefined) return st.cells[name];
+    for (const p of st.parents) { if (p != null && p !== String(id)) { const v = styleCell(p, name, depth + 1); if (v !== undefined) return v; } }
+    return undefined;
+  };
+  const styleChar = (id, depth = 0) => {
+    const st = id != null && styles.get(String(id));
+    if (!st || depth > 12) return null;
+    const ch = st.sections.Character && st.sections.Character[0];
+    if (ch && ch.rows[0]) return ch.rows[0].cells;
+    return styleChar(st.parents[2], depth + 1);
+  };
+
+  // masters: id → Map(shapeId → { sheet, el, children ids }), plus top shape id
+  const masters = new Map();
+  if (files['visio/masters/masters.xml']) {
+    const ms = parseXml(files['visio/masters/masters.xml']);
+    const rels = relsOf(files, 'visio/masters/masters.xml');
+    for (const m of kids(ms, 'Master')) {
+      const target = rels[relId(m)];
+      const xml = target && files[target];
+      if (!xml) continue;
+      const root = parseXml(xml);
+      const shapes = new Map(); let top = null;
+      const walk = (el, isTop) => {
+        for (const sh of kids(kid(el, 'Shapes'), 'Shape')) {
+          shapes.set(sh.a.ID, { el: sh, sheet: readSheet(sh), styles: [sh.a.LineStyle, sh.a.FillStyle, sh.a.TextStyle] });
+          if (isTop && top == null) top = sh.a.ID;
+          walk(sh, false);
+        }
+      };
+      walk(root, true);
+      const topCount = kids(kid(root, 'Shapes'), 'Shape').length;
+      masters.set(m.a.ID, { shapes, top: topCount === 1 ? top : null, name: m.a.NameU || m.a.Name || '' });
+    }
+  }
+
+  const pagesXml = files['visio/pages/pages.xml'];
+  if (!pagesXml) return { pages: [] };
+  const pagesRoot = parseXml(pagesXml);
+  const prels = relsOf(files, 'visio/pages/pages.xml');
+  const all = kids(pagesRoot, 'Page').map((p) => {
+    const ps = readSheet(kid(p, 'PageSheet') || { c: [] });
+    return { id: p.a.ID, name: p.a.NameU || p.a.Name || '', background: p.a.Background === '1', backPage: p.a.BackPage, part: prels[relId(p)], w: num(ps.cells.PageWidth, 8.5), h: num(ps.cells.PageHeight, 11) };
+  });
+
+  const renderPage = (pg) => {
+    const xml = pg.part && files[pg.part];
+    const texts = [];
+    if (!xml) return { body: '', texts, defs: '' };
+    const root = parseXml(xml);
+    const H = pg.h;
+    const prels2 = relsOf(files, pg.part);
+    let body = '';
+    let markers = false;
+
+    const shapeOut = (el, parentM, masterId, inherited) => {
+      const masterAttr = el.a.Master || masterId;
+      const mst = masterAttr != null ? masters.get(String(masterAttr)) : null;
+      let base = null; let baseStyles = [];
+      if (mst) {
+        const ref = el.a.MasterShape != null ? mst.shapes.get(el.a.MasterShape) : mst.top != null ? mst.shapes.get(mst.top) : null;
+        if (ref) { base = ref.sheet; baseStyles = ref.styles; }
+      }
+      const own = readSheet(el);
+      const sheet = mergeSheet(base || inherited, own);
+      const st = [el.a.LineStyle || baseStyles[0], el.a.FillStyle || baseStyles[1], el.a.TextStyle || baseStyles[2]];
+      const cell = (name, which) => {
+        if (sheet.cells[name] !== undefined && sheet.cells[name] !== 'Themed') return sheet.cells[name];
+        const order = which === 'line' ? [st[0], st[1], st[2]] : which === 'fill' ? [st[1], st[0], st[2]] : [st[2], st[0], st[1]];
+        for (const s of order) { const v = styleCell(s, name); if (v !== undefined) return v; }
+        return undefined;
+      };
+      const c = sheet.cells;
+      const w = num(c.Width); const h = num(c.Height);
+      const M = mul(parentM, shapeMatrix(c));
+      const tf = (x, y) => { const [X, Y] = apply(M, x, y); return [X * S, (H - Y) * S]; };
+      const hidden = cell('NoShow') === '1' || c.Visible === '0';
+
+      if (!hidden) {
+        // geometry
+        const lp = num(cell('LinePattern', 'line'), 1);
+        const lw = Math.max(0.25, num(cell('LineWeight', 'line'), 0.01) * S);
+        const lc = color(cell('LineColor', 'line'), '#000000');
+        const lt = num(cell('LineColorTrans', 'line'), 0);
+        const fp = num(cell('FillPattern', 'fill'), 1);
+        const fc = color(cell('FillForegnd', 'fill'), '#ffffff');
+        const ft = num(cell('FillForegndTrans', 'fill'), 0);
+        const begin = num(cell('BeginArrow', 'line'), 0); const end = num(cell('EndArrow', 'line'), 0);
+        for (const g of sheet.sections.Geometry || []) {
+          if (g.cells.NoShow === '1') continue;
+          const { d, closed } = geometryToPath(g.rows, w, h, tf);
+          if (!d) continue;
+          const noFill = g.cells.NoFill === '1' || !closed || fp === 0;
+          const noLine = g.cells.NoLine === '1' || lp === 0;
+          const dash = DASH[lp] ? ` stroke-dasharray="${DASH[lp].map((x) => fmt(x * Math.max(1, lw / 1.5))).join(' ')}"` : '';
+          const arrows = !closed && !noLine ? `${begin > 0 ? ' marker-start="url(#vsa)"' : ''}${end > 0 ? ' marker-end="url(#vsa)"' : ''}` : '';
+          if (arrows) markers = true;
+          body += `<path d="${d}" fill="${noFill ? 'none' : fc}"${!noFill && ft ? ` fill-opacity="${fmt(1 - ft)}"` : ''} stroke="${noLine ? 'none' : lc}"${lt ? ` stroke-opacity="${fmt(1 - lt)}"` : ''} stroke-width="${fmt(lw)}"${dash}${arrows} stroke-linejoin="round" style="color:${lc}"/>`;
+        }
+        // images
+        const fd = kid(el, 'ForeignData');
+        if (fd) {
+          const target = prels2[relId(fd)];
+          const url = target && media[target];
+          const ix = num(c.ImgOffsetX); const iy = num(c.ImgOffsetY); const iw = num(c.ImgWidth, w); const ih = num(c.ImgHeight, h);
+          if (url) {
+            const [a0, b0] = tf(ix, iy + ih); const [a1, b1] = tf(ix + iw, iy + ih); const [a2, b2] = tf(ix, iy);
+            const m = [(a1 - a0) / iw, (b1 - b0) / iw, (a2 - a0) / ih, (b2 - b0) / ih, a0, b0];
+            body += `<image href="${esc(url)}" width="${fmt(iw)}" height="${fmt(ih)}" preserveAspectRatio="none" transform="matrix(${m.map(fmt).join(' ')})"/>`;
+          }
+        }
+        // text
+        const textEl = kid(el, 'Text');
+        const masterRef = mst && (el.a.MasterShape != null ? mst.shapes.get(el.a.MasterShape) : mst.top != null ? mst.shapes.get(mst.top) : null);
+        const txt = textEl ? shapeText(textEl) : masterRef ? shapeText(kid(masterRef.el, 'Text')) : '';
+        if (txt.trim()) {
+          texts.push(txt);
+          const ch = (sheet.sections.Character && sheet.sections.Character[0] && sheet.sections.Character[0].rows[0] && sheet.sections.Character[0].rows[0].cells) || styleChar(st[2]) || {};
+          const para = (sheet.sections.Paragraph && sheet.sections.Paragraph[0] && sheet.sections.Paragraph[0].rows[0] && sheet.sections.Paragraph[0].rows[0].cells) || {};
+          const size = Math.max(4, num(ch.Size, 0.1667) * S);
+          const style = num(ch.Style, 0);
+          const tcol = color(ch.Color, '#000000');
+          const tw = num(c.TxtWidth, w); const th = num(c.TxtHeight, h);
+          const tpx = num(c.TxtPinX, w / 2); const tpy = num(c.TxtPinY, h / 2);
+          const tlx = num(c.TxtLocPinX, tw / 2); const tly = num(c.TxtLocPinY, th / 2);
+          const tang = num(c.TxtAngle);
+          const halign = num(para.HorzAlign, 1); const valign = num(cell('VerticalAlign', 'text'), 1);
+          const lines = wrapLines(txt, tw * S - 4, size);
+          const lh = size * 1.2;
+          // text block centre in output coords and its rotation
+          const [cxo, cyo] = tf(tpx - tlx + tw / 2 * 1, tpy - tly + th / 2);
+          const [rx, ry] = tf(tpx - tlx + tw / 2 + 1, tpy - tly + th / 2);
+          const rot = (Math.atan2(ry - cyo, rx - cxo) * 180) / Math.PI - (tang * 180) / Math.PI;
+          const total = lines.length * lh;
+          const top = valign === 0 ? -th * S / 2 + 2 : valign === 2 ? th * S / 2 - total - 2 : -total / 2;
+          const anchor = halign === 0 ? 'start' : halign === 2 ? 'end' : 'middle';
+          const x = halign === 0 ? -tw * S / 2 + 2 : halign === 2 ? tw * S / 2 - 2 : 0;
+          body += `<text transform="translate(${fmt(cxo)} ${fmt(cyo)}) rotate(${fmt(rot)})" font-size="${fmt(size)}" fill="${tcol}" text-anchor="${anchor}" font-family="Calibri, Arial, sans-serif"${style & 1 ? ' font-weight="700"' : ''}${style & 2 ? ' font-style="italic"' : ''}${style & 4 ? ' text-decoration="underline"' : ''}>`;
+          lines.forEach((l, i) => { body += `<tspan x="${fmt(x)}" y="${fmt(top + (i + 0.8) * lh)}">${esc(l) || ' '}</tspan>`; });
+          body += '</text>';
+        }
+      }
+      // children (groups): instance children first; master children if the instance has none
+      const childEls = kids(kid(el, 'Shapes'), 'Shape');
+      if (childEls.length) for (const ch of childEls) shapeOut(ch, M, masterAttr, null);
+      else if (mst && el.a.Type === 'Group' && !el.a.MasterShape && mst.top) {
+        const topEl = mst.shapes.get(mst.top).el;
+        for (const ch of kids(kid(topEl, 'Shapes'), 'Shape')) shapeOut({ ...ch, a: { ...ch.a, MasterShape: ch.a.ID, Master: undefined } }, M, masterAttr, null);
+      }
+    };
+
+    for (const sh of kids(kid(root, 'Shapes'), 'Shape')) shapeOut(sh, [1, 0, 0, 1, 0, 0], null, null);
+    const defs = markers ? '<marker id="vsa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse" markerUnits="strokeWidth"><path d="M0 0L10 5L0 10z" fill="context-stroke"/></marker>' : '';
+    return { body, texts, defs };
+  };
+
+  const byId = new Map(all.map((p) => [p.id, p]));
+  const pages = all.filter((p) => !p.background).map((p) => {
+    const layers = [];
+    let bg = p.backPage != null ? byId.get(p.backPage) : null;
+    const seen = new Set();
+    while (bg && !seen.has(bg.id)) { seen.add(bg.id); layers.unshift(renderPage({ ...bg, h: p.h })); bg = bg.backPage != null ? byId.get(bg.backPage) : null; }
+    const main = renderPage(p);
+    layers.push(main);
+    const defs = layers.map((l) => l.defs).find(Boolean) || '';
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${fmt(p.w * S)} ${fmt(p.h * S)}" width="${fmt(p.w * S)}" height="${fmt(p.h * S)}"><defs>${defs}</defs><rect width="100%" height="100%" fill="#ffffff"/>${layers.map((l) => l.body).join('')}</svg>`;
+    return { name: p.name, w: p.w, h: p.h, svg, texts: main.texts };
+  });
+  return { pages };
+}
