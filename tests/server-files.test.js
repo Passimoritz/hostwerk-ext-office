@@ -200,7 +200,9 @@ test('"Open with": registered once per version, notice once, removed without a t
   assert.strictEqual((await reg.state()).notice, false);
   // Windows' "Default apps" page for Hostwerk Office
   const r = await reg.openDefaults();
-  assert.ok(io.opened.some((u) => u === 'ms-settings:defaultapps?registeredAppUser=Hostwerk%20Office'), io.opened.join());
+  // Windows opens its "Default apps" page; Linux sets the default itself via xdg-mime (osreg.js) – no settings page
+  if (process.platform === 'linux') assert.strictEqual(r.linux, true);
+  else assert.ok(io.opened.some((u) => u === 'ms-settings:defaultapps?registeredAppUser=Hostwerk%20Office'), io.opened.join());
   assert.ok(r.state.registered);
   // switched off in the settings → removed
   setSettings({ integrations: { osOpenWith: false } });
