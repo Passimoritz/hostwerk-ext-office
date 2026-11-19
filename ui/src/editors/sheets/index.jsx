@@ -1,5 +1,6 @@
 /*
  * Spreadsheet editor chunk (ARCHITECTURE.md "Editor chunk contract"): Editor, create (templates), toText, Preview.
+ * hostwerk-allow: tables – the preview shows the sheet itself (white grid with A/B/C and 1/2/3 like the editor), not a Hostwerk list
  */
 import { useEffect, useState } from 'react';
 import { t } from '@hostwerk/i18n';

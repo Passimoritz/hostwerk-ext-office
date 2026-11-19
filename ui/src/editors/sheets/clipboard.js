@@ -1,4 +1,5 @@
-/* System clipboard formats: TSV + HTML table (what Excel, LibreOffice and Google Sheets read and write). */
+/* System clipboard formats: TSV + HTML table (what Excel, LibreOffice and Google Sheets read and write).
+   hostwerk-allow: tables – the HTML goes to other programs via the clipboard, Hostwerk's kit classes mean nothing there */
 import { parseCSV } from './io/csv.js';
 import { bookToHTML } from './io/formats.js';
 

@@ -63,14 +63,14 @@ export default function MailView({ file, bytes, host }) {
       <div className="of-view-mailhead card">
         <div className="card-body stack">
           <h2 className="of-view-subject"><Mail size={18} /> {mail.subject ? <Keep>{mail.subject}</Keep> : t('(no subject)')}</h2>
-          <table className="of-view-hdr"><tbody>
-            <tr><th>{t('From')}</th><td><Keep>{people(mail.from) || '–'}</Keep></td></tr>
-            {mail.to.length > 0 && <tr><th>{t('To')}</th><td><Keep>{people(mail.to)}</Keep></td></tr>}
-            {mail.cc.length > 0 && <tr><th>{t('Cc')}</th><td><Keep>{people(mail.cc)}</Keep></td></tr>}
-            {mail.bcc && mail.bcc.length > 0 && <tr><th>{t('Bcc')}</th><td><Keep>{people(mail.bcc)}</Keep></td></tr>}
-            {mail.replyTo && mail.replyTo.length > 0 && <tr><th>{t('Reply to')}</th><td><Keep>{people(mail.replyTo)}</Keep></td></tr>}
-            {mail.date && <tr><th>{t('Date')}</th><td>{fmtDate(mail.date)}</td></tr>}
-          </tbody></table>
+          <dl className="kv of-view-hdr">
+            <dt>{t('From')}</dt><dd><Keep>{people(mail.from) || '–'}</Keep></dd>
+            {mail.to.length > 0 && <><dt>{t('To')}</dt><dd><Keep>{people(mail.to)}</Keep></dd></>}
+            {mail.cc.length > 0 && <><dt>{t('Cc')}</dt><dd><Keep>{people(mail.cc)}</Keep></dd></>}
+            {mail.bcc && mail.bcc.length > 0 && <><dt>{t('Bcc')}</dt><dd><Keep>{people(mail.bcc)}</Keep></dd></>}
+            {mail.replyTo && mail.replyTo.length > 0 && <><dt>{t('Reply to')}</dt><dd><Keep>{people(mail.replyTo)}</Keep></dd></>}
+            {mail.date && <><dt>{t('Date')}</dt><dd>{fmtDate(mail.date)}</dd></>}
+          </dl>
           {atts.length > 0 && (
             <div className="of-view-atts">
               {atts.map((a, i) => (

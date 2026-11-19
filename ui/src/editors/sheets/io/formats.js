@@ -1,4 +1,5 @@
-/* Open/save dispatcher for every spreadsheet format + CSV/TSV and HTML (export, print) writers. */
+/* Open/save dispatcher for every spreadsheet format + CSV/TSV and HTML (export, print) writers.
+   hostwerk-allow: tables – the HTML writer makes a stand-alone file for browsers, printers and other programs, not Hostwerk UI */
 import { Book, newSheet } from '../model.js';
 import { MAXC, colName } from '../formula/refs.js';
 import { readXlsx, writeXlsx } from './xlsx.js';

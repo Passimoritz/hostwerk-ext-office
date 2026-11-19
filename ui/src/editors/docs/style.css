@@ -1,6 +1,7 @@
 /* Docs editor chunk – everything prefixed .of-docs-, built from Hostwerk tokens.
-   hostwerk-allow: colors – the paper of a document stays white with black text in both themes (like Word),
-   revision/highlight colours are document colours, not UI colours. */
+   hostwerk-allow: colors, scale – the paper of a document stays white with black text in both themes (like Word),
+   revision/highlight colours are document colours, not UI colours; paper content, the ruler and the style previews
+   use the document's own sizes (pt/px), not the UI scale. */
 
 .of-docs { height: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--bg); color: var(--text); position: relative; }
 .of-docs-center { align-items: center; justify-content: center; padding: var(--sp-6); }
@@ -27,7 +28,7 @@
 .of-docs-font { width: 150px; }
 .of-docs-size { width: 54px; margin-left: 2px; }
 .of-docs-styles { display: grid; grid-auto-flow: column; grid-template-rows: repeat(2, 30px); gap: 2px; overflow-x: auto; max-width: 560px; }
-.of-docs-style { border: 1px solid var(--line); background: #fff; color: #000; border-radius: var(--r-sm); padding: 0 var(--sp-2); min-width: 86px; height: 30px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; font-family: var(--of-font); font-size: 12px; }
+.of-docs-style { border: 1px solid var(--line); background: #fff; color: #000; border-radius: var(--r-sm); padding: 0 var(--sp-2); min-width: 86px; height: 30px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; font-family: var(--of-font); font-size: var(--fs-xs); }
 .of-docs-style:hover { border-color: var(--accent); }
 .of-docs-style.of-on { outline: 2px solid var(--accent); outline-offset: -1px; }
 .of-st-title { font-size: 15px; } .of-st-subtitle { color: #5a5a5a; } .of-st-h1 { color: #2f5496; font-size: 14px; } .of-st-h2 { color: #2f5496; font-size: 13px; } .of-st-h3 { color: #1f3763; }
@@ -48,12 +49,12 @@
 .of-more-colors { position: relative; }
 .of-more-colors input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .of-docs-tgrid { display: grid; grid-template-columns: repeat(10, 18px); gap: 2px; padding: var(--sp-1); }
-.of-tcell { width: 18px; height: 18px; border: 1px solid var(--line-2); background: var(--surface-2); padding: 0; border-radius: 2px; cursor: pointer; }
+.of-tcell { width: 18px; height: 18px; border: 1px solid var(--line-2); background: var(--surface-2); padding: 0; border-radius: var(--r-xs); cursor: pointer; }
 .of-tcell.of-on { background: var(--accent-soft); border-color: var(--accent); }
 .of-tgrid-label { padding: 0 var(--sp-2) var(--sp-1); }
 .of-docs-symbols, .of-docs-emoji { display: grid; grid-template-columns: repeat(auto-fill, minmax(34px, 1fr)); gap: 3px; max-height: 300px; overflow: auto; }
 .of-pop-emoji .of-docs-emoji { width: 320px; }
-.of-docs-sym { height: 34px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); border-radius: var(--r-sm); font-size: 18px; cursor: pointer; }
+.of-docs-sym { height: 34px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); border-radius: var(--r-sm); font-size: var(--fs-xl); cursor: pointer; }
 .of-docs-sym:hover { border-color: var(--accent); background: var(--accent-soft); }
 .of-docs-tokens { flex-wrap: wrap; }
 

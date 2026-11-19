@@ -104,7 +104,8 @@ async function buildChunk(name) {
   if (EV.test(js.text)) console.warn(`! ${name}: bundle contains code evaluation – the catalog check will reject it`);
   fs.writeFileSync(out, head + js.text);
   const cssOut = out.replace(/\.js$/, '.css');
-  if (css) fs.writeFileSync(cssOut, css.text); else fs.rmSync(cssOut, { force: true });
+  // same build head as the .js (Hostwerk's extension check and ui-consistency-audit skip built files by it – their source is ui/src)
+  if (css) fs.writeFileSync(cssOut, `/* ${ID} editor chunk "${name}" styles – built with tools/build.js. Source: ui/src/editors/${name} */\n${css.text}`); else fs.rmSync(cssOut, { force: true });
   console.log(`✓ ui/assets/${name}.js (${Math.round((head.length + js.text.length) / 1024)} KB${css ? `, css ${Math.round(css.text.length / 1024)} KB` : ''})`);
 }
 

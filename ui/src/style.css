@@ -41,7 +41,7 @@
 .of-shell-thumb-img { max-width: 100%; max-height: 100%; object-fit: contain; background: #fff; box-shadow: var(--shadow); }
 .of-shell-tag { font-size: var(--fs-2xs); padding: 0 var(--sp-1); border-radius: var(--r-xs); background: var(--surface-3); color: var(--text-2); white-space: nowrap; }
 .of-shell-fav { color: var(--warn); flex: none; }
-.of-shell-mark { background: color-mix(in srgb, var(--warn) 35%, transparent); color: inherit; border-radius: 2px; padding: 0 1px; }
+.of-shell-mark { background: color-mix(in srgb, var(--warn) 35%, transparent); color: inherit; border-radius: var(--r-xs); padding: 0 1px; }
 
 /* colours of files (tags dialog) */
 .of-shell-c-red { --of-c: var(--err); } .of-shell-c-orange { --of-c: var(--warn); } .of-shell-c-yellow { --of-c: color-mix(in srgb, var(--warn) 55%, var(--ok)); }

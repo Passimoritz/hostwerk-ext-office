@@ -1,5 +1,5 @@
 /* PDF editor – own styles only where Hostwerk's kit has nothing (prefix .of-pdf-). Paper stays white in both themes. */
-/* hostwerk-allow: colors – the page (paper) and the presentation background are white/black on purpose, as in every PDF app */
+/* hostwerk-allow: colors, scale – the page (paper) and the presentation background are white/black on purpose, as in every PDF app; the signature preview shows the signature at its size on paper */
 .of-pdf-root { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg-2); color: var(--text); outline: none; }
 .of-pdf-root .grow { flex: 1; }
 
@@ -41,7 +41,7 @@
 .of-pdf-thumb-img canvas { width: 110px; height: auto; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .25); display: block; }
 .of-pdf-thumb.active .of-pdf-thumb-img { border-color: var(--accent); }
 .of-pdf-thumb.selected { background: var(--accent-soft); }
-.of-pdf-thumb[data-drop="before"]::before, .of-pdf-thumb[data-drop="after"]::after { content: ''; position: absolute; left: 8px; right: 8px; height: 3px; border-radius: 2px; background: var(--accent); }
+.of-pdf-thumb[data-drop="before"]::before, .of-pdf-thumb[data-drop="after"]::after { content: ''; position: absolute; left: 8px; right: 8px; height: 3px; border-radius: var(--r-xs); background: var(--accent); }
 .of-pdf-thumb[data-drop="before"]::before { top: -7px; }
 .of-pdf-thumb[data-drop="after"]::after { bottom: -7px; }
 .of-pdf-thumb-bar { display: flex; align-items: center; gap: 2px; width: 100%; justify-content: center; min-height: 22px; }
@@ -81,7 +81,7 @@
 .of-pdf-selbox rect { stroke: var(--accent); stroke-width: 1.5px; stroke-dasharray: 4 3; }
 .of-pdf-selbox circle { fill: #fff; stroke: var(--accent); stroke-width: 1.5px; vector-effect: non-scaling-stroke; pointer-events: all; cursor: nwse-resize; }
 .of-pdf-scroll.markup .textLayer ::selection { background: rgba(255, 212, 0, .45); }
-.of-pdf-hit { background: rgba(255, 196, 0, .45); border-radius: 2px; color: transparent; }
+.of-pdf-hit { background: rgba(255, 196, 0, .45); border-radius: var(--r-xs); color: transparent; }
 .of-pdf-hit.active { background: rgba(255, 120, 0, .65); outline: 1px solid rgba(200, 80, 0, .8); }
 
 .of-pdf-status { display: flex; align-items: center; gap: var(--sp-4); padding: 3px var(--sp-3); border-top: 1px solid var(--line); background: var(--surface); }
