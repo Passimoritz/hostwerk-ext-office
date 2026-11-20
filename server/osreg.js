@@ -121,7 +121,8 @@ class OsReg {
    */
   async openDefaults() {
     if (!this.supported()) throw Object.assign(new Error(this.t('“Open with” needs the Hostwerk desktop app on Windows or Linux.')), { status: 409, code: 'ENODESKTOP' });
-    if (process.platform === 'linux') { await this.register({ setDefault: true }); return { opened: false, linux: true, state: await this.state() }; }
+    // Windows path when the Windows helper is active (on a real Linux it never is – also keeps the tests portable)
+    if (process.platform === 'linux' && !(this.osd && this.osd.win)) { await this.register({ setDefault: true }); return { opened: false, linux: true, state: await this.state() }; }
     let st = await this.state();
     if (!st.registered) st = await this.register();
     const r = this.osd && this.osd.win ? this.osd.openSettings(APP_NAME) : await this.ft.openDefaultsSettings(REG_ID);
