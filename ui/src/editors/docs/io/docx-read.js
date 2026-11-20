@@ -10,6 +10,7 @@
 import JSZip from 'jszip';
 import { parseXml, kids, kid, all, text as xtext, serialize, local } from '../../_shared/xmltree.js';
 import { defaultModel, sizeName, twipToMm, normalizeInline, fixDoc, dataUrl, mimeOf, uid, imageSize, hfKey } from './pm.js';
+import { anchorOf } from './anchor.js';
 
 const W = (el, name) => kid(el, `w:${name}`);
 const val = (el) => (el ? el.a['w:val'] : undefined);
@@ -483,7 +484,10 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
     }
     const ext = all(el, 'wp:extent')[0];
     const width = ext ? Math.round(Number(ext.a.cx) / 9525) : null;
-    return { type: 'preserved', attrs: { format: 'docx', kind, label, text: txt, src, width, xml: serialize(r) } };
+    const xml = serialize(r);
+    // text boxes and shapes anchored in the text (wp:anchor): shown floating at their position, movable (io/anchor.js)
+    const float = kind === 'textbox' || kind === 'shape' ? anchorOf(xml) : null;
+    return { type: 'preserved', attrs: { format: 'docx', kind, label, text: txt, src, width, xml, float } };
   }
 
   /** paragraph → block nodes (usually one; page breaks inside split it) */

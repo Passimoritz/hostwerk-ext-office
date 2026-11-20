@@ -298,6 +298,49 @@ export function roundPath(d, r) {
   return closed ? `${out}Z` : out;
 }
 
+/* ---------------- orthogonal connector routing ---------------- */
+const segHits = (a, b, r) => { // axis-parallel segment a→b crosses box r (shrunk a little)?
+  const x1 = Math.min(a[0], b[0]); const x2 = Math.max(a[0], b[0]); const y1 = Math.min(a[1], b[1]); const y2 = Math.max(a[1], b[1]);
+  return x2 > r.x1 + 1e-3 && x1 < r.x2 - 1e-3 && y2 > r.y1 + 1e-3 && y1 < r.y2 - 1e-3;
+};
+const sideOf = (p, r) => { if (!r) return null; const d = [[Math.abs(p[0] - r.x1), 'l'], [Math.abs(p[0] - r.x2), 'r'], [Math.abs(p[1] - r.y1), 'b'], [Math.abs(p[1] - r.y2), 't']]; d.sort((a, b) => a[0] - b[0]); return d[0][1]; };
+const DIRV = { l: [-1, 0], r: [1, 0], b: [0, -1], t: [0, 1] };
+/**
+ * Orthogonal route from p0 to p1 (page inches, y up) around boxes [{x1,y1,x2,y2}] – like Visio's "right-angle"
+ * dynamic connector: leave each glued shape perpendicular to its side, then the shortest candidate with one or
+ * two bends (or a detour around the boxes) that crosses no other shape. from/to: the glued shapes' boxes.
+ */
+export function routeOrthogonal(p0, p1, boxes = [], from = null, to = null, stub = 0.2) {
+  const s0 = sideOf(p0, from); const s1 = sideOf(p1, to);
+  const a = s0 ? [p0[0] + DIRV[s0][0] * stub, p0[1] + DIRV[s0][1] * stub] : p0;
+  const b = s1 ? [p1[0] + DIRV[s1][0] * stub, p1[1] + DIRV[s1][1] * stub] : p1;
+  const obstacles = boxes.filter((r) => r !== from && r !== to);
+  const cands = [];
+  const xs = new Set([(a[0] + b[0]) / 2, a[0], b[0]]); const ys = new Set([(a[1] + b[1]) / 2, a[1], b[1]]);
+  for (const r of boxes) { xs.add(r.x1 - stub); xs.add(r.x2 + stub); ys.add(r.y1 - stub); ys.add(r.y2 + stub); }
+  for (const x of xs) cands.push([a, [x, a[1]], [x, b[1]], b]);
+  for (const y of ys) cands.push([a, [a[0], y], [b[0], y], b]);
+  const len = (pts) => pts.reduce((n, q, i) => (i ? n + Math.abs(q[0] - pts[i - 1][0]) + Math.abs(q[1] - pts[i - 1][1]) : 0), 0);
+  const bends = (pts) => pts.filter((q, i) => i && i < pts.length - 1).length;
+  let best = null;
+  for (const c of cands) {
+    const pts = [p0, ...c, p1].filter((q, i, arr) => !i || Math.abs(q[0] - arr[i - 1][0]) > 1e-6 || Math.abs(q[1] - arr[i - 1][1]) > 1e-6);
+    let bad = false;
+    for (let i = 1; i < pts.length && !bad; i++) {
+      if (Math.abs(pts[i][0] - pts[i - 1][0]) > 1e-6 && Math.abs(pts[i][1] - pts[i - 1][1]) > 1e-6) { bad = true; break; }
+      for (const r of obstacles) if (segHits(pts[i - 1], pts[i], r)) { bad = true; break; }
+      // the glued shapes themselves: only the stubs may touch them
+      if (!bad && i > 1 && i < pts.length - 1) for (const r of [from, to]) if (r && segHits(pts[i - 1], pts[i], r)) { bad = true; break; }
+    }
+    const score = len(pts) + bends(pts) * 0.05 + (bad ? 1e6 : 0);
+    if (!best || score < best.score) best = { pts, score };
+  }
+  // drop collinear points
+  const out = [];
+  for (const q of best.pts) { const n = out.length; if (n >= 2 && ((Math.abs(out[n - 2][0] - out[n - 1][0]) < 1e-6 && Math.abs(out[n - 1][0] - q[0]) < 1e-6) || (Math.abs(out[n - 2][1] - out[n - 1][1]) < 1e-6 && Math.abs(out[n - 1][1] - q[1]) < 1e-6))) out[n - 1] = q; else out.push(q); }
+  return out;
+}
+
 export function readVsdx(files) {
   const theme = themeColors(files['visio/theme/theme1.xml'] || Object.entries(files).find(([k]) => /^visio\/theme\/theme\d+\.xml$/.test(k))?.[1]);
   let gradSeq = 0;
@@ -367,6 +410,19 @@ export function readVsdx(files) {
     let body = '';
     let markers = false;
     let gdefs = '';
+    // boxes of the top-level 2-D shapes (page inches) and the glue (Connects) of connectors – for routing
+    const boxes = new Map();
+    for (const sh of kids(kid(root, 'Shapes'), 'Shape')) {
+      const c0 = readSheet(sh).cells;
+      if (c0.BeginX != null) continue;
+      const w0 = num(c0.Width); const h0 = num(c0.Height); if (!w0 || !h0) continue;
+      const x0 = num(c0.PinX) - num(c0.LocPinX, w0 / 2); const y0 = num(c0.PinY) - num(c0.LocPinY, h0 / 2);
+      boxes.set(sh.a.ID, { x1: x0, y1: y0, x2: x0 + w0, y2: y0 + h0 });
+    }
+    const glue = new Map(); // connector id → { begin: shape id, end: shape id }
+    for (const cn of kids(kid(root, 'Connects'), 'Connect')) {
+      const g = glue.get(cn.a.FromSheet) || {}; if (/^Begin/.test(cn.a.FromCell || '')) g.begin = cn.a.ToSheet; else if (/^End/.test(cn.a.FromCell || '')) g.end = cn.a.ToSheet; glue.set(cn.a.FromSheet, g);
+    }
 
     const shapeOut = (el, parentM, masterId, inherited) => {
       const masterAttr = el.a.Master || masterId;
@@ -418,7 +474,17 @@ export function readVsdx(files) {
         const rounding = num(cell('Rounding', 'line'), 0) * S;
         const ft = num(cell('FillForegndTrans', 'fill'), 0);
         const begin = num(cell('BeginArrow', 'line'), 0); const end = num(cell('EndArrow', 'line'), 0);
-        for (const g of sheet.sections.Geometry || []) {
+        // a connector without its own geometry (files not saved by Visio): route it at right angles around the shapes
+        const routed = c.BeginX != null && c.EndX != null && !(own.sections.Geometry && own.sections.Geometry.length) && parentM[0] === 1 && parentM[4] === 0 && parentM[5] === 0 && ![2, 16].includes(num(cell('ShapeRouteStyle', 'line'), 0)) && num(cell('ConLineRouteExt', 'line'), 0) !== 2;
+        if (routed) {
+          const gl = glue.get(el.a.ID) || {};
+          const pts = routeOrthogonal([num(c.BeginX), num(c.BeginY)], [num(c.EndX), num(c.EndY)], [...boxes.values()], boxes.get(gl.begin) || null, boxes.get(gl.end) || null);
+          const d = pts.map(([x, y], i) => `${i ? 'L' : 'M'}${fmt(x * S)} ${fmt((H - y) * S)}`).join('');
+          const dd = rounding > 0 ? roundPath(d, rounding) : d;
+          if (begin > 0 || end > 0) markers = true;
+          body += `<path d="${dd}" fill="none" stroke="${lp === 0 ? 'none' : lc}" stroke-width="${fmt(lw)}"${begin > 0 ? ' marker-start="url(#vsa)"' : ''}${end > 0 ? ' marker-end="url(#vsa)"' : ''}/>`;
+        }
+        for (const g of routed ? [] : sheet.sections.Geometry || []) {
           if (g.cells.NoShow === '1') continue;
           const gp = geometryToPath(g.rows, w, h, tf); const closed = gp.closed; const d = rounding > 0 && gp.d ? roundPath(gp.d, rounding) : gp.d;
           if (!d) continue;

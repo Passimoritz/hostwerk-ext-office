@@ -73,7 +73,7 @@ function setup(host, o, { dataRoot, dataDir, every, later }) {
       try { host.broadcast({ type: 'office-form', id: f.id, path: f.path, root: f.root || null, pending: f.queue.length }); } catch { /* egal */ }
     } else o.appendNow(f, row);
     o.forms.update(f.id, { responses: (f.responses || 0) + 1, lastResponse: Date.now() });
-    if (f.notify) o.notifier.send(f.notify, { event: 'form', title: host.t('New answer: {name}', { name: f.title }), text: f.columns.map((c, i) => `${c.label}: ${row[i + (f.timestamp ? 1 : 0)]}`).join('\n').slice(0, 1500), url: '/ext/office' }).catch((e) => host.log('form notify', e.message));
+    if (f.notify) o.notifier.send(f.notify, { event: 'form', title: host.t('New answer: {name}', { name: f.title }), text: f.columns.map((c, i) => `${c.label}: ${S.dateText(row[i + (f.timestamp ? 1 : 0)])}`).join('\n').slice(0, 1500), url: '/ext/office' }).catch((e) => host.log('form notify', e.message));
   };
   const flushForms = () => {
     for (const f of o.forms.list()) {

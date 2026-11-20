@@ -19,6 +19,58 @@ import { bytesToDataUrl } from './util.js';
 const MU = 1587.5; // EMU per master unit
 const mu = (v) => Math.round(v * MU);
 
+/* ---------------------------------------------------------------- old build effects → animations */
+// AnimEffect (MS-PPT 2.13.2): 0 cut, 1 random, 2 blinds, 3 checker, 4 cover, 5 dissolve, 6 fade, 7 uncover, 8 random bars,
+// 9 strips, 10 wipe, 11 box/zoom, 12 fly, 13 split, 14 flash, 17 diamond, 18 plus, 19 wedge, 26 wheel, 27 circle
+const BUILD_FX = { 0: 'appear', 1: 'fade', 5: 'fade', 6: 'fade', 14: 'appear', 4: 'fly', 7: 'fly', 12: 'fly', 2: 'wipe', 3: 'wipe', 8: 'wipe', 9: 'wipe', 10: 'wipe', 11: 'zoom', 17: 'zoom', 18: 'zoom', 27: 'zoom', 13: 'split', 19: 'wheel', 26: 'wheel' };
+const FLY_DIR = ['l', 't', 'r', 'b', 'l', 'r', 'l', 'r'];
+export function buildAnimations(list) {
+  return (list || []).filter((a) => a.order >= 0 && a.build > 0).sort((a, b) => a.order - b.order).map((a) => {
+    const effect = BUILD_FX[a.effect] || 'appear';
+    const anim = { id: uid('a'), el: a.el, cls: 'entr', effect, trigger: (a.flags & 0x4) ? 'after' : 'click', duration: effect === 'appear' ? 1 : 500, delay: (a.flags & 0x4) ? Math.max(0, a.delay || 0) : 0 };
+    if (effect === 'fly') anim.dir = FLY_DIR[a.dir] || 'b';
+    return anim;
+  });
+}
+/* ---------------------------------------------------------------- tables (groups of cells + lines) */
+export function tableFromGroup(children) {
+  const cells = children.filter((c) => c.type === 'shape');
+  const lines = children.filter((c) => c.type === 'line');
+  if (cells.length < 2 || children.some((c) => c.type !== 'shape' && c.type !== 'line')) return null;
+  const tol = 6350; // 0.5 pt
+  const uniq = (vals) => { const out = []; for (const v of vals.sort((a, b) => a - b)) if (!out.length || v - out[out.length - 1] > tol) out.push(v); return out; };
+  const xs = uniq(cells.flatMap((c) => [c.x, c.x + c.w])); const ys = uniq(cells.flatMap((c) => [c.y, c.y + c.h]));
+  const at = (arr, v) => arr.findIndex((x) => Math.abs(x - v) <= tol);
+  const nr = ys.length - 1; const nc = xs.length - 1;
+  if (nr < 1 || nc < 1 || nr * nc > 2500) return null;
+  const grid = Array.from({ length: nr }, () => Array.from({ length: nc }, () => null));
+  for (const c of cells) {
+    const c1 = at(xs, c.x); const c2 = at(xs, c.x + c.w); const r1 = at(ys, c.y); const r2 = at(ys, c.y + c.h);
+    if (c1 < 0 || c2 <= c1 || r1 < 0 || r2 <= r1) return null;
+    if (grid[r1][c1]) return null;
+    const cell = { text: c.text ? { ...c.text } : body([para('')], { anchor: 't' }) };
+    if (c.fill !== undefined) cell.fill = c.fill;
+    if (r2 - r1 > 1 || c2 - c1 > 1) cell.span = { r: r2 - r1, c: c2 - c1 };
+    grid[r1][c1] = cell;
+    for (let r = r1; r < r2; r++) for (let k = c1; k < c2; k++) if (r !== r1 || k !== c1) grid[r][k] = { text: body([para('')]), merged: true };
+  }
+  // border lines → the edges of the cells they lie on
+  const edge = (cell, k, ln) => { if (!cell || cell.merged) return; cell.borders = { ...(cell.borders || {}), [k]: ln }; };
+  for (const l of lines) {
+    const ln = l.line || null;
+    if (l.h <= tol) { const ri = at(ys, l.y); if (ri < 0) continue; for (let c = 0; c < nc; c++) { const mid = (xs[c] + xs[c + 1]) / 2; if (mid < l.x - tol || mid > l.x + l.w + tol) continue; if (ri < nr) edge(grid[ri][c], 't', ln); if (ri > 0) edge(grid[ri - 1][c], 'b', ln); } }
+    else if (l.w <= tol) { const ci = at(xs, l.x); if (ci < 0) continue; for (let r = 0; r < nr; r++) { const mid = (ys[r] + ys[r + 1]) / 2; if (mid < l.y - tol || mid > l.y + l.h + tol) continue; if (ci < nc) edge(grid[r][ci], 'l', ln); if (ci > 0) edge(grid[r][ci - 1], 'r', ln); } }
+  }
+  if (grid.some((row) => row.some((c) => !c))) return null;
+  for (const row of grid) for (const c of row) if (!c.merged) { for (const k of ['l', 'r', 't', 'b']) if (c.borders && !(k in c.borders)) c.borders[k] = null; }
+  return {
+    id: uid('t'), type: 'table', name: '', x: xs[0], y: ys[0], w: xs[nc] - xs[0], h: ys[nr] - ys[0], rot: 0,
+    cols: xs.slice(1).map((x, i) => x - xs[i]),
+    rows: grid.map((cells2, i) => ({ h: ys[i + 1] - ys[i], cells: cells2 })),
+    style: { firstRow: false, bandRows: false, firstCol: false, accent: 'accent1' }, border: undefined,
+  };
+}
+
 /* ---------------------------------------------------------------- record reader */
 const CONTAINER = 0xf;
 function makeReader(u8) {
@@ -527,6 +579,9 @@ export async function readPpt(bytes, { ext } = {}) { // eslint-disable-line no-u
       const ph = R.deep(cd, T.OEPlaceholderAtom)[0];
       if (ph) out.ph = R.u8(ph.body + 4);
       if (R.deep(cd, T.ExObjRefAtom).length) out.ole = true;
+      // old build effects (AnimationInfoAtom, PowerPoint 97–2003)
+      const ai = R.deep(cd, 0x0ff1)[0];
+      if (ai && ai.len >= 26) out.anim = { flags: R.u16(ai.body + 4), delay: R.i32(ai.body + 12), order: R.i16(ai.body + 16), build: R.u8(ai.body + 20), effect: R.u8(ai.body + 21), dir: R.u8(ai.body + 22) };
     }
     const tb = out.kids.find((r) => r.type === T.ClientTextbox);
     if (tb) {
@@ -665,6 +720,8 @@ export async function readPpt(bytes, { ext } = {}) { // eslint-disable-line no-u
             }
             const children = (await walkGroup(r, childMap, depth + 1)).filter(Boolean);
             if (!children.length) continue;
+            // a PowerPoint table is a group (tableProperties 0x39F / tableRowProperties 0x3A0) of cell boxes and border lines
+            if ((g.props.has(0x039f) || g.props.has(0x03a0)) && depth < 20) { const tbl = tableFromGroup(children); if (tbl) { res.push(tbl); continue; } }
             if (children.length === 1) { res.push(children[0]); continue; }
             let x1 = Infinity; let y1 = Infinity; let x2 = -Infinity; let y2 = -Infinity;
             for (const c of children) { x1 = Math.min(x1, c.x); y1 = Math.min(y1, c.y); x2 = Math.max(x2, c.x + c.w); y2 = Math.max(y2, c.y + c.h); }
@@ -680,7 +737,7 @@ export async function readPpt(bytes, { ext } = {}) { // eslint-disable-line no-u
           if (!box && s.ph != null) { const key = PH_KEY[s.ph]; const d = key && ctx.layout && ctx.layout.ph[key]; if (d) box = { x: d.x, y: d.y, w: d.w, h: d.h }; }
           if (!box) continue;
           const el = await shapeToEl(s, box, ctx);
-          if (el) res.push(el);
+          if (el) { res.push(el); if (s.anim && ctx.anims) ctx.anims.push({ el: el.id, ...s.anim }); }
         } catch { /* skip broken shape */ }
       }
       return res;
@@ -759,13 +816,14 @@ export async function readPpt(bytes, { ext } = {}) { // eslint-disable-line no-u
       slide.layoutId = layout.id;
       if (!(flags & 1)) slide.showMaster = false;
       const own = !(flags & 2) ? schemeOf(sr) : null;
-      const ctx = { scheme: own, color: mkColor(own), texts, used: new Set(), layout, kind, bodies: { n: 0 } };
+      const ctx = { scheme: own, color: mkColor(own), texts, used: new Set(), layout, kind, bodies: { n: 0 }, anims: [] };
       if (sr) {
         const d = await readDrawing(sr, ctx);
         slide.elements = d.elements;
         if (d.background && !(flags & 4)) slide.background = d.background;
         const ss = R.kid(sr, T.SSSlideInfoAtom);
         if (ss) Object.assign(slide, transitionOf(R, ss, fidelity));
+        slide.animations = buildAnimations(ctx.anims);
       }
       // texts of the slide list not placed by a shape → placeholders at the layout position
       texts.forEach((t, i) => {

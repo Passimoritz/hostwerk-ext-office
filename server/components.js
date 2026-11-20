@@ -49,6 +49,20 @@ const REGISTRY = {
     ],
   },
 };
+/* Optional OCR language packs (same tessdata_fast commit as deu/eng; hashes determined 2026-11-20 by downloading once) */
+for (const [code, label, sha256, size] of [
+  ['fra', 'French', 'ced037562e8c80c13122dece28dd477d399af80911a28791a66a63ac1e3445ca', 1130365],
+  ['spa', 'Spanish', '6f2e04d02774a18f01bed44b1111f2cd7f3ba7ac9dc4373cd3f898a40ea6b464', 2294433],
+  ['ita', 'Italian', 'b8f89e1e785118dac4d51ae042c029a64edb5c3ee42ef73027a6d412748d8827', 2701314],
+  ['nld', 'Dutch', 'ced0e5e046a84c908a6aa7accbef9a232c4a5d9a8276691b81c6ee64d02963f6', 6050296],
+  ['pol', 'Polish', 'c4476cdbc0e33d898d32345122b7be1cbf85ace15f920f06c7714756e1ef79b2', 4765518],
+  ['tur', 'Turkish', '7393381111e1152420fc4092cb44eef4237580d21b92bf30d7d221aad192c6b7', 4550554],
+]) {
+  REGISTRY[`ocr-${code}`] = {
+    label: `Text recognition: ${label}`, version: `tessdata_fast 4.1 (${code})`, license: 'Apache-2.0',
+    sources: [{ url: `${TESSDATA}/${code}.traineddata`, sha256, size, file: `lang/${code}.traineddata` }],
+  };
+}
 /** other names the UI may use for the same component */
 const ALIAS = { 'pdf-cmaps': 'cjk-fonts', 'pdf-fonts': 'cjk-fonts', cjk: 'cjk-fonts', 'ocr-deu': 'ocr', 'ocr-eng': 'ocr', tesseract: 'ocr' };
 const TYPES = { js: 'text/javascript; charset=utf-8', mjs: 'text/javascript; charset=utf-8', wasm: 'application/wasm', traineddata: 'application/octet-stream', bcmap: 'application/octet-stream', pfb: 'application/octet-stream', ttf: 'font/ttf', txt: 'text/plain; charset=utf-8', '': 'text/plain; charset=utf-8' };

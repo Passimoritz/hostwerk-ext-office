@@ -45,6 +45,7 @@ function score(name, text, terms) {
   return s;
 }
 
+const XLS = /^(xls|xlt)$/;
 class Index {
   /** deps: { file, base: () => libraryDir, libs: () => ({ unpdf, mailparser }), log } */
   constructor(deps) {
@@ -71,8 +72,9 @@ class Index {
           seen.add(f.rel);
           const ext = extOf(f.rel);
           const cur = this.data.files[f.rel];
-          if (cur && cur.mtime === f.mtime && cur.size === f.size) continue;
-          const rec = { mtime: f.mtime, size: f.size, text: '', thumb: false };
+          // .xls text came with 1.2 (BIFF8 reader) – entries of older indexes are read again once
+          if (cur && cur.mtime === f.mtime && cur.size === f.size && !(XLS.test(ext) && cur.v !== 2)) continue;
+          const rec = { mtime: f.mtime, size: f.size, text: '', thumb: false, ...(XLS.test(ext) ? { v: 2 } : {}) };
           if (X.canText(ext) && f.size <= MAX_FILE) {
             try {
               const buf = await fs.promises.readFile(f.full);

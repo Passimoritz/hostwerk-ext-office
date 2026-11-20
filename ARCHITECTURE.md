@@ -605,19 +605,20 @@ Hostwerk login cannot use a websocket at all: it uses the public token page (SSE
 | `POST /office/db/rows {server, db, table, changes: [{ op: update\|insert\|delete, key: { pk: v }, values }]}` | one transaction (MySQL/MariaDB/PostgreSQL/SQLite; MongoDB one by one, `atomic: false`); each update/delete must hit exactly one row, else rollback + 409 → `{ ok, applied, results }`; 403 read-only connection, 409 no primary key / view |
 | `GET /office/fields` · `GET /office/fields/value?id=&params=<json>` | `{ fields: [{ id, label, group, params }] }` – date, time, datetime, user, service, players, system, hostwerk, cell (`{ path\|root+path, sheet, cell }`), docprop (`{ path, prop }`) · `{ value, text, updatedAt, ttl }` |
 | `GET /office/forms[?loc]` · `POST /office/forms {loc, sheet, title, description, columns: [{ label, type: text\|textarea\|number\|email\|date\|choice\|checkbox\|tel\|url, required, options, help, min, max }], timestamp (default true), thanks, notify: channel?, public: { enabled, expires (days or ms), password }}` | `{ forms: [Form] }` / Form `{ id, title, path, root, sheet, columns, public: { enabled, expires, password: bool }, closed, responses, lastResponse, pending, url, urls, open }`; an empty sheet gets a header row |
+| (1.2) answers | the "Submitted at" stamp (local time of the Hostwerk) and date fields are real date cells: xlsx = serial number with the built-in date(-time) format 22/14 (the style is added to styles.xml once – a minimal styles part when there is none; 1904 workbooks respected; the column gets a width when it has none), ods = `office:value-type="date"` + a date style in the automatic styles, csv = ISO `2026-11-20 14:03:05`; queued answers keep `{ $date }`, `GET …/pending` hands them out as ISO text |
 | `PUT /office/forms/:id` · `POST …/:id/close` · `DELETE …/:id` · `GET …/:id/pending` · `POST …/:id/pending/ack {count}` | answers arriving while the file is open (soft lock or co-editing room) wait in `pending` – written ≤ 30 s after the lock is gone, or the editor applies them and acks; broadcast `{ type: 'office-form', id, path, pending }` |
 | public `GET/POST /api/office/pub/form/:token` · `POST …/unlock {password}` | form page (own CSP, honeypot `website`, signed time stamp ≥ 2 s, 10 answers/10 min/address, 300/h/form, password cookie) → row appended through `Library.write` (version + mtime check like a save) |
 | `GET /office/rules?loc` · `PUT /office/rules?loc` (`{ rules }` or `[...]`) · `POST /office/rules/test {loc, rules?}` · `GET /office/rules/channels` | `{ rules: [rule + last: { met, at, value }] }`, rule `{ id, name, on, when: { sheet, cell \| range, op: > < >= <= = != contains notContains empty notEmpty changed, value, agg: any\|all\|sum\|count\|avg\|min\|max }, then: { notify: { channel: hostwerk\|discord\|ntfy\|mail\|all, text ({value} {cell} {file} {sheet} {rule}) } } }`; fires on "not met → met" (every change for `changed`) after saves/appends and every 2 min (stat first) · `{ channels: [{ id, label, ready }] }` |
-| `GET /office/collab/state?loc` · ws `/ws/office/collab?loc` | `{ key, peers: [{ id, user, leader }], ws, yjs }` · y-websocket framing (0 sync – step 1 is always answered with a step 2, 1 awareness, 3 query) + **type 100 = control JSON (varString)**: server → `{ type: 'hello', id, leader, peers, user, fresh, mtime }`, `{ type: 'leader', leader: true }` (hand-over), `{ type: 'peers', peers }`, `{ type: 'saved', mtime, by }` (any write of the file), `{ type: 'reset', reason, leader }` (log too big: leader saves, all reload); client → `{ type: 'saved', mtime }` (leader). The leader saves with the normal `PUT /office/raw`. The server keeps the update log (compacted with `Y.mergeUpdates` only where `yjs` is resolvable server-side – not in the package), ≤ 24 clients/room, 200 rooms, 48 MB log, rooms dropped 2 min after the last client; team members over remote access need the right for `PUT /office/raw` |
+| `GET /office/collab/state?loc` · ws `/ws/office/collab?loc` | `{ key, peers: [{ id, user, leader }], ws, yjs }` · y-websocket framing (0 sync – step 1 is always answered with a step 2, 1 awareness, 3 query) + **type 100 = control JSON (varString)**: server → `{ type: 'hello', id, leader, peers, user, fresh, mtime }`, `{ type: 'leader', leader: true }` (hand-over), `{ type: 'peers', peers }`, `{ type: 'saved', mtime, by }` (any write of the file), `{ type: 'reset', reason, leader }` (log too big: leader saves, all reload); client → `{ type: 'saved', mtime }` (leader). The leader saves with the normal `PUT /office/raw`. The server keeps the update log, compacted (1.2) with the small Yjs build shipped in `server/vendor/yjs.cjs` (70 KB, MIT, licence next to it): after 300 updates or when the log doubled (+ 1 MB) all updates go into a fresh `Y.Doc` (gc on – deleted text keeps no content) and come out as ONE update; only a compacted state over the cap still resets – ≤ 24 clients/room, 200 rooms, 48 MB log, rooms dropped 2 min after the last client; team members over remote access need the right for `PUT /office/raw` |
 | `POST /office/remote {loc?, title?}` · `DELETE /office/remote/:token` · ws `/ws/office/remote?token=&role=presenter\|phone` | `{ token, url, urls, qr (SVG markup), ws, expires (12 h), lan: { reachable, remote } }` (`reachable` false = only localhost URLs → ask to switch on remote access). Presenter → `{ type: 'slide', value: n \| { index, total, title, notes } }`, `{ type: 'notes', value }`, `{ type: 'timer', value: { running, elapsed, startedAt } }`, `{ type: 'blank', value }`, `{ type: 'state', … }`, `{ type: 'end' }`; server → presenter `{ type: next\|prev\|first\|last\|goto\|blank\|laser, value, cmd, n?, x?, y?, on? }`, `{ type: 'peers', value }`; phone (ws) sends `{ type: 'next' }` …, gets `{ type: 'state', slide, total, title, notes, blank, timer, presenter }` |
 | public `GET /api/office/pub/remote/:token` (+ `/app.js`, `/events` SSE, `POST /cmd {cmd, n, x, y, on}`) | the phone page behind the QR code (20 commands/s) |
 | `GET /office/components` · `POST /office/components/install {id}` · `DELETE /office/components/:id` · `GET /office/components/:id/<file>` | `{ components: [{ id, label, version, license, download, size, installed, state: missing\|installing\|ready\|error, progress, error, files, base, aliases }] }`, broadcast `{ type: 'office-component', id, state, progress }`; aliases `pdf-cmaps`/`cjk` → `cjk-fonts`, `ocr-deu`/`ocr-eng` → `ocr`. Files: ocr `tesseract.min.js`, `worker.min.js`, `core/tesseract-core-{simd-,}lstm{.wasm.js,.js,.wasm}`, `lang/{deu,eng}.traineddata` (plain, use `gzip: false`); mermaid `mermaid.min.js`; cjk-fonts `cmaps/*.bcmap`, `standard_fonts/*` (pdf.js `cMapUrl`/`standardFontDataUrl` = `<base>cmaps/` / `<base>standard_fonts/`). ETag + `immutable` |
 | `GET /office/search/meaning?q=&dir=` · `GET /office/search?q=&semantic=1` | `{ hits: [Entry + snippet, score], mode: embeddings\|ai-terms\|fulltext, … }` |
-| `GET /office/encrypt/state?loc` · `POST /office/encrypt {loc, password \| vault: true, saveToVault?, mode: inplace\|copy}` · `POST /office/decrypt {loc, password \| fromVault: true, mode: bytes (default – raw response, file stays encrypted) \| inplace \| copy}` · `PUT /office/encrypt/raw?loc&mtime=` (raw plain bytes; header `x-office-password` or vault) | `{ encrypted: ooxml\|odf\|null, supported, vault: { available, locked, hasEntry } }` · `{ ok, mtime, size, version, vaultSaved, generated, versionsWithPlainText }` (in place keeps a "Before encrypting" version – offer deleting old plain versions) · 403 wrong password · PDF → 501 |
+| `GET /office/encrypt/state?loc` · `POST /office/encrypt {loc, password \| vault: true, saveToVault?, mode: inplace\|copy}` · `POST /office/decrypt {loc, password \| fromVault: true, mode: bytes (default – raw response, file stays encrypted) \| inplace \| copy}` · `PUT /office/encrypt/raw?loc&mtime=` (raw plain bytes; header `x-office-password` or vault) | `{ encrypted: ooxml\|odf\|null, supported, vault: { available, locked, hasEntry } }` · `{ ok, mtime, size, version, vaultSaved, generated, versionsWithPlainText }` (in place keeps a "Before encrypting" version – offer deleting old plain versions) · 403 wrong password – with `soft: true` (1.2, sent by the editor host) 200 `{ ok: false, reason: 'password' \| 'vault', error }` instead, so a wrong password is no red console error · PDF → 501 |
 | `GET /office/vault` · `POST /office/vault/encrypt {loc}` · `POST /office/vault/decrypt {loc}` | `{ available, unlocked }` · Entry + `result` (generated password in the passwords extension's `passwordVault`, source `office`; 409 no vault, 423 locked) |
 | `POST /office/clean/preview {loc}` · `POST /office/clean {loc, remove: [ids], copy}` or `{loc, options: { id: false … }, mode: copy\|inplace\|download}` | `{ items: [{ id, label, count }], warnings: [{ id, label }] }` (ids author, comments, revisions, hidden, custom, thumbnail, rsid, exif, templates) · Entry + `report` (shell shape) / `{ ok, report, entry \| mtime }` |
 | `GET /office/publish/targets` · `GET /office/publish?loc` · `POST /office/publish {loc, target: id \| { web, vhost }, sub \| path, title, files?: { 'index.html': string, … ≤ 12, ≤ 2 MB, html/css/js/svg/json/txt }, auto}` · `PUT /office/publish/:id {files, auto}` · `DELETE /office/publish/:id` | `{ targets }` (`host.sites.targets()`) · `{ pages, publications }` with `url`, `site`, `stale` · without `files` a plain text page is published; after each save a page with `auto` is marked stale and `{ type: 'office-publish', id, path }` is broadcast – the open editor re-renders and PUTs (images as inline data: URIs – `host.sites` only takes text files) |
-| `GET /office/reports?loc` · `POST /office/reports {loc, schedule: { every: hourly\|daily\|weekly\|monthly (day/week/month too), time \| at: 'HH:MM', weekday, day }, channel \| recipients: [{ channel }], saveCopy, title, on}` (`id` = update) · `PUT/DELETE /office/reports/:id` · `POST …/:id/run` | PDF through the converter, sent to the channel (Discord as file, mail with attachment via Hostwerk's relay, else a Hostwerk notification), copy `<name> <date>.pdf` next to the file; own minute timer, missed runs run once |
+| `GET /office/reports?loc` · `POST /office/reports {loc, schedule: { every: hourly\|daily\|weekly\|monthly (day/week/month too), time \| at: 'HH:MM', weekday, day }, format: pdf\|docx\|odt\|xlsx\|ods\|csv\|pptx\|odp\|same, recipients: [{ channel: hostwerk\|alerts\|mail\|discord\|ntfy, to }], saveCopy, title, on}` (`id` = update; `channel` alone still works) · `PUT/DELETE /office/reports/:id` · `POST …/:id/run` | (1.2) the file in its format (as it is, else through the converter), sent to EVERY recipient on its own: `hostwerk` notification, `alerts` = all alert channels, `mail` = up to 20 addresses (`to` empty = the alert address; with the attachment through Hostwerk's mail relay, without one into Hostwerk's mail catcher), `discord` = a webhook address, `ntfy` = an address or a topic (on the alert ntfy server, else ntfy.sh) – invalid targets → 400; `run` → `{ ok, results: [{ channel, to, ok, error }], error }` (one failure does not stop the others; `lastResults`/`lastError` kept and shown); PDF copy `<name> <date>.pdf` next to the file; own minute timer, missed runs run once |
 | `GET /office/library-backups` · `POST /office/library-backups` · `POST …/restore {id, paths?}` · `GET /office/backups?loc` · `GET /office/backups/raw?loc&id=` · `POST /office/backups/restore {loc, id}` | daily zip snapshot of the library (≤ 2 GB, keep 7) in Hostwerk's backup center ("Office library"); restore never deletes, overwritten files keep their content as a version |
 | `PUT /office/thumb?loc&mtime=` (raw PNG or WebP ≤ 2 MB) · `GET /office/thumb?loc` | per file key + mtime; GET: embedded first, then the rendered one (`x-thumb: rendered`), ETag/304; `Entry.thumb` true for both |
 | `GET /office/qr?text=` · `POST /office/ai {task?, prompt, text?, system?, json?, lang}` | `image/svg+xml` · `{ text, json? }` (ctx.ai: quick tasks or `chats.oneShot` with the user's provider) |
@@ -739,6 +740,24 @@ scripts/drive.mjs results/jobs.json results/main.jsonl - --pdf --wordpdf` and `�
 All 32 files: opened, nothing repaired, every PDF export worked (32/32).
 
 
+### 1.2 round – shell / server / docs (for the integrator)
+
+- **Co-editing (docs):** the saver is the SERVER's leader (`provider.leader` from `hello`/`leader`) – the same for everyone at
+  once; the old "smallest client id" rule only remains for servers without the control channel. A save of the room
+  (`saved`) makes a co-editor clean (`host.dirty(false)`); becoming the leader with changes the room has not saved yet makes
+  that editor dirty (it saves them). Live: follower stays "Keine Änderungen" while typing, the leader saves, hand-over saves.
+- **Docs palette:** `ui/src/editors/docs/palette.js` (formatting, styles, paragraph, insert, layout, review, view/zoom – English
+  keys, shown localised by the palette) + the "/" commands; `words` go to the palette ranking (`tests/docs-palette.test.js`).
+- **Floating text boxes:** `ui/src/editors/docs/io/anchor.js` (read/move `wp:anchor`, pure) + the `preserved` node view
+  (`floatingView` in `extensions/nodes.js`); `Preserved` storage `onEdit` opens the text dialog on double-click.
+- **Templates view:** a click on an own template asks for the file name and creates the file in the open folder
+  (`newFromOwnTemplate` in `shell/ops.js`); "More templates and formats …" in its menu opens the New dialog.
+- **Server:** `sheet.js` date values (`{ $date }`), `cfb.xlsText` (BIFF8), ZIP64 in `zip.js` (`centralDir`, record writers
+  shared with `zippatch.js`), `server/vendor/yjs.cjs` (+ `LICENSE-yjs.txt`; loaded with the Yjs "already imported" marker set
+  aside), report recipients (`extras.js` `normRecipients`, `notify.js` `send(…, { to })`), `clean.js` `joinDeletedMarks`,
+  `POST /office/decrypt {soft}`. The search index reads `.xls` files of older indexes once more (entry `v: 2`).
+- **Texts:** new German in `locales/parts/a.json` (36 keys) – to be merged into `de.json` (the package step would ship the part file).
+
 ## Known limits
 
 **Not verified for real** (no instance / software on the build machine): Electron-only paths (in-app web window,
@@ -756,38 +775,76 @@ install `node tools/package.js --dir` instead; a core change is needed for the s
 Co-editing needs a Hostwerk login (no public websocket upgrade in the core; the phone remote works without login).
 Hostwerk's translating `toast.error` breaks on DOMExceptions (worked around in `lib/toastfix.js`).
 
-**Shell:** "Download as" uses the `<a download>` save dialog; own templates in the Templates view open the New dialog;
-dashboard tile only; a lock left by a crashed browser shows "open" for up to 5 minutes; the docs palette lists the "/"
-commands and the file actions (no formatting commands); thumbnails of a one-line document look nearly empty (they are
-true to the page); a wrong file password shows one 403 in the browser console.
+**Shell:** "Download as" uses `<a download>` – Hostwerk offers extensions no save dialog for binary files (`pickPath` only opens
+files/folders, `Hostwerk.saveFile` takes text ≤ 5 MB); in the Electron app such a download shows the system's "Save as" dialog
+anyway (Electron's default – Hostwerk sets no `will-download` path; not verified live, no Electron here). Dashboard tile only; a
+lock left by a crashed browser shows "open" for up to 5 minutes; thumbnails of a one-line document look nearly empty (they are
+true to the page).
 
-**Backend:** .xls (BIFF) text is not in the search index; wps/wpd/wri/abw/lwp/hwp text only via the engine; iWork text is a
-heuristic; no ZIP64 (office files > 4 GB); the private engine needs ~1.5 GB on disk (download ≈ 360 MB); Google Drive needs
-the user's own OAuth client. PDF passwords are set by the PDF editor itself (AES-256) – the server's `/office/encrypt`
-answers 501 for PDF; PDF cleaning blanks Info/XMP in place (uncompressed parts only – object streams are reported); hidden
-text = Word runs with `w:vanish` and ODF hidden-text fields; accepting a deleted Word paragraph mark keeps the paragraph;
-the co-editing room keeps the Yjs update log uncompacted (no yjs on the server) – over 48 MB the leader saves and everyone
-reloads; the time machine only snapshots Hostwerk's settings – the library goes to the backup center (own daily zip);
-MongoDB writes are not atomic; reports go to Hostwerk's configured alert channel/address (no per-report recipients);
-the form time stamp lands in the sheet as text.
+**Backend:** wps/wpd/wri/abw/lwp/hwp text only via the engine; iWork text is a heuristic; .xls text = BIFF8/BIFF5 cell texts,
+numbers and cached formula results (encrypted workbooks and BIFF2–4 give none); office files pass the raw routes up to 200 MB –
+ZIP64 is read and written (zip downloads, library snapshots, writers that use ZIP64 records on small files), but a > 4 GB office
+file never gets that far; the private engine needs ~1.5 GB on disk (download ≈ 360 MB); Google Drive needs the user's own OAuth
+client. PDF passwords are set by the PDF editor itself (AES-256) – the server's `/office/encrypt` answers 501 for PDF; PDF
+cleaning blanks Info/XMP in place (uncompressed parts only – object streams are reported); hidden text = Word runs with
+`w:vanish` and ODF hidden-text fields; accepting a deleted paragraph mark joins direct siblings only (a mark inside a text box,
+or one whose `w:pPrChange` holds a full `w:pPr`, just loses the mark); a co-editing room whose COMPACTED state is still over
+48 MB asks the leader to save and everyone to reload; the time machine only snapshots Hostwerk's settings – the library goes to
+the backup center (own daily zip, ≤ 2 GB); MongoDB writes are not atomic; report formats other than the file's own need a
+converter, report e-mails without Hostwerk's mail relay land in Hostwerk's mail catcher; ODS form answers' date columns get no
+width (Excel shows ##### until the column is widened – xlsx gets one).
 
-**Docs:** print layout paginates by blocks (a block taller than a page runs over the gap); columns are shown in web layout
-only; Word 6/95 and encrypted *.doc* (binary) are not read (the engine opens 6/95); PDF export without the engine uses the
-print dialog; diagrams are pictures with their source in the alt text (Word shows the picture); seen once in the 1.0 live
-test, not reproducible: after inserting a table a mouse double-click selection was not taken over.
+**Docs:** print layout breaks long paragraphs/lists between lines and long tables between rows (header row repeated) – only a
+single line, a single table row or a picture taller than a page runs over the gap; columns: print layout shows the text in
+columns on ONE sheet as long as the text (CSS columns cannot break into pages inside one editing flow – exports, print and PDF
+are exact); floating text boxes/shapes (`wp:anchor`, docx) float at their horizontal position (wrap square / top-and-bottom /
+none) and move by drag (written back as offsets from column/paragraph), but positions measured from the page or margin TOP keep
+the box at its paragraph, odt frames do not move, and charts/SmartArt/OLE stay inline; Word 6/95 and encrypted *.doc* (binary)
+are not read (the engine opens 6/95); PDF export without the engine uses the print dialog; diagrams are pictures with their
+source in the alt text (Word shows the picture); seen once in the 1.0 live test, not reproducible: after inserting a table a
+mouse double-click selection was not taken over.
 
-**Sheets:** form controls, external links, what-if tables and Power Query are kept but not editable; edited Excel charts
-are rewritten in a simple form; ODS/XLS/XLSB without the engine: values, formulas and number formats (no styles, charts,
-images); function names in languages other than English/German are not mapped; the settings gridlines/headings/font are
-the defaults of new sheets (a file keeps its own).
+**Sheets (checked against code + tests for 1.2):** form controls of xlsx files are shown; check boxes, option groups,
+drop-downs, list boxes and spinners work and write their linked cell (ctrlProp + VML patched on save, checked in Excel);
+buttons are shown but run their macros in Excel only, scroll bars behave like spinners, ActiveX controls are kept, not
+shown. What-if data tables keep their `TABLE()` formula and their results are recalculated (one- and two-variable;
+not for tables over 5,000 cells). External links and Power Query are kept but not editable. Edited Excel charts are
+patched into the original chart part (title, axis titles, legend, series ranges/names/colours/count, stacking, type
+between column/bar/line/area – Excel's styles, layout and extensions stay); other edits (labels or trendline switched,
+pie/doughnut/scatter ↔ others, a range-based chart) still rewrite the chart in the simple form, which keeps labels and
+trendlines but not Excel's formatting. ODS/OTS/FODS: own reader and writer with cell styles, number formats as data
+styles, merges, sizes, outline groups, frozen panes, conditional formats (cell/formula rules as `style:map`, all rules
+as LibreOffice `calcext`), validation, comments, links, rich text, names, autofilter, print setup, images and charts
+(chart objects); unknown parts and shapes are kept. Excel ignores frozen panes in ODS (it reads no settings.xml) and
+opens no flat .fods at all; colour scales, data bars and icon sets in ODS are LibreOffice-only (calcext). XLS: cell
+formatting (fonts, fills in the file's palette colours, borders, alignment, rotation, number formats, protection) is read
+by our own BIFF8 reader; charts, pictures and conditional formats of .xls are not read without the engine, and writing
+.xls without the engine gives values only (SheetJS CE). XLSB: values, formulas and number formats only (no styles)
+without the engine. Function names exist in English and German only – French/Spanish/Italian were not added because
+only a German Excel is available here to verify Microsoft's names. The settings gridlines/headings/font are the
+defaults of new sheets (a file keeps its own).
 
-**Slides:** outline view edits title + first body placeholder; ppt: no old build lists, tables arrive as groups, no
-comments/sounds/encrypted files; odp: no form-control bindings, no change tracking; PNG export/print need `img-src data:`
-and system fonts.
+**Slides:** the outline view edits titles and every text placeholder/text box of a slide, Tab/Shift+Tab change levels,
+drag reorders (verified in Extras.jsx). ppt: tables arrive as real tables when the group carries the table properties
+(PowerPoint 2000+), old build effects become entrance animations (fly with direction, wipe, fade, zoom, split, wheel,
+appear; order and "after previous") – effects that only exist in the PowerPoint 2002+ timing records come out as the
+old fallback the file stores (a Fade is stored as "Cut" → Appear); no comments, sounds or encrypted ppt. odp: no
+form-control bindings, no change tracking. Printing sends the vector PDF (no pictures, no `img-src data:`); PNG export
+uses the SVG picture and falls back to the vector PDF painted by pdf.js; objects without a vector form (charts, media)
+still need the SVG picture inside it. Text uses the system fonts.
 
-**PDF + viewer:** OCR languages German + English (component); redacted pages become pictures with an invisible text layer
-(annotations and form fields on those pages go); after reopening, own annotations are ordinary PDF annotations;
-vsd/pub/one/mpp/accdb/mdb without the engine show extracted text only; vsdx connector routing is simplified.
+**PDF + viewer:** OCR: German + English in the engine, French, Spanish, Italian, Dutch, Polish and Turkish as optional
+language packs (`ocr-fra` … `ocr-tur` – the server registry has to list them). Redaction keeps a page as vectors when it
+has no pictures, form XObjects, inline images or Type3/unknown-width fonts (marked glyphs and paths are removed from the
+content stream, the marks are painted black); any other page, or a page whose check fails, becomes a picture with an
+invisible text layer. Own annotations stay editable after another app re-saved the file as long as it kept our
+`/HWOffice` key (also inside compressed object streams, the catalog marker may be gone); moved ones follow, a changed
+comment text is taken over, resized ones become ordinary annotations, and apps that drop unknown keys leave ordinary
+annotations. Access .mdb (Jet 4) and .accdb (ACE) show their tables and rows (memo, currency, dates, Yes/No; "Open as
+spreadsheet"); encrypted databases, query SQL, OLE/attachment contents are not shown; the Jet 3 (Access 97) path is
+implemented but untested (no such file could be made here). vsd/pub/mpp need the engine (text found in the file only);
+OneNote shows the text found in the file (no revision-store parser). vsdx: connectors saved by Visio use their stored
+route; connectors without own geometry (other tools) are routed at right angles around the shapes (no line jumps).
 
 **Bundles:** jszip's `setImmediate` polyfill and pdf.js' feature test contain `new Function` (never reached with our
 options; no `eval(` anywhere – the catalog check passes). 1.1.0 chunks (js + css): main 320 KB, docs 1041 KB (+ docs-math

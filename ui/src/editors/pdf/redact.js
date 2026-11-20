@@ -1,7 +1,8 @@
 /*
  * Real redaction – pure parts (pdf-lib, no DOM), tested in tests/pdf-redact.test.js.
  *
- * A page with marks is rewritten completely: its content (text, vector graphics, images) is replaced by one picture
+ * A page with marks and without pictures keeps its vectors: the marked glyphs and paths are taken out of its content
+ * stream (redact-vector.js). Any other page with marks is rewritten completely: its content is replaced by one picture
  * of the page in which the marked areas are black (rendered by the editor with pdf.js), plus an invisible text layer
  * with the page's text WITHOUT the marked characters – the page stays searchable, nothing under a mark survives.
  * Annotations/form fields under a mark are removed, the structure tree (alternate texts) goes, objects nobody refers
@@ -16,6 +17,7 @@
  */
 import { PDFDocument, PDFName, PDFDict, PDFArray, PDFRef, PDFRawStream, PDFNumber, PDFHexString, StandardFonts, decodePDFRawStream } from 'pdf-lib';
 import { addTextLayer } from './textlayer.js';
+import { redactPageVector } from './redact-vector.js';
 
 /* ---------------- what to look for ---------------- */
 
@@ -175,6 +177,12 @@ export async function applyRedactions(bytes, pages, { removeStructure = true } =
         }
       }
       if (keep.length) node.set(PDFName.of('Annots'), ctx.obj(keep)); else node.delete(PDFName.of('Annots'));
+    }
+    // pages without pictures stay vectors (text minus the marked glyphs); the rest becomes a picture
+    if (p.vector !== false) {
+      let ok = false;
+      try { ok = redactPageVector(doc, page, p.rects); } catch { ok = false; }
+      if (ok) { for (const k of ['Thumb', 'PieceInfo', 'Metadata', 'StructParents']) node.delete(PDFName.of(k)); p.done = 'vector'; continue; }
     }
     for (const k of ['Contents', 'Resources', 'Thumb', 'PieceInfo', 'Metadata', 'StructParents', 'Group', 'B']) node.delete(PDFName.of(k));
     node.set(PDFName.of('Resources'), ctx.obj({}));

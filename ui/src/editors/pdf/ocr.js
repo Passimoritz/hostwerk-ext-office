@@ -132,16 +132,21 @@ function loadScript(url) {
 /**
  * The OCR component's tesseract.js (tesseract.min.js + worker.min.js + core/ + lang/) – everything from Hostwerk's
  * own address, language data uncompressed, no caching in IndexedDB. Falls back to driving the core directly.
- *   createTesseract({ base, langs, onLog }) → { recognize(canvas) → words, close() }
+ *   createTesseract({ base, langs, langBases, onLog }) → { recognize(canvas) → words, close() }
+ * langBases: { fra: '<base of the ocr-fra pack>/' … } – languages from the optional packs (their data is handed over
+ * directly, the engine's own deu/eng come from its lang/ folder).
  */
 const SIMD = (() => { try { return WebAssembly.validate(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11])); } catch { return false; } })();
-export async function createTesseract({ base, langs = 'deu+eng', onLog }) {
+export const OCR_PACKS = ['fra', 'spa', 'ita', 'nld', 'pol', 'tur'];
+export async function createTesseract({ base, langs = 'deu+eng', langBases = {}, onLog }) {
+  const extra = {};
+  for (const l of langs.split('+')) if (langBases[l]) { const r = await fetch(`${langBases[l]}lang/${l}.traineddata`, { credentials: 'same-origin' }); if (!r.ok) throw new Error(`OCR language ${l} is missing`); extra[l] = new Uint8Array(await r.arrayBuffer()); }
   const abs = (u) => new URL(u, location.href).href;
   // the component ships the (simd-)lstm builds – name the file, tesseract.js would otherwise look for other variants
   const coreFile = `core/tesseract-core-${SIMD ? 'simd-' : ''}lstm.wasm.js`;
   try {
     const T = await loadScript(abs(`${base}tesseract.min.js`));
-    const worker = await T.createWorker(langs.split('+'), 1, {
+    const worker = await T.createWorker(langs.split('+').map((l) => (extra[l] ? { code: l, data: extra[l] } : l)), 1, {
       workerPath: abs(`${base}worker.min.js`), corePath: abs(`${base}${coreFile}`), langPath: abs(`${base}lang`), gzip: false, cacheMethod: 'none',
       logger: (m) => { if (onLog) onLog(m); },
     });
@@ -152,7 +157,7 @@ export async function createTesseract({ base, langs = 'deu+eng', onLog }) {
   } catch (e) {
     // direct use of the core (no tesseract.js wrapper)
     const lang = {};
-    for (const l of langs.split('+')) { const r = await fetch(`${base}lang/${l}.traineddata`, { credentials: 'same-origin' }); if (!r.ok) throw e; lang[l] = await r.arrayBuffer(); }
+    for (const l of langs.split('+')) { if (extra[l]) { lang[l] = extra[l].buffer; continue; } const r = await fetch(`${base}lang/${l}.traineddata`, { credentials: 'same-origin' }); if (!r.ok) throw e; lang[l] = await r.arrayBuffer(); }
     const ocr = createOcr({ core: `${base}${coreFile}`, data: lang, langs });
     await ocr.ready;
     return {

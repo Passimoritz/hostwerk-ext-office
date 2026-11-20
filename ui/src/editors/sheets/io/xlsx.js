@@ -19,6 +19,7 @@ import { BUILTIN_FORMATS } from '../format/numfmt.js';
 import { readChartsFromXlsx, writeChartsIntoXlsx, patchOriginalCharts } from './xlsxCharts.js';
 import { resolveChartData } from '../chartData.js';
 import { richRuns, richXml, runsText, readIconSet, iconSetXml, readSparklines, sheetExtLst, readDrawingExtras, writeDrawingObjects, readTables, writeTables, maxTableId, tableSig, readPivots, writePivots, readSlicerInfo, readSidecar, writeSidecar, readCalcPr, calcPrAttrs, picSig } from './xlsxPlus.js';
+import { readControls, patchControls } from './xlsxControls.js';
 import { esc, escText, unesc, unx, attrs, elements, first, attrOf, topChildren, textOf, parseRels, relsPathOf, resolvePath, relTarget, REL, addRel, nextRid, removeRels, ctOverride, ctDefault, ctRemove } from './xml.js';
 
 const K = (r, c) => r * MAXC + c;
@@ -250,7 +251,7 @@ export async function readXlsx(bytes, { loc, settings = {}, ext = 'xlsx' } = {})
   if (has(/slicers?\//)) fid.push('Slicers – shown, kept; filter with them in Excel');
   if (has(/externalLinks\//)) fid.push('Links to other workbooks – kept, show their stored values');
   if (has(/threadedComments\//)) fid.push('Threaded comments – kept; edits here change the classic notes');
-  if (has(/ctrlProps\/|activeX\//)) fid.push('Form controls / ActiveX – kept, not shown');
+  if (has(/activeX\//)) fid.push('ActiveX controls – kept, not shown');
   if (has(/model\/item\.data|connections\.xml|queryTables\//)) fid.push('Data model / queries – kept, not refreshed');
 
   const origCharts = new Map(book.sheets.map((sh) => [sh.id, sh.charts.slice()]));
@@ -406,7 +407,7 @@ async function readSheet(zip, fullXml, sh, ctx) {
             cell.f = fromOoxml(ftext);
             const g = parseRange(fa.ref);
             if (g && (g.r2 > g.r1 || g.c2 > g.c1)) { cell.arr = rangeA1(g); if (!sh._arr) sh._arr = []; sh._arr.push(g); }
-          } else if (fa.t === 'dataTable') { fid.push('What-if data tables – values kept, not recalculated'); } else if (ftext) cell.f = fromOoxml(ftext);
+          } else if (fa.t === 'dataTable') { const g = parseRange(fa.ref || ''); if (g) { cell._dtF = fEl[1]; (sh.dataTables || (sh.dataTables = [])).push({ ref: g, dt2D: fa.dt2D === '1', dtr: fa.dtr === '1', r1: fa.r1 || null, r2: fa.r2 || null }); } } else if (ftext) cell.f = fromOoxml(ftext);
           if (cell.f) { cell._cached = v; cell._cachedF = cell.f; }
         }
         if (cell.v == null && !cell.f && !cell.s) continue;
@@ -554,6 +555,13 @@ async function readSheet(zip, fullXml, sh, ctx) {
   sh.tables = await readTables(zip, srels, REL.table);
   for (const t of sh.tables) t._sig = tableSig(t, book.tableColumns(sh, t));
   sh._origTables = sh.tables.map((t) => ({ path: t.path, rid: t.rid }));
+  // what-if data tables: mark their result cells (recalculated by whatif.js, the table formula is written back)
+  for (const dt of sh.dataTables || []) for (let r = dt.ref.r1; r <= Math.min(dt.ref.r2, dt.ref.r1 + 2000); r++) for (let c = dt.ref.c1; c <= Math.min(dt.ref.c2, dt.ref.c1 + 200); c++) { const k = K(r, c); sh.cells.set(k, { ...(sh.cells.get(k) || { v: null }), _dt: true }); }
+  // form controls (check boxes, drop-downs … – shown, check boxes and drop-downs usable)
+  try { sh.controls = await readControls(zip, xml, srels, (from, to, size) => anchorFrom(sh, from, to, size)); } catch { sh.controls = []; }
+  // the drawing's fallback shapes of the controls are kept in the file but not shown twice
+  if (sh.controls.length) { const ids = new Set(sh.controls.map((c) => `shp${c._orig.shapeId}`)); sh.shapes = sh.shapes.map((s) => (ids.has(s.id) ? { ...s, _ctl: true } : s)); }
+  if (sh.controls.some((c) => c.type === 'button' && c.macro)) fid.push('Buttons run their macros in Excel only');
   // sparklines (x14)
   sh.sparklines = readSparklines(xml, theme);
   meta.sparkRaw = sh.sparklines.map((g) => g._raw);
@@ -871,6 +879,7 @@ export async function writeXlsx(book, { ext = 'xlsx', getValues } = {}) {
     if (add.length) list.push({ sheetName: sh.name, charts: add, data });
   }
   if (orig.length) await patchOriginalCharts(zip, orig);
+  if (pkg) for (const sh of book.sheets) if (pkg.origSheetIds.has(sh.id) && sh.controls && sh.controls.length) await patchControls(zip, sh);
   if (list.length) await writeChartsIntoXlsx(zip, list);
   // big workbooks: faster compression (level 6 costs seconds for 1M cells, the file is only ~10 % smaller)
   let big = 0; for (const sh of book.sheets) big += sh.cells.size;
@@ -1078,6 +1087,7 @@ function cellXml(sh, r, c, cell, { sw, sIndex, metaIdx, book, wstate }) {
   const s = sw.xf(cell.s);
   const sa = s ? ` s="${s}"` : '';
   let v = cell.v;
+  if (cell._dtF && !cell.f) return `<c r="${ref}"${sa}${typeof v === 'number' ? '' : typeof v === 'string' ? ' t="str"' : typeof v === 'boolean' ? ' t="b"' : isErr(v) ? ' t="e"' : ''}><f${cell._dtF}/>${v == null ? '' : `<v>${typeof v === 'boolean' ? (v ? 1 : 0) : isErr(v) ? esc(v.code) : escText(String(v))}</v>`}</c>`;
   if (cell.f) {
     const sp = sh.spillAnchors.get(r * MAXC + c);
     const arrRef = sp ? rangeA1({ r1: r, c1: c, r2: r + sp.rows - 1, c2: c + sp.cols - 1 }) : null;

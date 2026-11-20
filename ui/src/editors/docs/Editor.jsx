@@ -36,6 +36,7 @@ import { NavPane, CommentsPane, FootnotesArea, FindBar, StatusBar, Ruler, setToa
 import { SymbolDialog, LinkDialog, ParagraphDialog, WordCountDialog, MacrosSheet } from './dialogs.jsx';
 import { EquationEditor, FieldDialog, DiagramDialog, AiDialog, HeaderFooterEditor, SectionDialog, Compare, registerCompareTarget, fieldValue } from './dialogs2.jsx';
 import { SlashMenu, Bubble, ContextMenu, PagesLayer, Thumbnails, docsCommands } from './extras.jsx';
+import { allPaletteCommands } from './palette.js';
 import { FontSize, ParagraphFormat, RunKeep, WordKeys } from './extensions/format.js';
 import { PageBreak, Footnote, Toc, Callout as CalloutNode, Preserved, ImageEx, Comment } from './extensions/nodes.js';
 import { ContentControl, SdtMark, ControlBlock, Field, SectionBreak, Diagram, EquationEx, RevisionAttrs, formatDate } from './extensions/rich.js';
@@ -201,6 +202,8 @@ function EditorBody({ file, ext, initial, readOnly, settings, host, collab, join
   const rootRef = useRef(null);
   const scrollRef = useRef(null);
   const sheetRef = useRef(null);
+  const bodyRef = useRef(null);
+  const [colH, setColH] = useState(0);
   const page = model.page;
   const box = pageBox(page);
   const GAP = 28;
@@ -249,6 +252,7 @@ function EditorBody({ file, ext, initial, readOnly, settings, host, collab, join
       ed.storage.trackChanges.enabled = !!initial.model.trackChanges && !readOnly;
       ed.storage.trackChanges.author = author || t('Unknown');
       ed.storage.wordKeys.base = model.defaults.fontSize || 11;
+      if (ed.storage.preserved) ed.storage.preserved.onEdit = (pos, node) => { if (node && node.attrs.kind === 'textbox' && !readOnly) actRef.current.textbox(pos, node); };
       if (marks) ed.commands.setFormattingMarks(true);
     },
     onUpdate: ({ transaction }) => {
@@ -364,6 +368,14 @@ function EditorBody({ file, ext, initial, readOnly, settings, host, collab, join
     const h = setTimeout(() => { const el = scrollRef.current; if (el && el.clientWidth < 700 && el.clientWidth - 48 < box.width * MM_PX * (zoom / 100)) fitWidth(); }, 150);
     return () => clearTimeout(h);
   }, [editor]); // eslint-disable-line react-hooks/exhaustive-deps
+  // columns in print layout: the sheet follows the height of the text
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el || layout !== 'print' || (page.columns || 1) < 2 || typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver(() => setColH(el.offsetHeight));
+    ro.observe(el); setColH(el.offsetHeight);
+    return () => ro.disconnect();
+  }, [editor, layout, page.columns]);
   // smooth zoom: Ctrl + mouse wheel / pinch on the touchpad, around the pointer
   const zoomRef = useRef(zoom);
   zoomRef.current = zoom;
@@ -432,10 +444,18 @@ function EditorBody({ file, ext, initial, readOnly, settings, host, collab, join
     m.observe(pull);
     const upd = () => setPeers(collab.peers());
     collab.awareness.on('change', upd); upd();
+    // saving: only the leader (the server's) reports unsaved changes. Becoming the leader with changes the room has not
+    // saved yet → this editor saves them; a save of the room (by the leader or from outside) → a co-editor is clean again
     let wasLeader = collab.isLeader();
-    const lead = () => { const now = collab.isLeader(); if (now && !wasLeader && dirtyRef.current === false) { /* took over saving */ if (host.dirty) host.dirty(true); } wasLeader = now; };
+    const lead = () => {
+      const now = collab.isLeader();
+      if (now && !wasLeader && (typeof collab.unsaved !== 'function' || collab.unsaved()) && !readOnly) { dirtyRef.current = true; if (host.dirty) host.dirty(true); }
+      wasLeader = now;
+    };
     collab.awareness.on('change', lead);
-    return () => { m.unobserve(pull); collab.awareness.off('change', upd); collab.awareness.off('change', lead); };
+    const offLead = typeof collab.onLeader === 'function' ? collab.onLeader(lead) : null;
+    const offSaved = typeof collab.onSaved === 'function' ? collab.onSaved(() => { if (!collab.isLeader()) { dirtyRef.current = false; if (host.dirty) host.dirty(false); } }) : null;
+    return () => { m.unobserve(pull); collab.awareness.off('change', upd); collab.awareness.off('change', lead); if (offLead) offLead(); if (offSaved) offSaved(); };
   }, [collab]); // eslint-disable-line react-hooks/exhaustive-deps
   const share = (k, v) => { if (collab) collab.meta.set(k, v == null ? null : JSON.parse(JSON.stringify(v))); };
   useEffect(() => { if (collab) share('comments', comments); }, [comments]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -746,6 +766,7 @@ function EditorBody({ file, ext, initial, readOnly, settings, host, collab, join
     toggleRuler: () => setRuler((v) => !v),
     toggleNav: () => setNav((v) => !v),
     zoom: (z) => setZoom(z),
+    zoomStep: (dir) => { const steps = [25, 33, 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300, 400]; const z = zoomRef.current; setZoom(dir > 0 ? steps.find((x) => x > z + 0.5) || 400 : [...steps].reverse().find((x) => x < z - 0.5) || 25); },
     fitWidth,
     toggleMini: () => setMini((v) => { lsSet('of-docs-ribbon-min', v ? '0' : '1'); return !v; }),
     evenColumns: () => { const ed = editorRef.current; const tr = ed.state.tr; const $p = ed.state.selection.$from; for (let d = $p.depth; d > 0; d--) { if ($p.node(d).type.name === 'table') { const start = $p.before(d); ed.state.doc.nodesBetween(start, start + $p.node(d).nodeSize, (n, pos) => { if (n.type.name === 'tableCell' || n.type.name === 'tableHeader') tr.setNodeMarkup(pos, undefined, { ...n.attrs, colwidth: null }); }); break; } } ed.view.dispatch(tr); },
@@ -759,7 +780,7 @@ function EditorBody({ file, ext, initial, readOnly, settings, host, collab, join
   useEffect(() => {
     if (!editor) return undefined;
     const offs = [];
-    if (host.palette && typeof host.palette.register === 'function' && !readOnly) offs.push(host.palette.register(commands.map((c) => ({ id: `docs:${c.id}`, title: t(c.title), group: t(c.group), keys: c.keys, run: () => c.run(actRef.current, editorRef.current) }))));
+    if (host.palette && typeof host.palette.register === 'function' && !readOnly) offs.push(host.palette.register(allPaletteCommands(commands).map((c) => ({ id: `docs:${c.id}`, title: t(c.title), group: t(c.group), keys: c.keys, words: c.words, run: () => c.run(actRef.current, editorRef.current) }))));
     if (typeof host.insertFiles === 'function' && !readOnly) offs.push(host.insertFiles(async (files, at) => {
       const pos = at ? editorRef.current.view.posAtCoords({ left: at.x, top: at.y }) : null;
       for (const f of files) {
@@ -845,7 +866,9 @@ function EditorBody({ file, ext, initial, readOnly, settings, host, collab, join
     '--of-paper': page.color || '#ffffff',
   };
   const lastPage = pages && pages.length ? pages[pages.length - 1] : null;
-  const sheetH = print ? (lastPage ? lastPage.top + lastPage.h : box.height * MM_PX) : null;
+  // columns in print layout: one sheet as long as the text (CSS columns cannot break into pages while editing)
+  const colSheet = print && (page.columns || 1) > 1 && !pages ? Math.max(box.height * MM_PX, colH + page.margins.top * MM_PX + page.margins.bottom * MM_PX) : null;
+  const sheetH = print ? (lastPage ? lastPage.top + lastPage.h : colSheet || box.height * MM_PX) : null;
   const sheetW = print ? Math.max(box.width * MM_PX, ...(pages || []).map((p) => p.w)) : null;
   // the body column: content box of the last section (others get their width from the pagination)
   const first = pages && pages[0];
@@ -876,8 +899,8 @@ function EditorBody({ file, ext, initial, readOnly, settings, host, collab, join
             {print ? (
               <div className="of-docs-sheet" ref={sheetRef} style={{ width: sheetW, height: sheetH }} onDoubleClick={(ev) => { if (!readOnly && ev.target.classList && ev.target.classList.contains('of-docs-page')) act.headerFooter(); }}>
                 <PagesLayer pages={pages} scrollRef={scrollRef} zoom={zoom} model={model} sectionList={sectionList} title={model.meta.title || (file && file.name) || ''} gap={GAP} />
-                {!pages && <div className="of-docs-page" style={{ top: 0, height: box.height * MM_PX, width: box.width * MM_PX }} aria-hidden="true" />}
-                <div className="of-docs-body of-docs-paper" style={{ top: bodyTop, left: page.margins.left * MM_PX, width: contentW, columnCount: (page.columns || 1) > 1 ? page.columns : undefined }}>
+                {!pages && <div className={`of-docs-page${colSheet ? ' of-docs-longpage' : ''}`} style={{ top: 0, height: colSheet || box.height * MM_PX, width: box.width * MM_PX }} aria-hidden="true" />}
+                <div ref={bodyRef} className="of-docs-body of-docs-paper" style={{ top: bodyTop, left: page.margins.left * MM_PX, width: contentW, columnCount: (page.columns || 1) > 1 ? page.columns : undefined }}>
                   <EditorContent editor={editor} />
                 </div>
               </div>

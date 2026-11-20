@@ -12,6 +12,7 @@ import { fromOoxml, toOoxml } from '../formula/parser.js';
 import { errOf, isErr, ERROR_TYPE } from '../formula/errors.js';
 import { formatValue, isDateFormat } from '../format/numfmt.js';
 import { serialToDate } from '../format/dates.js';
+import { readBiffStyles } from './biff-styles.js';
 import { odfContentXml, odfRawFormulas, fromOpenFormula, PLACEHOLDER, patchOdfOutput } from './odf-formula.js';
 
 const K = (r, c) => r * MAXC + c;
@@ -74,8 +75,25 @@ export function readSheetJS(bytes, { loc, settings = {}, ext } = {}) {
     book.names.set(`${n.Name.toUpperCase()}|${scope ? scope.id : ''}`, { name: n.Name, ref: fromOoxml(n.Ref.replace(/^=/, '')), scope, comment: n.Comment || '' });
   }
   if (!book.sheets.length) book.sheets.push(newSheet('Sheet1'));
+  // .xls: fonts, fills, borders and alignment from the BIFF8 records (SheetJS CE gives number formats only)
+  let biff = null;
+  if (ext === 'xls' || ext === 'xlt') { try { biff = readBiffStyles(bytes); } catch { biff = null; } }
+  if (biff) {
+    book.props.defaultFont = biff.defaultFont;
+    biff.sheets.forEach((cells, i) => {
+      const sh = book.sheets[i]; if (!sh) return;
+      for (const [rc, st] of cells) {
+        const [r, c] = rc.split(',').map(Number);
+        const k = K(r, c); const cell = sh.cells.get(k);
+        const merged = book.styles.intern({ ...(cell && cell.s && cell.s.nf ? { nf: cell.s.nf } : {}), ...st });
+        if (!merged) continue;
+        sh.cells.set(k, cell ? { ...cell, s: merged } : { v: null, s: merged });
+      }
+    });
+  }
   book.fidelity = [];
   if (['ods', 'ots', 'fods', 'sxc'].includes(ext)) book.fidelity.push('Cell formatting, charts and images of OpenDocument files are not read by the built-in reader (values, formulas, number formats, merges and sizes are)');
+  else if (biff) book.fidelity.push('Charts, images and conditional formats of this older Excel format are not read by the built-in reader (values, formulas and cell formatting are)');
   else if (['xls', 'xlt', 'xlsb'].includes(ext)) book.fidelity.push('Cell formatting, charts and images of this older Excel format are not read by the built-in reader (values, formulas, number formats, merges and sizes are)');
   book.calc.rebuild();
   book.calc.recalc(null, { force: true });

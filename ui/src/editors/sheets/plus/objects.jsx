@@ -74,3 +74,39 @@ export function SlicerBox({ slicer, items }) {
     </div>
   );
 }
+
+/* form controls of xlsx files: check boxes / option buttons toggle, drop-downs and list boxes pick, spinners step */
+export function ControlBox({ ctl, rect, z, items, readOnly, onAct }) {
+  const fs = Math.max(9, Math.round(11 * z));
+  const style = { ...rect, fontSize: fs };
+  const label = ctl.text || ctl.name;
+  if (ctl.type === 'checkbox' || ctl.type === 'option') {
+    return (
+      <label className={`of-sheet-ctl is-${ctl.type}`} style={style} title={label}>
+        <input type={ctl.type === 'checkbox' ? 'checkbox' : 'radio'} checked={ctl.checked === 1} disabled={readOnly} aria-label={label}
+          ref={(el) => { if (el) el.indeterminate = ctl.checked === 2; }} onChange={() => onAct({ toggle: true })} />
+        <span>{label}</span>
+      </label>
+    );
+  }
+  if (ctl.type === 'dropdown' || ctl.type === 'list') {
+    return (
+      <select className={`of-sheet-ctl is-${ctl.type}`} style={style} value={ctl.sel || 0} disabled={readOnly} aria-label={label || t('Drop-down')} title={label || t('Drop-down')}
+        size={ctl.type === 'list' ? Math.max(2, Math.floor(rect.height / (fs * 1.4))) : undefined} onChange={(e) => onAct({ sel: +e.target.value })}>
+        {ctl.type === 'dropdown' && !(ctl.sel > 0) && <option value={0}>{''}</option>}
+        {items.map((x, i) => <option key={i} value={i + 1}>{x}</option>)}
+      </select>
+    );
+  }
+  if (ctl.type === 'spinner' || ctl.type === 'scrollbar') {
+    return (
+      <div className={`of-sheet-ctl is-spin`} style={style} title={`${label} · ${ctl.val}`}>
+        <button type="button" disabled={readOnly} aria-label={t('Increase')} title={t('Increase')} onClick={() => onAct({ step: 1 })}>▲</button>
+        <button type="button" disabled={readOnly} aria-label={t('Decrease')} title={t('Decrease')} onClick={() => onAct({ step: -1 })}>▼</button>
+      </div>
+    );
+  }
+  if (ctl.type === 'button') return <button type="button" className="of-sheet-ctl is-button" style={style} disabled title={t('Runs its macro in Excel')}>{label}</button>;
+  if (ctl.type === 'group') return <fieldset className="of-sheet-ctl is-group" style={style}><legend>{label}</legend></fieldset>;
+  return <div className="of-sheet-ctl is-label" style={style}>{label}</div>;
+}

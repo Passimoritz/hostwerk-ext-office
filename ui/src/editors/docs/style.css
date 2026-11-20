@@ -455,3 +455,17 @@
 }
 .of-docs-secbreak .btn { color: #185abd; background: transparent; }
 .of-docs-secbreak .btn:hover { background: rgba(24, 90, 189, .1); }
+/* floating text boxes / shapes (wp:anchor) – 1.2 */
+.of-docs-kept.of-kept-float { border: 0; background: none; padding: 0; margin: 0; vertical-align: baseline; cursor: move; touch-action: none; }
+.of-kept-float > .of-kept-floatbox { display: block; position: relative; box-sizing: border-box; border: 1px dashed #9aa7bd; background: #fff; border-radius: 2px; }
+.of-kept-float.is-float-left, .of-kept-float.is-float-right { margin-bottom: 4px; }
+.of-kept-float.is-float-left { margin-right: 10px; }
+.of-kept-float.is-float-right { margin-left: 10px; }
+.of-kept-float.is-absolute { display: inline-block; position: relative; width: 0; height: 0; }
+.of-kept-float.is-absolute > .of-kept-floatbox { position: absolute; z-index: 2; }
+.of-kept-float.is-absolute.is-behind > .of-kept-floatbox { z-index: 0; opacity: .85; }
+.of-kept-float.of-sel > .of-kept-floatbox, .of-kept-float:hover > .of-kept-floatbox { border-color: #2b6fd6; }
+.of-kept-float.is-dragging > .of-kept-floatbox { box-shadow: 0 4px 14px rgba(0,0,0,.25); opacity: .9; z-index: 5; }
+.of-kept-float .of-kept-box { min-width: 0; }
+.of-kept-float img { display: block; width: 100%; height: auto; }
+@media (prefers-reduced-motion: no-preference) { .of-kept-float > .of-kept-floatbox { transition: box-shadow .12s; } }

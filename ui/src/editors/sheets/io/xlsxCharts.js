@@ -4,6 +4,7 @@
  * writeChartsIntoXlsx adds chart parts + drawing anchors to a zip that exceljs wrote. String parsing only (runs in Node).
  */
 import { PALETTE } from '../chartData.js';
+import { patchChartXml } from './xlsxChartPatch.js';
 
 const NS = {
   c: 'http://schemas.openxmlformats.org/drawingml/2006/chart',
@@ -339,7 +340,12 @@ export async function patchOriginalCharts(zip, items) {
         const idm = /cNvPr\b[^>]*\bid="(\d+)"/.exec(hit[0]);
         const xl = it.chart._xl || { from: { c: 0, r: 0, dx: 0, dy: 0 }, to: { c: 6, r: 15, dx: 0, dy: 0 } };
         repl = anchorXml(pfx, idm ? +idm[1] : 1000, rid, xl.from, xl.to, it.chart.title || 'Chart');
-        if (it.rewrite) zip.file(chartPath, chartXml(it.chart, it.data));
+        if (it.rewrite) {
+          // patch the original part (keeps Excel's formatting); the simple form only when the change can't be patched
+          let patched = null;
+          try { patched = patchChartXml(await text(zip, chartPath), JSON.parse(it.chart._sig || 'null'), it.chart, it.data); } catch { patched = null; }
+          zip.file(chartPath, patched || chartXml(it.chart, it.data));
+        }
       }
       dx = dx.slice(0, hit.index) + repl + dx.slice(hit.index + hit[0].length);
     }

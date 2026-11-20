@@ -5,7 +5,8 @@
  *
  *   ConvertView – vsd, pub, odg, otg, fodg, odf (and any other ext with a PDF route)
  *   IworkView   – Apple Pages, Keynote, Numbers (QuickLook preview + IWA text; "Edit" = convert to docx/pptx/xlsx)
- *   InfoView    – one, mpp, accdb, mdb, odb
+ *   InfoView    – one, mpp, accdb, mdb, odb (Access: tables and rows read by jet.js, no Access needed)
+ * hostwerk-allow: tables – the Access view shows the database table itself (rows × columns), not a Hostwerk list
  */
 import { useEffect, useMemo, useState } from 'react';
 import JSZip from 'jszip';
@@ -16,6 +17,7 @@ import { t } from '@hostwerk/i18n';
 import { parseXml, kids, text as xtext, local } from '../_shared/xmltree.js';
 import { ActionRow, InfoCard, PdfPages, fmtSize, fmtDate, baseName, useBlobUrl } from './common.jsx';
 import { binaryStrings, iworkText } from './extract.js';
+import { readJet, jetText, JET_TYPES } from './jet.js';
 import { FORMATS } from '../../lib/formats.js';
 import { Keep } from '../_shared/keep.jsx';
 import { FileTypeIcon } from '../../lib/fileIcons.jsx';
@@ -180,10 +182,47 @@ export async function readOdb(bytes) {
   return res;
 }
 
+/* ---------------- Access databases (jet.js) ---------------- */
+const csvCell = (v) => { const s = v instanceof Date ? jetText(v) : typeof v === 'boolean' ? (v ? 'TRUE' : 'FALSE') : v && typeof v === 'object' ? '' : v == null ? '' : String(v); return /[",\n\r;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+export function jetCsv(table) {
+  const lines = [table.columns.map((c) => csvCell(c.name)).join(','), ...table.rows.map((r) => r.map(csvCell).join(','))];
+  return new TextEncoder().encode(`﻿${lines.join('\r\n')}\r\n`);
+}
+function AccessView({ db, file, host }) {
+  const [sel, setSel] = useState(0);
+  const tb = db.tables[sel];
+  const list = (label, items) => (items && items.length ? <div><b className="small">{label}</b><div className="of-view-chips">{items.map((x) => <span key={x} className="pill"><Keep>{x}</Keep></span>)}</div></div> : null);
+  return (
+    <div className="stack">
+      <div className="small muted">{t('{format} · {n} tables', { format: db.format, n: db.tables.length })}</div>
+      {db.tables.length > 0 && (
+        <div className="row wrap">
+          <select className="input" value={sel} onChange={(e) => setSel(+e.target.value)} aria-label={t('Table')} title={t('Table')}>
+            {db.tables.map((x, i) => <option key={x.name} value={i}>{x.name} ({x.rowCount})</option>)}
+          </select>
+          {tb && host.openAs && <Btn className="sm" icon={Table2} onClick={() => host.openAs({ bytes: jetCsv(tb), ext: 'csv', name: `${baseName(file.name)} – ${tb.name}.csv` })}>{t('Open as spreadsheet')}</Btn>}
+        </div>
+      )}
+      {tb && (
+        <div className="of-view-dbwrap">
+          <table className="of-view-db">
+            <thead><tr>{tb.columns.map((c) => <th key={c.name} title={t(JET_TYPES[c.type] || 'Other')}><Keep>{c.name}</Keep></th>)}</tr></thead>
+            <tbody>{tb.rows.slice(0, 500).map((r, i) => <tr key={i}>{r.map((v, k) => <td key={k} className={typeof v === 'number' ? 'num' : ''}><Keep>{jetText(v)}</Keep></td>)}</tr>)}</tbody>
+          </table>
+          {tb.rowCount > Math.min(500, tb.rows.length) && <div className="small muted">{t('Showing {n} of {total} rows – “Open as spreadsheet” takes up to {max}.', { n: Math.min(500, tb.rows.length), total: tb.rowCount, max: tb.rows.length })}</div>}
+        </div>
+      )}
+      {list(t('Queries'), db.queries)}{list(t('Forms'), db.forms)}{list(t('Reports'), db.reports)}{list(t('Macros'), db.macros)}{list(t('Modules'), db.modules)}
+      {db.linked.length > 0 && list(t('Linked tables'), db.linked.map((l) => (l.source ? `${l.name} → ${l.source}` : l.name)))}
+    </div>
+  );
+}
+
 export function InfoView({ file, bytes, host }) {
   const [about, text] = ABOUT[file.ext] || [FORMATS[file.ext] ? FORMATS[file.ext].label : 'File', ''];
   const [odb, setOdb] = useState(null);
-  const strings = useMemo(() => (file.ext === 'odb' ? [] : binaryStrings(bytes, { min: 6, max: 1200 }).strings.filter((s) => /\s/.test(s)).slice(0, 600)), [bytes, file.ext]);
+  const db = useMemo(() => { if (!['mdb', 'accdb', 'mde', 'accde'].includes(file.ext)) return null; try { return readJet(bytes); } catch (e) { return { error: e }; } }, [bytes, file.ext]);
+  const strings = useMemo(() => (file.ext === 'odb' || (db && !db.error) ? [] : binaryStrings(bytes, { min: 6, max: 1200 }).strings.filter((s) => /\s/.test(s)).slice(0, 600)), [bytes, file.ext]);
   useEffect(() => { if (file.ext === 'odb') readOdb(bytes).then(setOdb).catch(() => setOdb({ tables: [], queries: [], forms: [], reports: [] })); }, [bytes, file.ext]);
   const Icon = ICON[file.ext] || FileText;
   const list = (label, items) => (items && items.length ? <div><b className="small">{label}</b><div className="of-view-chips">{items.map((x) => <span key={x} className="pill"><Keep>{x}</Keep></span>)}</div></div> : null);
@@ -200,6 +239,8 @@ export function InfoView({ file, bytes, host }) {
           </div>
         )}
       </InfoCard>
+      {db && !db.error && <AccessView db={db} file={file} host={host} />}
+      {db && db.error && <Callout kind="info">{t('The tables of this database could not be read without Access (encrypted or damaged) – the text found in it is shown below.')}</Callout>}
       <TextFound paragraphs={strings} title={t('Text found in the file')} />
       <ActionRow file={file} bytes={bytes} host={host} />
     </div>
@@ -207,6 +248,7 @@ export function InfoView({ file, bytes, host }) {
 }
 
 export async function infoText(bytes, ext) {
+  if (['mdb', 'accdb'].includes(ext)) { try { const d = readJet(bytes, { maxRows: 200 }); return d.tables.map((x) => `# ${x.name}\n${x.columns.map((c) => c.name).join('\t')}\n${x.rows.map((r) => r.map(jetText).join('\t')).join('\n')}`).join('\n\n'); } catch { /* text below */ } }
   if (ext === 'odb') { const o = await readOdb(bytes); return [...o.tables, ...o.queries, ...o.forms, ...o.reports].join('\n'); }
   if (['pages', 'key', 'numbers'].includes(ext)) return (await readIwork(bytes)).text;
   const b = await builtIn(ext, bytes);

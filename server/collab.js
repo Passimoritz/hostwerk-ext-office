@@ -1,10 +1,11 @@
 'use strict';
 /*
  * Co-editing relay (Yjs sync protocol + awareness, y-protocols framing) – one room per file.
- * The server does not need Yjs itself: it keeps the document as the log of all Yjs updates (Yjs updates are
- * commutative and idempotent, so replaying the log gives the full state). If the yjs package is available at runtime
- * (development checkout), the log is compacted with Y.mergeUpdates; otherwise a room that grows over its cap asks the
- * leader to save and everyone to reload ("reset").
+ * The server keeps the document as the log of all Yjs updates (Yjs updates are commutative and idempotent, so replaying
+ * the log gives the full state). The log is compacted now and then with the small Yjs build shipped in server/vendor/
+ * (yjs.cjs, MIT): all updates are applied to a fresh Y.Doc (garbage collection on – deleted text keeps no content) and
+ * encoded again as ONE update. Only a room whose compacted state is still over the cap asks the leader to save and
+ * everyone to reload ("reset").
  *
  * Messages (binary, lib0 varUint framing):
  *   [0, 0, sv]  sync step 1 · [0, 1, update] sync step 2 · [0, 2, update] update
@@ -32,10 +33,18 @@ function parseAwareness(u) { const pos = { p: 0 }; const n = readVarUint(u, pos)
 function encodeAwareness(list) { return Buffer.concat([writeVarUint(list.length), ...list.flatMap((e) => [writeVarUint(e.client), writeVarUint(e.clock), varString(e.state)])]); }
 const awarenessMsg = (list) => Buffer.concat([writeVarUint(MSG_AWARENESS), varBytes(encodeAwareness(list))]);
 
-let Y = null; try { Y = require('yjs'); } catch { /* production package: no yjs on the server */ }
+// a development checkout has yjs in node_modules (the same copy the tests' clients use – two copies in one process warn);
+// the package uses its own small build
+let Y = null;
+try { Y = require('yjs'); } catch {
+  // our own private copy: Yjs warns ("already imported") when another copy runs in the same process (Hostwerk or another
+  // extension). The copies never share objects here, so the marker is set aside while loading and put back after.
+  const MARK = '__ $YJS$ __'; const had = Object.prototype.hasOwnProperty.call(globalThis, MARK); const before = globalThis[MARK];
+  try { delete globalThis[MARK]; Y = require('./vendor/yjs.cjs'); } catch { /* no compaction */ } finally { if (had) globalThis[MARK] = before; else delete globalThis[MARK]; }
+}
 
 class Room {
-  constructor(key, opts) { this.key = key; this.opts = opts; this.peers = new Map(); this.log = []; this.bytes = 0; this.aw = new Map(); this.seq = 0; this.emptySince = null; this.mtime = null; }
+  constructor(key, opts) { this.key = key; this.opts = opts; this.peers = new Map(); this.log = []; this.bytes = 0; this.compacted = 0; this.compactions = 0; this.aw = new Map(); this.seq = 0; this.emptySince = null; this.mtime = null; }
   get leader() { for (const p of this.peers.values()) return p; return null; }
   send(p, buf) { try { p.send(buf); } catch { /* closed */ } }
   others(from, buf) { for (const p of this.peers.values()) if (p !== from) this.send(p, buf); }
@@ -43,13 +52,26 @@ class Room {
   addUpdate(u) {
     if (!u.length || (u.length === 2 && u[0] === 0 && u[1] === 0)) return; // empty update
     this.log.push(Buffer.from(u)); this.bytes += u.length;
-    if (this.log.length > 400 && Y) this.compact();
+    // compact after many small updates or when the log doubled since the last compaction (+ 1 MB)
+    if (Y && (this.log.length > 300 || this.bytes > this.compacted * 2 + 1048576)) this.compact();
     if (this.bytes > this.opts.logBytes) {
       if (Y) this.compact();
       if (this.bytes > this.opts.logBytes) this.reset('too-large');
     }
   }
-  compact() { try { const m = Buffer.from(Y.mergeUpdates(this.log.map((b) => new Uint8Array(b)))); this.log = [m]; this.bytes = m.length; } catch { /* keep the log */ } }
+  compact() {
+    if (!Y || this.log.length < 2) { this.compacted = this.bytes; return; }
+    try {
+      const doc = new Y.Doc(); // gc on: deleted content becomes small "deleted" structs
+      for (const u of this.log) Y.applyUpdate(doc, new Uint8Array(u));
+      const m = Buffer.from(Y.encodeStateAsUpdate(doc)); // pending (not yet integrable) structs are kept in it
+      doc.destroy();
+      this.log = [m]; this.bytes = m.length; this.compactions++;
+    } catch {
+      try { const m = Buffer.from(Y.mergeUpdates(this.log.map((b) => new Uint8Array(b)))); this.log = [m]; this.bytes = m.length; } catch { /* keep the log */ }
+    }
+    this.compacted = this.bytes;
+  }
   reset(reason) { const l = this.leader; for (const p of this.peers.values()) this.send(p, controlMsg({ type: 'reset', reason, leader: p === l })); this.log = []; this.bytes = 0; }
   join(p) {
     this.emptySince = null;
@@ -128,7 +150,7 @@ class Collab {
   /** the file was saved / changed outside the room: tell everybody (they reload when no peer is the writer) */
   external(key, mtime) { const r = this.rooms.get(key); if (r && r.mtime !== mtime) { r.mtime = mtime; for (const p of r.peers.values()) r.send(p, controlMsg({ type: 'saved', mtime, by: null })); } }
   rename(a, b) { const r = this.rooms.get(a); if (r && !this.rooms.has(b)) { this.rooms.delete(a); r.key = b; this.rooms.set(b, r); } }
-  stats() { return [...this.rooms.values()].map((r) => ({ key: r.key, peers: r.peers.size, bytes: r.bytes, updates: r.log.length })); }
+  stats() { return [...this.rooms.values()].map((r) => ({ key: r.key, peers: r.peers.size, bytes: r.bytes, updates: r.log.length, compactions: r.compactions })); }
 }
 
 module.exports = { Collab, Room, readVarUint, writeVarUint, varBytes, varString, syncMsg, controlMsg, awarenessMsg, parseAwareness, encodeAwareness, MSG_CONTROL, hasYjs: !!Y };

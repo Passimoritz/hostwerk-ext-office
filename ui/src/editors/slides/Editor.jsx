@@ -307,16 +307,52 @@ function SlidesEditor({ file, bytes, readOnly: ro0, settings = {}, host = {} }) 
     const d = histRef.current.doc;
     return writeAny(d, fmt, { original: original.current.bytes, originalFmt: original.current.fmt, chartImage });
   }, [chartImage]);
+  /* vector PDF of slides (real text and shapes; objects without a vector form become pictures) */
+  const vectorPdf = useCallback(async (list) => {
+    const d = histRef.current.doc;
+    const { createVectorPdf } = await extra();
+    const vp = createVectorPdf({ raster: (el, w, hh) => elementToCanvas(el, w, hh, 2) });
+    for (const i of list) {
+      const s = d.slides[i];
+      const { node, release } = await renderOff(d, s, i, true, true);
+      try {
+        const model = new Map();
+        const layout = d.layouts.find((l) => l.id === s.layoutId);
+        walk([...(s.showMaster === false ? [] : (layout && layout.decor) || []), ...s.elements], (e) => model.set(e.id, e));
+        const bg = slideBackground(d, s);
+        const background = bg.type === 'solid' ? { css: themeCss(bg.color, d.theme) } : bg.type === 'grad' ? { grad: { ...bg, stops: bg.stops.map((x) => ({ pos: x.pos, css: themeCss(x.color, d.theme) })) } } : bg.type === 'image' ? { image: bg.src } : { css: '#ffffff' };
+        await vp.addPage({ node, size: { w: S(d.size.w), h: S(d.size.h) }, model, background });
+      } finally { release(); }
+    }
+    return vp.finish(d.meta && d.meta.title);
+  }, [renderOff]);
+  /* PNG/JPEG of slides: the rendered slide via SVG foreignObject; where the browser refuses that (no `img-src data:`,
+     tainted canvas, timeout) the vector PDF is painted by pdf.js into a canvas – no data: URL anywhere */
   const renderSlides = useCallback(async (indices, scale = 2, type = 'image/png') => {
     const d = histRef.current.doc;
     const out = [];
-    for (const i of indices) {
-      const node = await renderOff(d, d.slides[i], i);
-      const c = await nodeToCanvas(node, S(d.size.w), S(d.size.h), scale);
-      out.push({ canvas: c, bytes: await canvasBytes(c, type, 0.9) });
-    }
-    return out;
-  }, [renderOff]);
+    try {
+      for (const i of indices) {
+        const node = await renderOff(d, d.slides[i], i);
+        const c = await nodeToCanvas(node, S(d.size.w), S(d.size.h), scale);
+        out.push({ canvas: c, bytes: await canvasBytes(c, type, 0.9) });
+      }
+      return out;
+    } catch { /* below */ }
+    const pdf = await vectorPdf(indices);
+    const { openPdf, renderPageToCanvas } = await extra();
+    const pd = await openPdf(pdf);
+    try {
+      const res = [];
+      for (let n = 1; n <= pd.numPages; n++) {
+        const page = await pd.getPage(n);
+        const c = document.createElement('canvas');
+        await renderPageToCanvas(page, c, { scale });
+        res.push({ canvas: c, bytes: await canvasBytes(c, type, 0.9) });
+      }
+      return res;
+    } finally { pd.destroy(); }
+  }, [renderOff, vectorPdf]);
   const pdfBytes = useCallback(async () => {
     const d = histRef.current.doc;
     if (host.hasConverter && host.convert) {
@@ -325,26 +361,10 @@ function SlidesEditor({ file, bytes, readOnly: ro0, settings = {}, host = {} }) 
     const idx = d.slides.map((s, i) => i).filter((i) => !d.slides[i].hidden);
     const list = idx.length ? idx : [0];
     // vector PDF (real text and shapes); objects without a vector form become pictures; any failure → raster PDF
-    try {
-      const { createVectorPdf } = await extra();
-      const vp = createVectorPdf({ raster: (el, w, hh) => elementToCanvas(el, w, hh, 2) });
-      for (const i of list) {
-        const s = d.slides[i];
-        const { node, release } = await renderOff(d, s, i, true, true);
-        try {
-          const model = new Map();
-          const layout = d.layouts.find((l) => l.id === s.layoutId);
-          walk([...(s.showMaster === false ? [] : (layout && layout.decor) || []), ...s.elements], (e) => model.set(e.id, e));
-          const bg = slideBackground(d, s);
-          const background = bg.type === 'solid' ? { css: themeCss(bg.color, d.theme) } : bg.type === 'grad' ? { grad: { ...bg, stops: bg.stops.map((x) => ({ pos: x.pos, css: themeCss(x.color, d.theme) })) } } : bg.type === 'image' ? { image: bg.src } : { css: '#ffffff' };
-          await vp.addPage({ node, size: { w: S(d.size.w), h: S(d.size.h) }, model, background });
-        } finally { release(); }
-      }
-      return await vp.finish(d.meta && d.meta.title);
-    } catch { /* fall back to the picture PDF */ }
+    try { return await vectorPdf(list);   } catch { /* fall back to the picture PDF */ }
     const imgs = await renderSlides(list, 2, 'image/jpeg');
     return imagePdf(imgs.map((x) => ({ jpeg: x.bytes, pxW: x.canvas.width, pxH: x.canvas.height })), S(d.size.w), S(d.size.h), d.meta && d.meta.title);
-  }, [host, serialize, renderSlides, renderOff]);
+  }, [host, serialize, renderSlides, vectorPdf]);
   const exportRun = useCallback(async (ext) => {
     const d = histRef.current.doc;
     if (ext === 'pdf') return pdfBytes();
@@ -441,11 +461,12 @@ function SlidesEditor({ file, bytes, readOnly: ro0, settings = {}, host = {} }) 
   const print = useCallback(async () => {
     const d = histRef.current.doc;
     const idx = d.slides.map((s, i) => i).filter((i) => !d.slides[i].hidden);
+    if (host.print) { try { const pdf = await vectorPdf(idx.length ? idx : [0]); host.print(new Blob([pdf], { type: 'application/pdf' })); return; } catch { /* print the pictures */ } }
     const imgs = await renderSlides(idx, 2, 'image/jpeg');
     const urls = await Promise.all(imgs.map((x) => canvasUrl(x.canvas, 'image/jpeg', 0.9)));
     if (host.print) host.print(printHtml(urls, S(d.size.w), S(d.size.h), { title: d.meta && d.meta.title }));
     setTimeout(() => urls.forEach((u) => { if (/^blob:/.test(u)) URL.revokeObjectURL(u); }), 120000);
-  }, [renderSlides, host]);
+  }, [renderSlides, vectorPdf, host]);
 
   /* ---------------- helpers */
   const center = (w, hh) => ({ x: Math.round((doc.size.w - w) / 2), y: Math.round((doc.size.h - hh) / 2) });

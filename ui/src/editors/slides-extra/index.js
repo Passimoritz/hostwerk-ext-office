@@ -5,3 +5,5 @@
 export { ICONS } from '../slides/icons-data.js';
 export { createVectorPdf } from '../slides/io/pdf-vector.js';
 export { qrSvg } from '../slides/qr.js';
+// PNG export / print without SVG foreignObject: the vector PDF painted by pdf.js (shared lib-pdfjs chunk)
+export { openPdf, renderPageToCanvas } from '../_shared/pdfjs.js';

@@ -161,4 +161,110 @@ function pptText(buf) {
   return { text: parts.join('\n\n').trim(), slides: listed.length || drawn.length };
 }
 
-module.exports = { readCfb, docText, pptText, isCfb, cleanWord, cp1252 };
+/*
+ * Text of an Excel 97–2003 workbook (.xls/.xlt, BIFF8; BIFF5 "Book" streams too): sheet names (BOUNDSHEET), the shared
+ * string table (SST + CONTINUE – a string split over a CONTINUE record restarts with its own flags byte), LABELSST,
+ * LABEL/RSTRING, numbers (NUMBER, RK, MULRK) and cached formula results (FORMULA + STRING). Output like xlsxText:
+ * per sheet its name, then one line per row with the cells separated by tabs. → { text, sheets }
+ */
+function xlsText(buf) {
+  const s = readCfb(buf);
+  const wb = s.get('Workbook') || s.get('Book') || s.get('WORKBOOK') || s.get('BOOK');
+  if (!wb) throw new Error('No Workbook stream');
+  // records with their CONTINUE parts: [{ type, data, parts: [Buffer] }]
+  const recs = [];
+  for (let o = 0; o + 4 <= wb.length;) {
+    const type = wb.readUInt16LE(o); const len = wb.readUInt16LE(o + 2);
+    const data = wb.subarray(o + 4, Math.min(wb.length, o + 4 + len));
+    if (type === 0x003c && recs.length) recs[recs.length - 1].parts.push(data); else recs.push({ type, off: o, data, parts: [data] });
+    o += 4 + len;
+  }
+  if (recs.some((r) => r.type === 0x002f)) throw new Error('The workbook is encrypted');
+  const bof = recs[0] && recs[0].type === 0x0809 ? recs[0].data.readUInt16LE(0) : 0x0600;
+  const biff8 = bof >= 0x0600;
+  /** a reader over the record data and its CONTINUE parts (strings may span them) */
+  const reader = (parts) => {
+    let pi = 0; let p = 0;
+    const cur = () => parts[pi];
+    const next = () => { if (p >= cur().length && pi < parts.length - 1) { pi++; p = 0; return true; } return false; };
+    const u8 = () => { while (p >= cur().length) if (!next()) throw new Error('short'); return cur()[p++]; };
+    const u16 = () => u8() | (u8() << 8);
+    const u32 = () => (u16() + u16() * 65536) >>> 0;
+    const skip = (n) => { while (n > 0) { while (p >= cur().length) if (!next()) return; const k = Math.min(n, cur().length - p); p += k; n -= k; } };
+    /** XLUnicodeString body: cch characters, flags first; a CONTINUE inside the characters starts with a new flags byte */
+    const chars = (cch, high) => {
+      let out = '';
+      while (cch > 0) {
+        if (p >= cur().length) { if (!next()) break; high = (u8() & 1) === 1; continue; }
+        const avail = high ? Math.floor((cur().length - p) / 2) : cur().length - p;
+        const k = Math.min(cch, avail);
+        if (k <= 0) { p = cur().length; continue; }
+        out += high ? cur().toString('utf16le', p, p + k * 2) : cp1252(cur().subarray(p, p + k));
+        p += high ? k * 2 : k; cch -= k;
+      }
+      return out;
+    };
+    const uniString = (cch16 = true) => {
+      const cch = cch16 ? u16() : u8();
+      if (!biff8) return cp1252(Buffer.from(Array.from({ length: cch }, () => u8())));
+      const fl = u8(); let runs = 0; let ext = 0;
+      if (fl & 0x08) runs = u16();
+      if (fl & 0x04) ext = u32();
+      const v = chars(cch, (fl & 1) === 1);
+      skip(runs * 4 + ext);
+      return v;
+    };
+    return { u8, u16, u32, skip, uniString, left: () => pi < parts.length - 1 || p < cur().length };
+  };
+  const sst = [];
+  const sheets = []; // { name, pos, rows: Map(row → Map(col → text)) }
+  for (const r of recs) {
+    try {
+      if (r.type === 0x00fc && biff8) {
+        const rd = reader(r.parts); rd.u32(); const n = rd.u32();
+        for (let i = 0; i < n && rd.left() && sst.length < 2e6; i++) sst.push(rd.uniString());
+      } else if (r.type === 0x0085) {
+        const rd = reader(r.parts); const pos = rd.u32(); rd.u8(); const dt = rd.u8();
+        const name = rd.uniString(false);
+        if (dt === 0) sheets.push({ name, pos, rows: new Map() });
+      }
+    } catch { /* a broken record – keep what was read */ }
+  }
+  const num = (v) => (Number.isFinite(v) ? String(Math.round(v * 1e10) / 1e10) : '');
+  const rk = (v) => { let n; if (v & 2) n = (v | 0) >> 2; else { const b = Buffer.alloc(8); b.writeUInt32LE(0, 0); b.writeUInt32LE((v & 0xfffffffc) >>> 0, 4); n = b.readDoubleLE(0); } return v & 1 ? n / 100 : n; };
+  let sheet = null; let pendingFormula = null; let cells = 0;
+  const put = (row, col, v) => {
+    if (!sheet || v == null || v === '' || cells > 2e6) return;
+    let m = sheet.rows.get(row); if (!m) { m = new Map(); sheet.rows.set(row, m); }
+    m.set(col, String(v)); cells++;
+  };
+  for (const r of recs) {
+    const d = r.data;
+    try {
+      if (r.type === 0x0809) { sheet = sheets.find((x) => x.pos === r.off) || null; continue; }
+      if (r.type === 0x000a) { sheet = null; continue; }
+      if (!sheet) continue;
+      if (r.type === 0x00fd && d.length >= 10) put(d.readUInt16LE(0), d.readUInt16LE(2), sst[d.readUInt32LE(6)]);
+      else if ((r.type === 0x0204 || r.type === 0x00d6) && d.length >= 8) { const rd = reader(r.parts); const row = rd.u16(); const col = rd.u16(); rd.u16(); put(row, col, rd.uniString()); }
+      else if (r.type === 0x0205 && d.length >= 8) { if (!d[7]) put(d.readUInt16LE(0), d.readUInt16LE(2), d[6] ? 'TRUE' : 'FALSE'); }
+      else if (r.type === 0x0203 && d.length >= 14) put(d.readUInt16LE(0), d.readUInt16LE(2), num(d.readDoubleLE(6)));
+      else if (r.type === 0x027e && d.length >= 10) put(d.readUInt16LE(0), d.readUInt16LE(2), num(rk(d.readUInt32LE(6))));
+      else if (r.type === 0x00bd && d.length >= 6) {
+        const row = d.readUInt16LE(0); const first = d.readUInt16LE(2); const n = Math.floor((d.length - 6) / 6);
+        for (let i = 0; i < n; i++) put(row, first + i, num(rk(d.readUInt32LE(4 + i * 6 + 2))));
+      } else if (r.type === 0x0006 && d.length >= 14) {
+        const row = d.readUInt16LE(0); const col = d.readUInt16LE(2);
+        if (d.readUInt16LE(12) === 0xffff) { const k = d[6]; if (k === 0) pendingFormula = { row, col }; else if (k === 1) put(row, col, d[8] ? 'TRUE' : 'FALSE'); }
+        else put(row, col, num(d.readDoubleLE(6)));
+      } else if (r.type === 0x0207 && pendingFormula) { const rd = reader(r.parts); put(pendingFormula.row, pendingFormula.col, rd.uniString()); pendingFormula = null; }
+    } catch { /* a broken record – go on */ }
+  }
+  const out = sheets.map((sh) => {
+    const lines = [...sh.rows.keys()].sort((a, b) => a - b).map((row) => { const m = sh.rows.get(row); return [...m.keys()].sort((a, b) => a - b).map((c) => m.get(c)).join('\t'); });
+    return `${sh.name}\n${lines.join('\n')}`;
+  });
+  if (!sheets.length && sst.length) out.push(sst.join('\n'));
+  return { text: out.join('\n\n').trim(), sheets: sheets.length };
+}
+
+module.exports = { readCfb, docText, pptText, xlsText, isCfb, cleanWord, cp1252 };

@@ -6,6 +6,7 @@ import { Node, Mark, mergeAttributes } from '@tiptap/core';
 import Image from '@tiptap/extension-image';
 import { t } from '@hostwerk/i18n';
 import { equationHtml } from '../io/equation.js';
+import { floatStyle, moveAnchor } from '../io/anchor.js';
 
 const json = (s, d) => { try { return JSON.parse(s); } catch { return d; } };
 const keep = { default: null, parseHTML: () => null, renderHTML: () => ({}) };
@@ -118,21 +119,110 @@ export const Callout = Node.create({
   },
 });
 
+/**
+ * A Word text box / shape anchored in the text (wp:anchor): floats at its position – wrap square = the text flows
+ * around it, top-and-bottom = on its own line, none = over the text. Drag moves it (written back as wp:posOffset from
+ * the column / paragraph – the rest of the drawing stays byte-identical); double-click edits its text.
+ */
+function floatingView(node, editor, getPos) {
+  let a = node.attrs;
+  const dom = document.createElement('span');
+  dom.contentEditable = 'false';
+  const box = document.createElement('span');
+  box.className = 'of-kept-floatbox';
+  const paint = () => {
+    const f = a.float;
+    const secs = (editor.storage.ofPages && editor.storage.ofPages.sections) || [];
+    const g = secs[secs.length - 1];
+    const contentW = editor.view.dom.offsetWidth || (g && g.contentW) || 600;
+    const st = floatStyle(f, { contentW, marginLeft: g ? g.ml : 94 });
+    dom.className = `of-docs-kept of-kept-${a.kind} of-kept-float is-${st.mode}${f.behind ? ' is-behind' : ''}`;
+    dom.title = t('{name} – drag to move it, double-click to edit its text', { name: t(a.label) });
+    box.replaceChildren();
+    if (a.src) { const img = document.createElement('img'); img.src = a.src; img.alt = a.label; img.draggable = false; box.append(img); } else { const tx = document.createElement('span'); tx.className = 'of-kept-box'; tx.textContent = a.text || ''; box.append(tx); }
+    box.style.width = f.w ? `${f.w}px` : ''; box.style.minHeight = f.h ? `${f.h}px` : '';
+    dom.style.cssText = ''; box.style.left = ''; box.style.top = '';
+    if (st.mode === 'float-left') Object.assign(dom.style, { float: 'left', marginLeft: `${st.marginLeft}px`, marginTop: `${st.top}px` });
+    else if (st.mode === 'float-right') Object.assign(dom.style, { float: 'right', marginRight: `${st.marginRight}px`, marginTop: `${st.top}px` });
+    else if (st.mode === 'block') Object.assign(dom.style, { display: 'block', marginLeft: `${st.marginLeft}px`, marginTop: `${st.top}px`, width: f.w ? `${f.w}px` : '' });
+    else {
+      // over the text: a zero-size anchor at the node, the box placed from the start of its paragraph
+      Object.assign(box.style, { top: `${st.top}px`, left: `${st.left}px` });
+      requestAnimationFrame(() => {
+        const p = dom.closest('p, h1, h2, h3, h4, h5, h6, li, td, th') || dom.parentElement;
+        if (!p || !dom.isConnected) return;
+        const k = editor.view.dom.offsetWidth ? editor.view.dom.getBoundingClientRect().width / editor.view.dom.offsetWidth : 1;
+        const dx = (dom.getBoundingClientRect().left - p.getBoundingClientRect().left) / (k || 1);
+        const dy = (dom.getBoundingClientRect().top - p.getBoundingClientRect().top) / (k || 1);
+        box.style.left = `${Math.round(st.left - dx)}px`; box.style.top = `${Math.round(st.top - dy)}px`;
+      });
+    }
+    return st;
+  };
+  dom.append(box);
+  const tag = document.createElement('span'); tag.className = 'of-kept-tag'; tag.textContent = t(a.label); box.append(tag);
+  let st = paint(); box.append(tag);
+  // drag to move
+  let drag = null;
+  const down = (e) => {
+    if (e.button !== 0 || !editor.isEditable || e.detail > 1) return;
+    e.preventDefault();
+    const k = editor.view.dom.offsetWidth ? editor.view.dom.getBoundingClientRect().width / editor.view.dom.offsetWidth : 1;
+    drag = { x0: e.clientX, y0: e.clientY, k: k || 1, moved: false };
+    try { dom.setPointerCapture(e.pointerId); } catch { /* old browser */ }
+  };
+  const move = (e) => {
+    if (!drag) return;
+    const dx = (e.clientX - drag.x0) / drag.k; const dy = (e.clientY - drag.y0) / drag.k;
+    if (!drag.moved && Math.hypot(dx, dy) < 3) return;
+    drag.moved = true; dom.classList.add('is-dragging');
+    box.style.transform = `translate(${dx}px, ${dy}px)`;
+  };
+  const up = (e) => {
+    if (!drag) return;
+    const d = drag; drag = null;
+    dom.classList.remove('is-dragging'); box.style.transform = '';
+    const pos = typeof getPos === 'function' ? getPos() : null;
+    if (pos == null) return;
+    if (!d.moved) { editor.chain().setNodeSelection(pos).run(); return; }
+    const dx = Math.round((e.clientX - d.x0) / d.k); const dy = Math.round((e.clientY - d.y0) / d.k);
+    // the shown position (column / paragraph) + the move → the new offsets
+    const baseX = st.mode === 'float-right' ? (editor.view.dom.offsetWidth || 600) - (st.marginRight || 0) - (a.float.w || 0) : st.mode === 'absolute' ? st.left : st.marginLeft || 0;
+    const nx = baseX + dx; const ny = (st.top || 0) + dy;
+    const float = { ...a.float, x: nx, y: ny, relH: 'column', relV: 'paragraph', alignH: null, alignV: null };
+    editor.view.dispatch(editor.state.tr.setNodeMarkup(pos, undefined, { ...a, float, xml: a.xml ? moveAnchor(a.xml, nx, ny) : a.xml }));
+  };
+  dom.addEventListener('pointerdown', down);
+  dom.addEventListener('pointermove', move);
+  dom.addEventListener('pointerup', up);
+  dom.addEventListener('dblclick', (e) => { e.preventDefault(); const pos = typeof getPos === 'function' ? getPos() : null; const fn = editor.storage.preserved && editor.storage.preserved.onEdit; if (pos != null && fn && editor.isEditable) fn(pos, editor.state.doc.nodeAt(pos)); });
+  dom.addEventListener('pointercancel', () => { drag = null; dom.classList.remove('is-dragging'); box.style.transform = ''; });
+  return {
+    dom,
+    update: (n) => { if (n.type.name !== 'preserved' || !n.attrs.float) return false; a = n.attrs; st = paint(); box.append(tag); return true; },
+    selectNode: () => dom.classList.add('of-sel'), deselectNode: () => dom.classList.remove('of-sel'),
+    stopEvent: (e) => /^(pointer|mouse|click|dblclick|dragstart)/.test(e.type),
+    ignoreMutation: () => true,
+  };
+}
+
 /** kept 1:1 from the source file (SmartArt, charts, shapes, OLE objects, fields …): shown with its fallback */
 export const Preserved = Node.create({
   name: 'preserved',
+  addStorage() { return { onEdit: null }; },
   group: 'inline',
   inline: true,
   atom: true,
   selectable: true,
   draggable: false,
   addAttributes() {
-    return { format: { default: null }, kind: { default: 'object' }, label: { default: 'Object' }, text: { default: '' }, src: { default: null }, width: { default: null }, xml: keep };
+    return { format: { default: null }, kind: { default: 'object' }, label: { default: 'Object' }, text: { default: '' }, src: { default: null }, width: { default: null }, xml: keep, float: keep };
   },
   parseHTML() { return [{ tag: 'span[data-type="preserved"]', getAttrs: (el) => ({ kind: el.getAttribute('data-kind') || 'object', label: el.getAttribute('data-label') || 'Object', text: el.textContent || '' }) }]; },
   renderHTML({ HTMLAttributes: a }) { return ['span', { 'data-type': 'preserved', 'data-kind': a.kind, 'data-label': a.label, class: 'of-docs-kept' }, a.text || a.label || '']; },
   addNodeView() {
-    return ({ node }) => {
+    return ({ node, editor, getPos }) => {
+      if (node.attrs.float && node.attrs.format === 'docx' && (node.attrs.kind === 'textbox' || node.attrs.kind === 'shape')) return floatingView(node, editor, getPos);
       const dom = document.createElement('span');
       dom.contentEditable = 'false';
       const a = node.attrs;

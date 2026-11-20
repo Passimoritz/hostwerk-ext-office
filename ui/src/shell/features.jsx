@@ -464,21 +464,39 @@ function reportFormats(ext) {
   if (kind === 'slides') return ['pdf', 'pptx'];
   return ['pdf', 'docx'];
 }
+// report recipients: Hostwerk's notification, every alert channel, e-mail addresses (Hostwerk's mail relay), a Discord
+// webhook, an ntfy address or topic – an empty address uses the one set up under Live → Alerts
+const REPORT_CHANNELS = [['hostwerk', 'Hostwerk notification'], ['alerts', 'All alert channels'], ['mail', 'E-mail'], ['discord', 'Discord'], ['ntfy', 'ntfy (phone)']];
+const EVERY_UI = { daily: 'day', weekly: 'week', monthly: 'month', hourly: 'day' };
+/** a stored report → the dialog's shape (the server keeps every: daily|weekly|monthly and time) */
+export function reportForEdit(r) {
+  const s = r.schedule || {};
+  return { ...r, schedule: { ...s, every: EVERY_UI[s.every] || s.every || 'week', at: s.at || s.time || '08:00', weekday: s.weekday != null ? s.weekday : 1, day: s.day || 1 }, recipients: (r.recipients && r.recipients.length ? r.recipients : [{ channel: r.channel === 'all' ? 'alerts' : r.channel || 'mail', to: '' }]).map((x) => ({ channel: x.channel === 'all' ? 'alerts' : x.channel, to: x.to || '' })) };
+}
 function ReportDialog({ entry, onDone }) {
   const fmts = reportFormats(extOf(entry.name));
-  const blank = { schedule: { every: 'week', at: '08:00', weekday: 1, day: 1 }, format: fmts[0], recipients: [{ channel: 'mail', to: '' }], refresh: true };
+  const blank = { schedule: { every: 'week', at: '08:00', weekday: 1, day: 1 }, format: fmts[0], recipients: [{ channel: 'mail', to: '' }] };
   const [list, setList] = useState(null);
   const [edit, setEdit] = useState(null);
   const [err, setErr] = useState('');
-  const load = () => office.reports.list(entry).then((l) => { setList(l); if (!l.length) setEdit(blank); }, (e) => { setErr(fail(e)); setList([]); });
+  const load = () => office.reports.list(entry).then((l) => { setList(l.map(reportForEdit)); if (!l.length) setEdit(blank); }, (e) => { setErr(fail(e)); setList([]); });
+  const runNow = async (r) => {
+    try {
+      const res = await office.reports.run(r.id);
+      if (res && res.ok === false && !res.running) toast.error(res.error || t('The report could not be sent.'));
+      else if (res && res.error) toast(t('Sent – but not to everyone: {error}', { error: res.error }));
+      else toast.success('Report sent');
+      load();
+    } catch (e) { toast.error(fail(e)); }
+  };
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const save = async () => { try { await office.reports.save(entry, edit); toast.success('Report scheduled'); setEdit(null); load(); } catch (e) { toast.error(fail(e)); } };
   const set = (k, v) => setEdit((x) => ({ ...x, [k]: v }));
   const setS = (k, v) => setEdit((x) => ({ ...x, schedule: { ...x.schedule, [k]: v } }));
   const when = (r) => { const s = r.schedule || {}; return s.every === 'day' ? t('every day at {at}', { at: s.at }) : s.every === 'month' ? t('on day {d} of every month at {at}', { d: s.day || 1, at: s.at }) : t('every {day} at {at}', { day: t(WEEKDAYS[((s.weekday || 1) + 6) % 7]), at: s.at }); };
   return (
-    <Modal size="wide" title={t('Scheduled report – {name}', { name: entry.name })} subtitle="Office sends the file (live data refreshed) on a schedule – as PDF or in its own format" onClose={() => onDone(null)}
-      footer={edit ? <><Btn onClick={() => (list && list.length ? setEdit(null) : onDone(null))}>Cancel</Btn><Btn className="primary" icon={CalendarClock} disabled={!edit.recipients.some((r) => r.to.trim() || r.channel === 'hostwerk')} onClick={save}>Save schedule</Btn></> : <><Btn onClick={() => onDone(null)}>Close</Btn><Btn className="primary" icon={Plus} onClick={() => setEdit(blank)}>New schedule</Btn></>}>
+    <Modal size="wide" title={t('Scheduled report – {name}', { name: entry.name })} subtitle="Office sends the file on a schedule – as PDF or in its own format – to everyone you list here" onClose={() => onDone(null)}
+      footer={edit ? <><Btn onClick={() => (list && list.length ? setEdit(null) : onDone(null))}>Cancel</Btn><Btn className="primary" icon={CalendarClock} disabled={!edit.recipients.length} onClick={save}>Save schedule</Btn></> : <><Btn onClick={() => onDone(null)}>Close</Btn><Btn className="primary" icon={Plus} onClick={() => setEdit(blank)}>New schedule</Btn></>}>
       {err ? <Callout kind="err" dismissible={false}>{err}</Callout> : !list ? <Loading inline /> : edit ? (
         <div className="stack">
           <Field label="How often"><Seg value={edit.schedule.every} onChange={(v) => setS('every', v)} options={[{ id: 'day', label: 'Daily' }, { id: 'week', label: 'Weekly' }, { id: 'month', label: 'Monthly' }]} /></Field>
@@ -491,22 +509,23 @@ function ReportDialog({ entry, onDone }) {
           <Field label="Recipients">
             <div className="stack of-shell-gap-2">
               {edit.recipients.map((r, i) => (
-                <div key={i} className="row-tight">
-                  <select className="input select sm" value={r.channel} onChange={(e) => set('recipients', edit.recipients.map((x, j) => (j === i ? { ...x, channel: e.target.value } : x)))} aria-label={t('Channel')}>{CHANNELS.map(([id, l]) => <option key={id} value={id}>{t(l)}</option>)}</select>
-                  {r.channel !== 'hostwerk' && <Raw as="input" className="input sm grow" value={r.to} placeholder={r.channel === 'mail' ? 'name@example.org' : r.channel === 'ntfy' ? t('ntfy topic') : t('Webhook address')} aria-label={t('Recipient')} onChange={(e) => set('recipients', edit.recipients.map((x, j) => (j === i ? { ...x, to: e.target.value } : x)))} />}
+                <div key={i} className="of-shell-rcpt">
+                  <select className="input select sm" value={r.channel} onChange={(e) => set('recipients', edit.recipients.map((x, j) => (j === i ? { ...x, channel: e.target.value } : x)))} aria-label={t('Channel')}>{REPORT_CHANNELS.map(([id, l]) => <option key={id} value={id}>{t(l)}</option>)}</select>
+                  {['mail', 'discord', 'ntfy'].includes(r.channel) && <Raw as="input" className="input sm grow" value={r.to} type={r.channel === 'mail' ? 'text' : 'url'} placeholder={r.channel === 'mail' ? t('name@example.org, … – empty: the alert address') : r.channel === 'ntfy' ? t('Topic or https://ntfy.sh/topic – empty: the alert address') : t('Webhook address – empty: the alert webhook')} aria-label={t('Recipient')} title={t('Recipient')} onChange={(e) => set('recipients', edit.recipients.map((x, j) => (j === i ? { ...x, to: e.target.value } : x)))} />}
+                  {['hostwerk', 'alerts'].includes(r.channel) && <span className="small muted grow">{r.channel === 'alerts' ? t('Everything set up under Live → Alerts') : t('A notification in Hostwerk')}</span>}
                   {edit.recipients.length > 1 && <Btn className="xs ghost icon" icon={Trash2} title="Remove" aria-label="Remove" onClick={() => set('recipients', edit.recipients.filter((_, j) => j !== i))} />}
                 </div>
               ))}
               <div><Btn className="sm ghost" icon={Plus} onClick={() => set('recipients', [...edit.recipients, { channel: 'mail', to: '' }])}>Add recipient</Btn></div>
             </div>
           </Field>
-          <div className="setting-row"><div className="txt"><b>Refresh live data first</b><span>Fields and live tables show the values of the moment the report goes out.</span></div><Switch checked={edit.refresh !== false} onChange={(v) => set('refresh', v)} /></div>
+          <p className="tiny muted of-shell-p">{t('E-mails go out through Hostwerk’s mail relay (E-mail → Forwarding) – without one they land in Hostwerk’s mail catcher. Formats other than the file’s own need a converter (Office engine or Microsoft Office).')}</p>
         </div>
       ) : !list.length ? <Empty icon={CalendarClock} title="No schedule yet" /> : (
         <ul className="of-shell-rows">{list.map((r) => (
           <li key={r.id} className="of-shell-row"><CalendarClock size={14} className="muted" aria-hidden="true" />
-            <div className="grow of-shell-min0"><b className="small">{when(r)} · {String(r.format || 'pdf').toUpperCase()}</b><div className="tiny muted ellipsis"><Keep>{(r.recipients || []).map((x) => (x.channel === 'hostwerk' ? 'Hostwerk' : x.to)).join(', ')}</Keep>{r.nextRun ? ` · ${t('next: {when}', { when: fmtDateTime(r.nextRun) })}` : ''}</div></div>
-            <Btn className="xs ghost icon" icon={Play} title="Send now" aria-label="Send now" onClick={() => office.reports.run(r.id).then(() => toast.success('Report sent'), (e) => toast.error(fail(e)))} />
+            <div className="grow of-shell-min0"><b className="small">{when(r)} · {String(r.format || 'pdf').toUpperCase()}</b><div className="tiny muted ellipsis">{(r.recipients || []).map((x, k) => <span key={k}>{k ? ', ' : ''}{x.to ? <Keep>{x.to}</Keep> : t((REPORT_CHANNELS.find((c) => c[0] === x.channel) || [0, x.channel])[1])}</span>)}{r.nextRun ? ` · ${t('next: {when}', { when: fmtDateTime(r.nextRun) })}` : ''}</div>{r.lastError && <Raw as="div" className="tiny of-shell-err ellipsis" title={r.lastError}><Keep>{r.lastError}</Keep></Raw>}</div>
+            <Btn className="xs ghost icon" icon={Play} title="Send now" aria-label="Send now" onClick={() => runNow(r)} />
             <Btn className="xs ghost" onClick={() => setEdit(r)}>Edit</Btn>
             <Btn className="xs ghost icon" icon={Trash2} title="Delete schedule" aria-label="Delete schedule" onClick={async () => { await office.reports.remove(r.id).catch((e) => toast.error(fail(e))); load(); }} />
           </li>))}</ul>

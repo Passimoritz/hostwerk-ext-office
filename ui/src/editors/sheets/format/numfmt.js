@@ -566,3 +566,6 @@ export function CUSTOM_FORMATS(loc = DEFAULT_LOC) {
     'hh:mm', 'hh:mm:ss', 'h:mm AM/PM', 'h:mm:ss AM/PM', '[h]:mm:ss', 'mm:ss', 'mm:ss.0', `${loc.shortDate} hh:mm`, '@',
   ].filter((x, i, a) => a.indexOf(x) === i);
 }
+
+/** compiled sections of a format code (number formats → OpenDocument data styles, io/ods-styles.js) */
+export const compileFormat = (fmt, loc = DEFAULT_LOC) => compile(resolveFmt(fmt, loc));

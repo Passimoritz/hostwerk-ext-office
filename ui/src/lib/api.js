@@ -70,9 +70,14 @@ export const office = {
   },
   /** password-protected Office files (server/encrypt.js): state → { encrypted: 'ooxml'|'odf'|null, supported, vault: { available, locked, hasEntry } } */
   encryptState: (f) => get(`/office/encrypt/state?${q(loc(f))}`),
-  /** the decrypted bytes for the editor (the file itself stays encrypted); 403 = wrong password */
+  /** the decrypted bytes for the editor (the file itself stays encrypted); throws status 403 = wrong password, 404 = not in the vault */
   async decryptBytes(f, { password = '', fromVault = false } = {}) {
-    const r = await check(await fetch(url('/decrypt'), { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...loc(f), ...(password ? { password } : { fromVault: !!fromVault }), mode: 'bytes' }) }));
+    // soft: the server answers a wrong password with 200 { ok: false } (no red 403 in the console) – older servers still send 403
+    const r = await check(await fetch(url('/decrypt'), { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...loc(f), ...(password ? { password } : { fromVault: !!fromVault }), mode: 'bytes', soft: true }) }));
+    if (/application\/json/.test(r.headers.get('content-type') || '')) {
+      const j = await r.json().catch(() => ({}));
+      const e = new Error(j.error || 'The password is not correct.'); e.status = j.reason === 'vault' ? 404 : 403; throw e;
+    }
     return { bytes: new Uint8Array(await r.arrayBuffer()), mtime: Number(r.headers.get('x-mtime')) || null };
   },
   /** save an opened encrypted file: plain bytes in, the server encrypts again with the same password (or the vault's) */

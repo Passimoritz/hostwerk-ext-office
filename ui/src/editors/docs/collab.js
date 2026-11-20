@@ -38,9 +38,24 @@ export async function joinCollab(host, { extensions, initialDoc, model, timeout 
     }
   }
   awareness.setLocalStateField('editor', true);
+  // changes since the room's last save (local or remote) – a co-editor that becomes the saver saves them
+  let unsaved = false;
+  doc.on('update', () => { unsaved = true; });
   const session = {
     doc, provider, awareness, fragment, meta, first,
-    isLeader: () => { const ids = [...awareness.getStates().entries()].filter(([, s]) => s && s.editor).map(([id]) => id); return !ids.length || Math.min(...ids) === doc.clientID; },
+    /**
+     * the saver: the server's leader (hello / leader control messages – the same for everybody at once, also before the
+     * cursors arrive); an older server without them: the co-editor with the smallest client id
+     */
+    isLeader: () => {
+      if (provider.hello && typeof provider.leader === 'boolean') return provider.leader;
+      const ids = [...awareness.getStates().entries()].filter(([, s]) => s && s.editor).map(([id]) => id); return !ids.length || Math.min(...ids) === doc.clientID;
+    },
+    unsaved: () => unsaved,
+    /** any save of the file in the room → fn({ mtime, by }); the changes are saved now */
+    onSaved: (fn) => (typeof provider.on === 'function' ? provider.on('saved', (m) => { unsaved = false; fn(m || {}); }) : () => {}),
+    /** this editor became / stopped being the saver → fn(isLeader) */
+    onLeader: (fn) => (typeof provider.on === 'function' ? provider.on('leader', (v) => fn(!!v)) : () => {}),
     peers: () => [...awareness.getStates().entries()].filter(([id, s]) => id !== doc.clientID && s && s.user).map(([id, s]) => ({ id, name: s.user.name, color: s.user.color })),
     destroy: () => { try { provider.destroy(); } catch { /* gone */ } try { doc.destroy(); } catch { /* gone */ } },
   };

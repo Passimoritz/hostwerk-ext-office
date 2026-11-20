@@ -137,7 +137,7 @@ const ODF = /^(odt|ods|odp|ott|ots|otp|odg|otg)$/;
 const FLAT = /^(fodt|fods|fodp|fodg)$/;
 const PLAIN = /^(txt|md|markdown|csv|tsv|tab|json|xml|vcf|ics|prn|dif|slk)$/;
 /** Can text be extracted from this extension? */
-const LEGACY = /^(doc|dot|ppt|pps|pot)$/;
+const LEGACY = /^(doc|dot|ppt|pps|pot|xls|xlt)$/;
 const IWORK = /^(pages|key|numbers)$/;
 const canText = (ext) => LEGACY.test(ext) || IWORK.test(ext) || DOCX.test(ext) || XLSX.test(ext) || PPTX.test(ext) || ODF.test(ext) || FLAT.test(ext) || PLAIN.test(ext) || /^(rtf|html|htm|xhtml|pdf|eml)$/.test(ext);
 
@@ -164,7 +164,7 @@ async function text(buf, ext, libs = {}) {
   if (FLAT.test(e)) return clip(odfXml(bytesToString(buf)));
   if (LEGACY.test(e)) {
     if (!cfb.isCfb(buf)) return '';
-    return clip(/^(doc|dot)$/.test(e) ? cfb.docText(buf) : cfb.pptText(buf).text);
+    return clip(/^(doc|dot)$/.test(e) ? cfb.docText(buf) : /^(xls|xlt)$/.test(e) ? tidy(cfb.xlsText(buf).text) : cfb.pptText(buf).text);
   }
   if (IWORK.test(e)) {
     if (!isZip(buf)) return '';
@@ -219,6 +219,7 @@ async function info(buf, ext, libs = {}) {
     return clean(out);
   }
   if (/^(ppt|pps|pot)$/.test(e) && cfb.isCfb(buf)) { const r = cfb.pptText(buf); return clean({ slides: r.slides, words: words(r.text) }); }
+  if (/^(xls|xlt)$/.test(e) && cfb.isCfb(buf)) { try { return clean({ sheets: cfb.xlsText(buf).sheets }); } catch { return {}; } }
   if (e === 'pdf' && libs.unpdf) {
     const pdf = await libs.unpdf.getDocumentProxy(new Uint8Array(buf));
     try {

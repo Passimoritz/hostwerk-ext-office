@@ -501,3 +501,7 @@
 .of-shell-pop-ic { display: inline-grid; place-items: center; width: 18px; color: var(--muted); flex: none; }
 .of-shell-pop-item:hover .of-shell-pop-ic, .of-shell-pop-item:focus-visible .of-shell-pop-ic { color: inherit; }
 .of-shell-pop-sep { height: 1px; margin: var(--sp-1) var(--sp-2); background: var(--line); }
+.of-shell-err { color: var(--err); }
+.of-shell-rcpt { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.of-shell-rcpt > select { flex: 0 0 210px; width: 210px; }
+.of-shell-rcpt > .grow { flex: 1 1 200px; min-width: 0; }

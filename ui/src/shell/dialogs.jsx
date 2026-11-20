@@ -119,7 +119,7 @@ export function NewDialog({ kind: startKind = 'docs', dir: startDir = '', root =
   );
 }
 /** a template with its real first page (built-ins: rendered once and kept in this browser) */
-export function TemplateCard({ kind, ext, tplId, name, cat, on, own, blank, onPick, onOpen, onRemove }) {
+export function TemplateCard({ kind, ext, tplId, name, cat, on, own, blank, onPick, onOpen, onRemove, onMenu }) {
   const [img, setImg] = useState(null);
   useEffect(() => {
     let alive = true;
@@ -128,7 +128,7 @@ export function TemplateCard({ kind, ext, tplId, name, cat, on, own, blank, onPi
     return () => { alive = false; };
   }, [kind, tplId, ext, own]);
   return (
-    <div className={`of-shell-tpl ${on ? 'on' : ''}`} role="option" aria-selected={on} tabIndex={0} onClick={onPick} onDoubleClick={onOpen} onKeyDown={(e) => { if (e.key === 'Enter') onOpen(); if (e.key === ' ') { e.preventDefault(); onPick(); } }}>
+    <div className={`of-shell-tpl ${on ? 'on' : ''}`} role="option" aria-selected={on} tabIndex={0} onClick={onPick} onDoubleClick={onOpen} onContextMenu={onMenu} onKeyDown={(e) => { if (e.key === 'Enter') onOpen(); if (e.key === ' ') { e.preventDefault(); onPick(); } }}>
       <div className={`of-shell-tpl-paper of-shell-k-${kind} ${img ? 'has-img' : ''} is-${kind}`}>
         {img ? <img src={img} alt="" decoding="async" /> : blank ? <FilePlus2 size={22} aria-hidden="true" /> : <><FileIcon name={`x.${ext}`} size={20} /><span className="of-shell-tpl-lines" aria-hidden="true"><i /><i /><i /></span></>}
       </div>

@@ -3,7 +3,8 @@
  * Smaller 1.1 stores:
  *   Thumbs      – thumbnails rendered by the UI (PNG), cached per file key + mtime (cache/thumbs/)
  *   Publish     – documents published as web pages through host.sites (the UI renders the HTML, we keep and republish it)
- *   Reports     – scheduled PDF reports (own timer with persistence; Hostwerk's scheduler has no task type for extensions)
+ *   Reports     – scheduled reports (PDF or the file's own format) to several recipients each (own timer with persistence;
+ *                 Hostwerk's scheduler has no task type for extensions)
  *   LibBackup   – zip snapshots of the whole library for Hostwerk's backup center (restore never deletes, every
  *                 overwritten file keeps its current content as a version)
  *   nextRun(schedule, from) – pure schedule helper
@@ -14,6 +15,7 @@ const crypto = require('crypto');
 const { readJson, writeJson } = require('./store');
 const { ZipWriter, readZip } = require('./zip');
 const P = require('./paths');
+const { DISCORD } = require('./notify');
 
 const sha1 = (s) => crypto.createHash('sha1').update(String(s)).digest('hex');
 
@@ -79,41 +81,90 @@ function nextRun(s0, from = Date.now()) {
   n.setDate(s.day); if (n.getTime() <= from) { n.setMonth(n.getMonth() + 1); n.setDate(s.day); } return n.getTime();
 }
 
+const CHANNELS = ['hostwerk', 'alerts', 'mail', 'discord', 'ntfy'];
+const MAIL = /^[^\s@<>,;"]{1,64}@[^\s@<>,;"]{1,255}\.[^\s@<>,;"]{2,}$/;
+/**
+ * recipients of a report: [{ channel: hostwerk | alerts (every alert channel of Hostwerk) | mail | discord | ntfy, to }]
+ * mail: one or more addresses ("a@x.de, b@y.de", ≤ 20) – empty = Hostwerk's alert address · discord: a webhook address –
+ * empty = the alert webhook · ntfy: a full address (https://ntfy.sh/topic) or a topic name – empty = the alert address.
+ * Throws 400 with the first invalid entry.
+ */
+function normRecipients(list, fallbackChannel) {
+  const src = Array.isArray(list) && list.length ? list : [{ channel: fallbackChannel === 'all' ? 'alerts' : fallbackChannel || 'mail', to: '' }];
+  const out = [];
+  for (const r0 of src.slice(0, 20)) {
+    const channel = r0 && CHANNELS.includes(r0.channel) ? r0.channel : r0 && r0.channel === 'all' ? 'alerts' : null;
+    if (!channel) throw Object.assign(new Error('Unknown channel'), { status: 400 });
+    let to = String((r0 && r0.to) || '').trim().slice(0, 2000);
+    if (channel === 'hostwerk' || channel === 'alerts') to = '';
+    if (channel === 'mail' && to) {
+      const list2 = to.split(/[\s,;]+/).filter(Boolean);
+      const bad = list2.find((x) => !MAIL.test(x));
+      if (bad || list2.length > 20) throw Object.assign(new Error('{to} is not a valid e-mail address.'), { status: 400, vars: { to: bad || to } });
+      to = list2.join(', ');
+    }
+    if (channel === 'discord' && to && !DISCORD.test(to)) throw Object.assign(new Error('This is not a Discord webhook address.'), { status: 400 });
+    if (channel === 'ntfy' && to && !/^https?:\/\/[^\s/]+\/[\w-]{1,64}$/.test(to) && !/^[\w-]{1,64}$/.test(to)) throw Object.assign(new Error('Enter an ntfy address (https://ntfy.sh/topic) or just the topic.'), { status: 400 });
+    if (!out.some((x) => x.channel === channel && x.to === to)) out.push({ channel, to });
+  }
+  return out;
+}
+const FORMATS = ['pdf', 'docx', 'odt', 'xlsx', 'ods', 'csv', 'pptx', 'odp', 'same'];
+const MIME = { pdf: 'application/pdf', csv: 'text/csv', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', odt: 'application/vnd.oasis.opendocument.text', ods: 'application/vnd.oasis.opendocument.spreadsheet', odp: 'application/vnd.oasis.opendocument.presentation' };
+
 class Reports {
   /** deps: { file, readFile(loc) → { buf, ext }, convert(buf, from, to), notifier, saveCopy(loc, name, data) → Entry, t, log } */
   constructor(deps) { this.d = deps; this.items = readJson(deps.file, []); this.running = new Set(); }
   save() { writeJson(this.d.file, this.items); }
-  list() { return this.items; }
+  list() { return this.items.map((it) => this.view(it)); }
+  /** the shape the UI edits (recipients always present – older entries had one channel; schedule.at = time) */
+  view(it) { return { ...it, recipients: it.recipients || normRecipients(null, it.channel), format: it.format || 'pdf', schedule: { ...it.schedule, at: it.schedule.time } }; }
   norm(b, old = {}) {
     const ch = ['hostwerk', 'discord', 'ntfy', 'mail', 'all'];
     const channel = ch.includes(b.channel) ? b.channel : old.channel || 'mail';
+    const recipients = b.recipients !== undefined ? normRecipients(b.recipients, channel) : old.recipients || normRecipients(null, channel);
+    const f0 = String(b.format || '').toLowerCase();
+    const format = FORMATS.includes(f0) ? f0 : old.format || 'pdf';
     const schedule = normSchedule({ ...(old.schedule || {}), ...(b.schedule || b) });
-    return { schedule, channel, saveCopy: b.saveCopy !== undefined ? !!b.saveCopy : old.saveCopy !== undefined ? old.saveCopy : true, on: b.on !== undefined ? !!b.on : old.on !== false, title: String(b.title != null ? b.title : old.title || '').slice(0, 120) };
+    return { schedule, channel: recipients[0].channel === 'alerts' ? 'all' : recipients[0].channel, recipients, format, saveCopy: b.saveCopy !== undefined ? !!b.saveCopy : old.saveCopy !== undefined ? old.saveCopy : true, on: b.on !== undefined ? !!b.on : old.on !== false, title: String(b.title != null ? b.title : old.title || '').slice(0, 120) };
   }
   add(b) {
     if (this.items.length >= 100) throw Object.assign(new Error('At most 100 scheduled reports.'), { status: 409 });
     const it = { id: crypto.randomBytes(6).toString('hex'), key: b.key, root: b.root || null, path: b.path, name: b.name, ...this.norm(b), createdAt: Date.now(), lastRun: null, lastError: null };
     it.nextRun = nextRun(it.schedule);
-    this.items.push(it); this.save(); return it;
+    this.items.push(it); this.save(); return this.view(it);
   }
-  update(id, b) { const it = this.items.find((x) => x.id === id); if (!it) throw Object.assign(new Error('Report not found'), { status: 404 }); Object.assign(it, this.norm(b, it)); it.nextRun = nextRun(it.schedule); this.save(); return it; }
+  update(id, b) { const it = this.items.find((x) => x.id === id); if (!it) throw Object.assign(new Error('Report not found'), { status: 404 }); Object.assign(it, this.norm(b, it)); it.nextRun = nextRun(it.schedule); this.save(); return this.view(it); }
   remove(id) { this.items = this.items.filter((x) => x.id !== id); this.save(); }
   rekey(a, b) { let ch = false; for (const p of this.items) if (p.key === a || p.key.startsWith(`${a}/`)) { p.key = b + p.key.slice(a.length); if (!p.root) p.path = p.key; p.name = p.key.split('/').pop(); ch = true; } if (ch) this.save(); }
+  /** the file in the report's format: as it is, or through the converter (PDF by default) */
+  async render(it, f) {
+    const want = !it.format || it.format === 'same' ? f.ext : it.format;
+    if (want === f.ext) return { data: f.buf, ext: f.ext };
+    return { data: (await this.d.convert(f.buf, f.ext, want)).data, ext: want };
+  }
   async run(id) {
     const it = this.items.find((x) => x.id === id); if (!it) throw Object.assign(new Error('Report not found'), { status: 404 });
     if (this.running.has(id)) return { ok: false, running: true };
     this.running.add(id);
     try {
       const f = await this.d.readFile({ root: it.root, path: it.path });
-      const pdf = f.ext === 'pdf' ? f.buf : (await this.d.convert(f.buf, f.ext, 'pdf')).data;
+      const out = await this.render(it, f);
       const date = new Date().toISOString().slice(0, 10);
-      const name = `${it.name.replace(/\.[^.]+$/, '')} ${date}.pdf`;
+      const name = `${it.name.replace(/\.[^.]+$/, '')} ${date}.${out.ext}`;
       let saved = null;
-      if (it.saveCopy) { try { saved = this.d.saveCopy({ root: it.root, path: it.path }, name, pdf); } catch (e) { this.d.log('report copy failed', e.message); } }
+      if (it.saveCopy && out.ext === 'pdf') { try { saved = this.d.saveCopy({ root: it.root, path: it.path }, name, out.data); } catch (e) { this.d.log('report copy failed', e.message); } }
       const t = this.d.t;
-      await this.d.notifier.send(it.channel, { event: 'report', title: it.title || t('Report: {name}', { name: it.name }), text: t('The scheduled report {name} of {date} is attached.', { name: it.name, date }), kind: 'info', url: '/ext/office', attachment: { name, data: pdf, type: 'application/pdf' } });
-      it.lastRun = Date.now(); it.lastError = null;
-      return { ok: true, size: pdf.length, saved };
+      const msg = { event: 'report', title: it.title || t('Report: {name}', { name: it.name }), text: t('The scheduled report {name} of {date} is attached.', { name: it.name, date }), kind: 'info', url: '/ext/office', attachment: { name, data: out.data, type: MIME[out.ext] || 'application/octet-stream' } };
+      // every recipient on its own – one failing channel does not stop the others
+      const results = [];
+      for (const r of it.recipients || normRecipients(null, it.channel)) {
+        try { await this.d.notifier.send(r.channel === 'alerts' ? 'all' : r.channel, msg, { to: r.to || null }); results.push({ channel: r.channel, to: r.to, ok: true }); } catch (e) { results.push({ channel: r.channel, to: r.to, ok: false, error: String(t(e.message || String(e), e.vars)).slice(0, 200) }); }
+      }
+      const failed = results.filter((x) => !x.ok);
+      it.lastRun = Date.now(); it.lastResults = results;
+      it.lastError = failed.length ? failed.map((x) => `${x.to || x.channel}: ${x.error}`).join(' · ').slice(0, 300) : null;
+      return { ok: failed.length < results.length, size: out.data.length, saved, results, error: it.lastError };
     } catch (e) { it.lastRun = Date.now(); it.lastError = String(e.message || e).slice(0, 300); this.d.log('report failed', it.name, it.lastError); return { ok: false, error: it.lastError }; } finally { this.running.delete(id); it.nextRun = nextRun(it.schedule); this.save(); }
   }
   /** due reports (missed ones while Hostwerk was off run once) */
@@ -246,4 +297,4 @@ class LibBackup {
   }
 }
 
-module.exports = { Thumbs, Publish, Reports, LibBackup, nextRun, normSchedule };
+module.exports = { Thumbs, Publish, Reports, LibBackup, nextRun, normSchedule, normRecipients };

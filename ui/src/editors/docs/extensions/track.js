@@ -168,6 +168,17 @@ function resolve(tr, r, accept) {
   }
 }
 
+/**
+ * accept/reject change ranges (from changeRanges) in one transaction: text first (back to front), structure after it –
+ * positions stay valid through the mapping. An accepted deleted paragraph mark joins the paragraph with the next one.
+ */
+export function applyChanges(tr, rs, accept) {
+  const text = rs.filter((r) => ['insertion', 'deletion', 'formatChange'].includes(r.type)).sort((a, b) => b.from - a.from);
+  const struct = rs.filter((r) => !['insertion', 'deletion', 'formatChange'].includes(r.type)).sort((a, b) => b.from - a.from);
+  for (const r of [...text, ...struct]) resolve(tr, r, accept);
+  return tr;
+}
+
 export const TrackChanges = Extension.create({
   name: 'trackChanges',
   addStorage() { return { enabled: false, author: '', session: `s${Date.now().toString(36)}` }; },
@@ -181,10 +192,7 @@ export const TrackChanges = Extension.create({
     const run = (accept, all) => ({ state, tr, dispatch }) => {
       const rs = ranges(state, all);
       if (!rs.length) return false;
-      // text first (back to front), structure after it – positions stay valid through the mapping
-      const text = rs.filter((r) => ['insertion', 'deletion', 'formatChange'].includes(r.type)).sort((a, b) => b.from - a.from);
-      const struct = rs.filter((r) => !['insertion', 'deletion', 'formatChange'].includes(r.type)).sort((a, b) => b.from - a.from);
-      for (const r of [...text, ...struct]) resolve(tr, r, accept);
+      applyChanges(tr, rs, accept);
       tr.setMeta('ofTrackSkip', true);
       if (dispatch) dispatch(tr);
       return true;

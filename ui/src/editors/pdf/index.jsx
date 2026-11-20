@@ -30,7 +30,7 @@ import { pageIndex, findInPage } from './search.js';
 import { isEncryptedBytes, openProtected, encryptPdf } from './security.js';
 import { openDoc, cjkAssets, needsCmaps, latinFontBytes, cjkFontBytes, forgetCjk } from './open.js';
 import { ensureComponent } from './components.js';
-import { createTesseract } from './ocr.js';
+import { createTesseract, OCR_PACKS } from './ocr.js';
 import { addTextLayer, imageWordsToPdf } from './textlayer.js';
 import { findSensitive, hitRects, keptWords, applyRedactions, verifyRedaction, scanFile } from './redact.js';
 import { compressPdf } from './compress.js';
@@ -682,7 +682,7 @@ function Editor({ file, bytes, readOnly, settings, host }) {
     const m = modelRef.current;
     const marked = m.pages.map((p, i) => ({ p, i, rects: (m.redact || {})[p.id] || [] })).filter((x) => x.rects.length);
     if (!marked.length) return;
-    const ok = await confirmDialog({ title: t('Remove the marked content for good?'), text: t('Text, graphics and image pixels under {n} marks on {p} pages are removed. Those pages become pictures with an invisible text layer of the remaining text. You can still undo it until you save.', { n: marked.reduce((s, x) => s + x.rects.length, 0), p: marked.length }), confirm: t('Redact'), danger: true });
+    const ok = await confirmDialog({ title: t('Remove the marked content for good?'), text: t('Text, graphics and image pixels under {n} marks on {p} pages are removed. Pages without pictures keep their text and graphics; pages with pictures become pictures with an invisible text layer of the remaining text. You can still undo it until you save.', { n: marked.reduce((s, x) => s + x.rects.length, 0), p: marked.length }), confirm: t('Redact'), danger: true });
     if (!ok) return;
     setBusy('apply');
     try {
@@ -722,7 +722,7 @@ function Editor({ file, bytes, readOnly, settings, host }) {
         return { ok: v.ok && !raw.length, leaks: v.leaks.length + raw.length };
       };
       let res = await check(out);
-      if (!res.ok) { out = await applyRedactions(plain, jobs.map((j) => ({ ...j, words: [] }))); res = { ...(await check(out)), retried: true }; }
+      if (!res.ok) { out = await applyRedactions(plain, jobs.map((j) => ({ ...j, words: [], vector: false }))); res = { ...(await check(out)), retried: true }; }
       await rebase(out);
       setPanel(null); setTool('text-select');
       setDialog({ type: 'redacted', result: { ok: res.ok && !res.retried, n: jobs.reduce((s, j) => s + j.rects.length, 0), p: jobs.length, leaks: res.leaks } });
@@ -737,7 +737,14 @@ function Editor({ file, bytes, readOnly, settings, host }) {
     const m = modelRef.current;
     const plain = await build({ force: true, plain: true });
     const doc = await openDoc(plain, { cjk: await cjkAssets() });
-    const engine = await createTesseract({ base: comp.base, langs: lang });
+    // optional language packs (French, Spanish, Italian, Dutch, Polish, Turkish) are components of their own
+    const langBases = {};
+    for (const l of lang.split('+').filter((x) => OCR_PACKS.includes(x))) {
+      const pack = await ensureComponent(host, `ocr-${l}`, t('Text recognition in this language needs its language pack (one-time download).'));
+      if (!pack) throw new Error(t('The language pack is not installed.'));
+      langBases[l] = pack.base;
+    }
+    const engine = await createTesseract({ base: comp.base, langs: lang, langBases });
     let words = 0; let done = 0; const layers = {};
     try {
       const all = m.pages.map((p, i) => i);

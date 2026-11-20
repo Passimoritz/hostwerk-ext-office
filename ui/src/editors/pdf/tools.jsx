@@ -131,7 +131,12 @@ export function OcrDialog({ count, current, selection, run, onClose }) {
           <Seg value={scope} onChange={setScope} options={[{ id: 'auto', label: t('Pages without text') }, { id: 'all', label: t('All {n}', { n: count }) }, { id: 'current', label: selection > 1 ? t('{n} selected', { n: selection }) : t('Page {n}', { n: current }) }]} />
         </Field>
         <Field label="Language">
-          <Seg value={lang} onChange={setLang} options={[{ id: 'deu+eng', label: t('German + English') }, { id: 'deu', label: t('German') }, { id: 'eng', label: t('English') }]} />
+          <Seg value={['deu+eng', 'deu', 'eng'].includes(lang) ? lang : 'more'} onChange={(v) => setLang(v === 'more' ? 'fra' : v)} options={[{ id: 'deu+eng', label: t('German + English') }, { id: 'deu', label: t('German') }, { id: 'eng', label: t('English') }, { id: 'more', label: t('More …') }]} />
+          {!['deu+eng', 'deu', 'eng'].includes(lang) && (
+            <select className="input" value={lang} onChange={(e) => setLang(e.target.value)} aria-label={t('Language')} title={t('Language packs are downloaded once when needed')}>
+              {[['fra', 'French'], ['spa', 'Spanish'], ['ita', 'Italian'], ['nld', 'Dutch'], ['pol', 'Polish'], ['tur', 'Turkish']].flatMap(([id, l]) => [<option key={id} value={id}>{t(l)}</option>, <option key={`${id}+eng`} value={`${id}+eng`}>{t('{lang} + English', { lang: t(l) })}</option>])}
+            </select>
+          )}
         </Field>
         {state && (
           <div className="stack">

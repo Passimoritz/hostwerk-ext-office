@@ -163,3 +163,9 @@
 .of-view-rtftable { border-collapse: collapse; }
 .of-view-rtftable td { border: 1px solid #ccc; padding: 2px 6px; }
 @media (prefers-reduced-motion: reduce) { .of-view-root * { transition: none !important; } }
+/* Access databases (jet.js) */
+.of-view-dbwrap { overflow: auto; max-height: 60vh; border: 1px solid var(--line); border-radius: var(--r-md); }
+.of-view-db { border-collapse: collapse; font-size: var(--fs-sm); min-width: 100%; }
+.of-view-db th { position: sticky; top: 0; background: var(--surface-2); text-align: left; font-weight: 600; }
+.of-view-db th, .of-view-db td { padding: 4px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
+.of-view-db td.num { text-align: right; font-variant-numeric: tabular-nums; }

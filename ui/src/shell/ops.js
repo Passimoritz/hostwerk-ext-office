@@ -102,6 +102,18 @@ export async function createFile({ kind, ext, name, dir = '', root = null, templ
   changed({ created: entry && entry.path });
   return entry;
 }
+/**
+ * An own template (Templates view): ask for the name, create the file right in the open folder (first free name – the
+ * backend never overwrites) and return its entry; null when the user cancels. tpl: { id, name, ext, kind }
+ */
+export async function newFromOwnTemplate(tpl, { root = null, dir = '' } = {}) {
+  const ext = tpl.ext || extOf(tpl.name || '') || 'docx';
+  const kind = tpl.kind || (FORMATS[ext] || {}).kind || 'docs';
+  const name = await promptDialog({ title: t('New from “{name}”', { name: tpl.name }), label: 'File name', value: splitExt(tpl.name || t('Document')).base, confirm: 'Create',
+    validate: (v) => { const m = validateName(v); return m ? t(m) : null; } });
+  if (!name) return null;
+  return createFile({ kind, ext, name: name.trim(), dir, root, template: { id: tpl.id, own: true, ext } });
+}
 export async function newFolder(dir) {
   const name = await promptDialog({ title: 'New folder', label: 'Name', value: t('New folder'), confirm: 'Create', validate: (v) => { const m = validateName(v); return m ? t(m) : null; } });
   if (!name) return null;

@@ -54,7 +54,7 @@ export function newSheet(name) {
     outlineRows: new Map(), outlineCols: new Map(),
     defW: 64, defH: 20,
     merges: [], freeze: { rows: 0, cols: 0 }, gridlines: true, headings: true, zoom: null,
-    cf: [], dv: [], filter: null, charts: [], images: [], tables: [], pivots: [], sparklines: [], shapes: [], slicers: [], view: null, print: { area: null, orientation: 'portrait', fit: 'width', gridlines: false, headings: false },
+    cf: [], dv: [], filter: null, charts: [], images: [], controls: [], tables: [], pivots: [], sparklines: [], shapes: [], slicers: [], dataTables: [], view: null, print: { area: null, orientation: 'portrait', fit: 'width', gridlines: false, headings: false },
     spill: new Map(), spillAnchors: new Map(), spillBlocked: new Map(),
     sel: null, _xml: null, version: 0,
   };
@@ -66,7 +66,7 @@ const cloneSheetProps = (s) => ({
   merges: s.merges.map((m) => ({ ...m })), freeze: { ...s.freeze }, gridlines: s.gridlines, headings: s.headings,
   cf: JSON.parse(JSON.stringify(s.cf)), dv: JSON.parse(JSON.stringify(s.dv)), filter: s.filter ? JSON.parse(JSON.stringify(s.filter)) : null,
   charts: JSON.parse(JSON.stringify(s.charts)), images: s.images.map((i) => ({ ...i, anchor: { ...i.anchor } })), print: { ...s.print },
-  tables: jc(s.tables || []), pivots: jc(s.pivots || []), sparklines: jc(s.sparklines || []), shapes: jc(s.shapes || []), view: s.view ? jc(s.view) : null,
+  tables: jc(s.tables || []), pivots: jc(s.pivots || []), sparklines: jc(s.sparklines || []), shapes: jc(s.shapes || []), controls: jc(s.controls || []), view: s.view ? jc(s.view) : null,
 });
 
 /* iterate cells of ranges (only existing cells when the range is huge) */

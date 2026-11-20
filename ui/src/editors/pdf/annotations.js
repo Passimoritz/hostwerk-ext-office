@@ -21,6 +21,7 @@ import {
   drawRectangle, drawEllipse, drawLine, drawSvgPath, drawText, drawImage,
   pushGraphicsState, popGraphicsState, setGraphicsState, LineCapStyle,
 } from 'pdf-lib';
+import pako from 'pako';
 
 export const COLORS = ['#ffd400', '#5fd068', '#4ea8ff', '#ff6b9a', '#ff5d3a', '#a46bff', '#111111', '#ffffff'];
 export const STAMPS = [
@@ -341,12 +342,37 @@ export function markDocument(doc) {
   const s = ctx.stream(new TextEncoder().encode('Hostwerk Office: the annotations of this file stay editable in Hostwerk.'), { Type: MARKER });
   doc.catalog.set(PDFName.of(MARKER), ctx.register(s));
 }
-export function hasMarker(bytes) {
-  const pat = Array.from(`/${MARKER}`, (c) => c.charCodeAt(0));
-  outer: for (let i = 0, n = bytes.length - pat.length; i <= n; i++) {
-    if (bytes[i] !== 47) continue;
+function findBytes(bytes, str, from = 0, to = bytes.length) {
+  const pat = Array.from(str, (c) => c.charCodeAt(0));
+  const f = pat[0];
+  outer: for (let i = from, n = Math.min(to, bytes.length) - pat.length; i <= n; i++) {
+    if (bytes[i] !== f) continue;
     for (let k = 1; k < pat.length; k++) if (bytes[i + k] !== pat[k]) continue outer;
-    return true;
+    return i;
+  }
+  return -1;
+}
+/**
+ * Does the file (maybe) carry our annotations? Our catalog marker, our /HWOffice key in plain objects, or – when
+ * another app re-saved the file with compressed object streams (and dropped the marker) – /HWOffice inside an
+ * inflated /ObjStm.
+ */
+export function hasMarker(bytes) {
+  if (findBytes(bytes, `/${MARKER}`) >= 0 || findBytes(bytes, `/${MODEL_KEY}`) >= 0) return true;
+  if (bytes.length > 80 * 1024 * 1024) return false;
+  let at = 0; let n = 0;
+  const key = Array.from(MODEL_KEY, (c) => c.charCodeAt(0));
+  while ((at = findBytes(bytes, '/ObjStm', at)) >= 0 && n++ < 2000) {
+    const st = findBytes(bytes, 'stream', at, at + 4096);
+    if (st < 0) { at += 7; continue; }
+    let p = st + 6; if (bytes[p] === 13) p++; if (bytes[p] === 10) p++;
+    const end = findBytes(bytes, 'endstream', p);
+    if (end < 0) break;
+    try {
+      const raw = pako.inflate(bytes.subarray(p, end));
+      for (let i = 0; i + key.length < raw.length; i++) { if (raw[i] !== key[0]) continue; let ok = true; for (let k = 1; k < key.length; k++) if (raw[i + k] !== key[k]) { ok = false; break; } if (ok) return true; }
+    } catch { /* not deflated / damaged */ }
+    at = end;
   }
   return false;
 }
@@ -369,12 +395,26 @@ export function readOwnAnnotations(doc) {
       let m = null;
       if (raw && raw.asBytes) { try { m = JSON.parse(new TextDecoder().decode(raw.asBytes())); } catch { m = null; } }
       if (!m || m.v !== 1 || !EDITABLE.has(m.type)) { keep.push(ref); continue; }
+      const { v, ...model0 } = m; // eslint-disable-line no-unused-vars
+      let model = model0;
+      // another app may have moved it (Rect shifted, same size → move our model along) or recomputed the Rect a bit
+      // (a few points of extra margin); a resized one stays an ordinary annotation
       const rect = d.lookup(PDFName.of('Rect'));
-      if (rect instanceof PDFArray && m.type !== 'note') {
-        const b = bbox(m); const r = rect.asArray().map((x) => (x.asNumber ? x.asNumber() : 0));
-        if (Math.abs(r[0] - (b.x - 2)) > 1.5 || Math.abs(r[1] - (b.y - 2)) > 1.5) { keep.push(ref); continue; }
+      if (rect instanceof PDFArray) {
+        const b = bbox(model); const r = rect.asArray().map((x) => (x.asNumber ? x.asNumber() : 0));
+        const w = r[2] - r[0]; const h = r[3] - r[1];
+        if (m.type === 'note') { if (Math.abs(r[0] - model.x) > 1.5 || Math.abs(r[1] - model.y) > 1.5) model = translate(model, r[0] - model.x, r[1] - model.y); } else {
+          const cx = (r[0] + r[2]) / 2 - (b.x + b.w / 2); const cy = (r[1] + r[3]) / 2 - (b.y + b.h / 2);
+          if (Math.abs(w - (b.w + 4)) > 8 || Math.abs(h - (b.h + 4)) > 8) { keep.push(ref); continue; }
+          if (Math.abs(cx) > 1.5 || Math.abs(cy) > 1.5) model = translate(model, cx, cy);
+        }
       }
-      const { v, ...model } = m; // eslint-disable-line no-unused-vars
+      // a comment text changed in another app
+      if (m.type === 'note' || m.type === 'text') {
+        const c = d.lookup(PDFName.of('Contents'));
+        const txt = c && c.decodeText ? c.decodeText() : null;
+        if (txt != null && txt !== (model.text || '')) model = { ...model, text: txt };
+      }
       out[i].push({ ...model, id: model.id || newId() });
       if (ref instanceof PDFRef) doc.context.delete(ref);
     }

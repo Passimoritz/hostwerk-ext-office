@@ -4,6 +4,7 @@ import { Book, newSheet } from '../model.js';
 import { MAXC, colName } from '../formula/refs.js';
 import { readXlsx, writeXlsx } from './xlsx.js';
 import { readSheetJS, writeSheetJS } from './sheetjs.js';
+import { readOds, writeOds } from './ods.js';
 import { sniff, parseCSV, writeCSV, encodeText } from './csv.js';
 import { parseInput, parseNumberLoose } from '../format/parse.js';
 import { makeLocale } from '../format/locale.js';
@@ -12,6 +13,7 @@ import { esc } from './xml.js';
 
 export const OOXML = ['xlsx', 'xlsm', 'xltx', 'xltm'];
 export const CSV = ['csv', 'tsv', 'tab'];
+export const ODF = ['ods', 'ots', 'fods'];
 const K = (r, c) => r * MAXC + c;
 
 /** settings.sheets.csvDelimiter → character ('auto' = by locale) */
@@ -34,9 +36,18 @@ export async function openBytes(bytes, ext, opts = {}) {
     }
   }
   if (CSV.includes(ext)) return csvToBook(bytes, { loc, settings, ext, ...(opts.csv || {}) });
-  // ODS/XLS/XLSB: SheetJS CE reads no cell styles – with the Office engine the file goes through xlsx (styles, charts,
+  // OpenDocument: own reader with styles, charts and pictures (the engine only when it fails)
+  if (ODF.includes(ext)) {
+    try { return await readOds(bytes, { loc, settings, ext }); } catch (e) {
+      if (opts.convert) { try { const x = await opts.convert(bytes, ext, 'xlsx'); const b = await readXlsx(x, { loc, settings, ext: 'xlsx' }); b.viaEngine = ext; return b; } catch { /* SheetJS below */ } }
+      const b = readSheetJS(bytes, { loc, settings, ext });
+      b.fidelity.push(String(e.message || e));
+      return b;
+    }
+  }
+  // XLS/XLSB: SheetJS CE reads no cell styles – with the Office engine the file goes through xlsx (styles, charts,
   // pictures kept); the result is saved back through the engine too (saveBytes). Slow or failing engine → SheetJS.
-  if (opts.convert && ['ods', 'ots', 'fods', 'xls', 'xlt', 'xlsb'].includes(ext)) {
+  if (opts.convert && ['xls', 'xlt', 'xlsb'].includes(ext)) {
     try {
       const x = await Promise.race([opts.convert(bytes, ext, 'xlsx'), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), opts.convertTimeout || 15000))]);
       const b = await readXlsx(x, { loc, settings, ext: 'xlsx' });
@@ -192,6 +203,8 @@ export async function saveBytes(book, ext, opts = {}) {
     return { bytes: bookToCSV(book, { sheet: opts.sheet ?? book.active, delimiter, encoding: ext === 'txt' ? 'utf-16le' : encoding }) };
   }
   if (ext === 'html' || ext === 'htm') return { bytes: new TextEncoder().encode(bookToHTML(book, { sheet: opts.sheet })) };
+  // OpenDocument: own writer with styles (a file opened through the engine goes back through it)
+  if (ODF.includes(ext) && !(book.viaEngine && opts.convert)) return { bytes: await writeOds(book, { ext, getValues: opts.getValues }) };
   // formats SheetJS writes without formatting: let the office engine convert a styled xlsx when it is there
   if (opts.convert && opts.preferConverter !== false && ['ods', 'xls', 'fods', 'ots', 'xlt', 'xlsb'].includes(ext)) {
     try {

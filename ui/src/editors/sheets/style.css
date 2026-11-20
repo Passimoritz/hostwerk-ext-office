@@ -303,3 +303,13 @@
 .of-fx-name { color: #0b7285; }
 .of-fx-paren { font-weight: 700; }
 @media (max-width: 700px) { .of-sheet-qat { display: none; } .of-sheet-cmp-body { grid-template-columns: 1fr; } .of-sheet-lane { flex-basis: 230px; } }
+/* form controls (xlsx) over the grid */
+.of-sheet-ctl { position: absolute; box-sizing: border-box; display: flex; align-items: center; gap: 4px; color: #000; font-family: Calibri, Arial, sans-serif; overflow: hidden; white-space: nowrap; }
+.of-sheet-ctl.is-checkbox, .of-sheet-ctl.is-option { cursor: pointer; padding-left: 2px; }
+.of-sheet-ctl input { margin: 0; accent-color: var(--accent); }
+select.of-sheet-ctl { background: #fff; border: 1px solid #a6a6a6; border-radius: 2px; padding: 0 2px; }
+.of-sheet-ctl.is-button { justify-content: center; background: #f0f0f0; border: 1px solid #adadad; border-radius: 2px; }
+.of-sheet-ctl.is-group { border: 1px solid #a6a6a6; margin: 0; padding: 0 4px; align-items: flex-start; }
+.of-sheet-ctl.is-group legend { padding: 0 2px; }
+.of-sheet-ctl.is-spin { flex-direction: column; gap: 0; }
+.of-sheet-ctl.is-spin button { flex: 1; width: 100%; min-height: 0; padding: 0; line-height: 1; font-size: 8px; color: #000; background: #f0f0f0; border: 1px solid #a6a6a6; cursor: pointer; }

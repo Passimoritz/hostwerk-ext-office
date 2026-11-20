@@ -109,7 +109,7 @@ function routes11(host, o) {
   });
   r.post('/office/forms/:id/close', (req, res) => { const f = o.forms.update(String(req.params.id), { closed: true }); res.json(formView(f, req)); });
   r.delete('/office/forms/:id', (req, res) => { if (!o.forms.remove(String(req.params.id))) throw err(404, 'Form not found'); res.json({ ok: true }); });
-  r.get('/office/forms/:id/pending', (req, res) => { const f = o.forms.get(String(req.params.id)); if (!f) throw err(404, 'Form not found'); res.json({ rows: (f.queue || []).map((q) => q.values), sheet: f.sheet }); });
+  r.get('/office/forms/:id/pending', (req, res) => { const f = o.forms.get(String(req.params.id)); if (!f) throw err(404, 'Form not found'); res.json({ rows: (f.queue || []).map((q) => q.values.map((v) => (v && typeof v === 'object' ? S.dateText(v) : v))), sheet: f.sheet }); });
   r.post('/office/forms/:id/pending/ack', (req, res) => { const f = o.forms.get(String(req.params.id)); if (!f) throw err(404, 'Form not found'); const n = Math.max(0, Math.min((f.queue || []).length, Number((req.body || {}).count) || 0)); o.forms.update(f.id, { queue: f.queue.slice(n) }); res.json({ ok: true, pending: f.queue.length }); });
 
   // public form page
@@ -149,7 +149,8 @@ function routes11(host, o) {
     if (limited(req.ip, f)) return res.status(429).type('text').send('Too many answers from your address – try again later.');
     let values;
     try { values = F.checkAnswer(f, body); } catch (e) { if (!e.fields) throw e; return res.status(400).type('html').send(F.formPage(x.lang, f, { base: x.base, errors: e.fields, values: body, stamp: F.stamp(o.secret(), f.token) })); }
-    const row = [...(f.timestamp ? [new Date().toISOString().replace('T', ' ').slice(0, 19)] : []), ...values];
+    // a real date/time cell (local time of this Hostwerk); date fields of the form become real dates too
+    const row = [...(f.timestamp ? [S.localStamp()] : []), ...values.map((v, i) => (f.columns[i] && f.columns[i].type === 'date' && /^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? { $date: String(v) } : v))];
     try { await o.formAnswer(f, row); } catch (e) { host.log('form answer failed', e.message); return res.status(503).type('text').send('The answer could not be saved right now – please try again later.'); }
     res.redirect(303, `${x.base}?sent=1`);
   });
@@ -271,8 +272,15 @@ function routes11(host, o) {
     const buf = fs.readFileSync(l.full);
     const kind = kindOf(buf, ext);
     if (!kind) throw err(409, 'This file is not encrypted.');
-    const p = await passwordFrom(b, l, { forEncrypt: false });
-    let out; try { out = kind === 'ooxml' ? E.decryptOoxml(buf, p.pw) : E.decryptOdf(buf, p.pw); } catch (e) { if (e.code === 'EPASSWORD') { o.guard.fail(`dec:${req.ip}`); throw err(403, 'The password is not correct.'); } throw err(e.status || 422, e.message); }
+    // soft: the editor asks again on a wrong password – an expected answer, so 200 { ok: false, reason } instead of a
+    // 403/404 that every browser logs as a red console error
+    const soft = boolQ(b.soft);
+    let p;
+    try { p = await passwordFrom(b, l, { forEncrypt: false }); } catch (e) { if (soft && e.status === 404) return res.json({ ok: false, reason: 'vault', error: host.t(e.message) }); throw e; }
+    let out; try { out = kind === 'ooxml' ? E.decryptOoxml(buf, p.pw) : E.decryptOdf(buf, p.pw); } catch (e) {
+      if (e.code === 'EPASSWORD') { o.guard.fail(`dec:${req.ip}`); if (soft) return res.json({ ok: false, reason: 'password', error: host.t('The password is not correct.') }); throw err(403, 'The password is not correct.'); }
+      throw err(e.status || 422, e.message);
+    }
     if (b.mode === 'inplace') { const w = lib.write(where(b), out, { force: true }); return res.json({ ok: true, ...w }); }
     if (b.mode === 'copy') return res.json({ ok: true, entry: sibling(l, host.t('decrypted'), out) });
     // default: the bytes for the editor (the file stays encrypted)

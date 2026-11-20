@@ -104,6 +104,43 @@ function cleanApp(ctx, o, rep) {
   if (x !== b) { set(ctx, n, x); rep.author = true; }
 }
 
+/*
+ * Accept deleted paragraph marks (<w:pPr><w:rPr><w:del …/></w:rPr></w:pPr>): the paragraph and the one after it become
+ * one – the first paragraph's properties stay (as the docs editor does it), the runs of the next one follow. Chains
+ * (several marks deleted in a row) join into one paragraph. Only direct siblings join (bookmarks / comment ranges in
+ * between move along); the last paragraph of a cell, a text box or the body only loses the mark.
+ */
+const DEL_MARK = /(<w:pPr\b[^>]*>(?:(?!<\/w:pPr>)[\s\S])*?<w:rPr\b[^>]*>(?:(?!<\/w:rPr>)[\s\S])*?)<w:(?:del|moveFrom)\b[^>]*\/>/;
+const GAP_OK = /^(?:\s|<w:(?:bookmarkStart|bookmarkEnd|commentRangeStart|commentRangeEnd|permStart|permEnd|proofErr)\b[^>]*\/>)*$/;
+function joinDeletedMarks(xml) {
+  const ps = elements(xml, 'w:p');
+  if (!ps.some((p) => DEL_MARK.test(p.inner))) return { xml, n: 0 };
+  // a paragraph → { open, pPr, body } (pPr = its first child, balanced – pPrChange holds another w:pPr)
+  const split = (s) => {
+    if (/^<w:p\b[^>]*\/>$/.test(s)) return { open: s.replace(/\/>$/, '>'), pPr: '', body: '' };
+    const open = /^<w:p\b[^>]*>/.exec(s); if (!open) return null;
+    const inner = s.slice(open[0].length, s.length - '</w:p>'.length);
+    const lead = /^\s*/.exec(inner)[0].length;
+    const pp = /^<w:pPr\b/.test(inner.slice(lead)) ? elements(inner, 'w:pPr')[0] : null;
+    return pp && pp.start === lead ? { open: open[0], pPr: inner.slice(pp.start, pp.end), body: inner.slice(pp.end) } : { open: open[0], pPr: '', body: inner };
+  };
+  const cur = ps.map((p) => xml.slice(p.start, p.end));
+  const gone = new Set(); let n = 0;
+  for (let i = ps.length - 1; i >= 0; i--) {
+    const a = split(cur[i]);
+    if (!a || !DEL_MARK.test(a.pPr)) continue;
+    a.pPr = a.pPr.replace(DEL_MARK, '$1');
+    n++;
+    const gap = i + 1 < ps.length ? xml.slice(ps[i].end, ps[i + 1].start) : null;
+    const b = gap != null && GAP_OK.test(gap) ? split(cur[i + 1]) : null;
+    cur[i] = `${a.open}${a.pPr}${a.body}${b ? gap.trim() + b.body : ''}</w:p>`;
+    if (b) gone.add(i + 1);
+  }
+  let out = ''; let last = 0;
+  ps.forEach((p, i) => { if (!gone.has(i)) out += xml.slice(last, p.start) + cur[i]; last = p.end; });
+  return { xml: out + xml.slice(last), n };
+}
+
 function cleanWordXml(x, o, rep) {
   if (o.comments) {
     const b = x;
@@ -114,6 +151,8 @@ function cleanWordXml(x, o, rep) {
   }
   if (o.revisions) {
     let r;
+    // deleted paragraph marks first (accept = the paragraph joins the next one, like Word)
+    r = joinDeletedMarks(x); x = r.xml; rep.revisions += r.n;
     // deleted table rows (accept = row gone)
     r = replaceEl(x, 'w:tr', (e) => (/<w:trPr\b[^>]*>(?:(?!<\/w:trPr>)[\s\S])*<w:del\b/.test(e.inner) ? '' : undefined)); x = r.xml; rep.revisions += r.n;
     for (const t of ['w:del', 'w:moveFrom']) { r = strip(x, t); x = r.xml; rep.revisions += r.n; }

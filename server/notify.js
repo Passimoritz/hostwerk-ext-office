@@ -6,7 +6,10 @@
  *   'all' → every configured alert channel (ctx.monitor.send – quiet hours respected)
  * Attachments (reports): Discord as a file upload, mail as MIME attachment through Hostwerk's mail relay.
  *
- *   new Notifier({ host }) · .channels() → [{ id, label, ready }] · .send(channel, { event, title, text, kind, url, attachment: { name, data, type } })
+ *   new Notifier({ host }) · .channels() → [{ id, label, ready }]
+ *   .send(channel, { event, title, text, kind, url, attachment: { name, data, type } }, { to })
+ *     to (scheduled reports' own recipients): mail = one or more addresses (through Hostwerk's mail relay, else Hostwerk's
+ *     mail catcher), discord = a webhook address, ntfy = an address or a topic (on the alert ntfy server, else ntfy.sh)
  */
 const crypto = require('crypto');
 const os = require('os');
@@ -28,8 +31,18 @@ class Notifier {
       { id: 'all', label: this.host.t('All alert channels'), ready: true },
     ];
   }
-  async send(channel, { event = 'rule', title, text = '', kind = 'info', url = null, attachment = null } = {}) {
-    const a = this.alerts();
+  /** ntfy target: full address, or a topic on the server of the alert address (else ntfy.sh) */
+  ntfyUrl(to) {
+    if (/^https?:\/\//.test(to)) return to;
+    let base = 'https://ntfy.sh';
+    try { const a = String(this.alerts().ntfy || ''); if (/^https?:\/\//.test(a)) base = new URL(a).origin; } catch { /* ntfy.sh */ }
+    return `${base}/${encodeURIComponent(to)}`;
+  }
+  async send(channel, { event = 'rule', title, text = '', kind = 'info', url = null, attachment = null } = {}, { to = null } = {}) {
+    const a = { ...this.alerts() };
+    if (to && channel === 'discord') a.discord = to;
+    if (to && channel === 'ntfy') a.ntfy = this.ntfyUrl(to);
+    if (to && channel === 'mail') a.email = to;
     const t = String(title || 'Office').slice(0, 200); const body = String(text || '').slice(0, 3000);
     const hostName = os.hostname();
     if (channel === 'hostwerk' || !channel) { this.host.notifications.notify(event, { title: t, text: body.slice(0, 400), kind, url: url || '/ext/office' }); return { hostwerk: true }; }
@@ -54,24 +67,36 @@ class Notifier {
       return { ntfy: true };
     }
     if (channel === 'mail') {
-      const to = String(a.email || '');
-      if (!/^[^\s@]+@[^\s@]+$/.test(to)) throw Object.assign(new Error('No e-mail address is set up (Hostwerk → Live → Alerts).'), { status: 409 });
+      const list = String(a.email || '').split(/[\s,;]+/).filter(Boolean).slice(0, 20);
+      if (!list.length || !list.every((x) => /^[^\s@]+@[^\s@]+$/.test(x))) throw Object.assign(new Error('No e-mail address is set up (Hostwerk → Live → Alerts).'), { status: 409 });
       const rel = this.relay();
-      if (!attachment || !rel.host) {
+      if (!attachment) {
         const nm = this.host.core('notifymail');
-        return { mail: await nm.sendNotice(this.ctx, { to, subject: `[Hostwerk] ${t}`, text: `${body}\n\n-- Hostwerk Office (${hostName})` }) };
+        for (const one of list) await nm.sendNotice(this.ctx, { to: one, subject: `[Hostwerk] ${t}`, text: `${body}\n\n-- Hostwerk Office (${hostName})` });
+        return { mail: true };
       }
-      const from = rel.from || rel.user;
-      const bnd = `----hw${crypto.randomBytes(8).toString('hex')}`;
-      const raw = [`From: Hostwerk <${from}>`, `To: ${to}`, `Subject: ${b64h(`[Hostwerk] ${t}`)}`, `Date: ${new Date().toUTCString()}`, `Message-ID: <${crypto.randomUUID()}@hostwerk>`, 'MIME-Version: 1.0', `Content-Type: multipart/mixed; boundary="${bnd}"`, '',
-        `--${bnd}`, 'Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', Buffer.from(`${body}\n\n-- Hostwerk Office (${hostName})`).toString('base64').replace(/.{76}/g, '$&\r\n'),
-        `--${bnd}`, `Content-Type: ${attachment.type || 'application/octet-stream'}; name="${b64h(attachment.name)}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${b64h(attachment.name)}"`, '', attachment.data.toString('base64').replace(/.{76}/g, '$&\r\n'),
-        `--${bnd}--`, ''].join('\r\n');
-      const smtp = this.host.core('smtp-client'); const sec = this.host.core('secrets');
-      await smtp.sendRaw({ host: rel.host, port: Number(rel.port) || 587, secure: !!rel.secure, user: rel.user, pass: sec.open(rel.pass), from, to, raw });
-      return { mail: true };
+      // with an attachment: through the relay (E-mail → Forwarding), else into Hostwerk's own mail catcher
+      const viaRelay = !!rel.host;
+      const from = viaRelay ? rel.from || rel.user : 'hostwerk@localhost';
+      const smtp = this.host.core('smtp-client');
+      for (const one of list) {
+        const raw = this.mime({ from, to: one, title: t, body: `${body}\n\n-- Hostwerk Office (${hostName})`, attachment, internal: !viaRelay });
+        if (viaRelay) await smtp.sendRaw({ host: rel.host, port: Number(rel.port) || 587, secure: !!rel.secure, user: rel.user, pass: this.host.core('secrets').open(rel.pass), from, to: one, raw });
+        else await smtp.sendRaw({ host: '127.0.0.1', port: this.ctx.services.mail.cfg.smtpPort, from, to: one, raw, insecure: true });
+      }
+      return { mail: true, relay: viaRelay };
     }
     throw Object.assign(new Error('Unknown channel'), { status: 400 });
+  }
+  /** MIME message with one attachment */
+  mime({ from, to, title, body, attachment, internal }) {
+    const bnd = `----hw${crypto.randomBytes(8).toString('hex')}`;
+    const t = title;
+    const raw = [`From: Hostwerk <${from}>`, `To: ${to}`, `Subject: ${b64h(`[Hostwerk] ${t}`)}`, `Date: ${new Date().toUTCString()}`, `Message-ID: <${crypto.randomUUID()}@hostwerk>`, 'MIME-Version: 1.0', ...(internal ? ['X-Hostwerk-Internal: 1'] : []), `Content-Type: multipart/mixed; boundary="${bnd}"`, '',
+      `--${bnd}`, 'Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', Buffer.from(body).toString('base64').replace(/.{76}/g, '$&\r\n'),
+      `--${bnd}`, `Content-Type: ${attachment.type || 'application/octet-stream'}; name="${b64h(attachment.name)}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${b64h(attachment.name)}"`, '', attachment.data.toString('base64').replace(/.{76}/g, '$&\r\n'),
+      `--${bnd}--`, ''].join('\r\n');
+    return raw;
   }
 }
 

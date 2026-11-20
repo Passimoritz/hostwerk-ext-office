@@ -29,7 +29,7 @@ import { keyLabel } from '../editors/_shared/keys.js';
 import { FileIcon, Thumb, Keep, Raw, Highlight, fmtWhen, useDebounced } from './common';
 import { settingsNow, useChanged, useOfficeStatus, loadSettings, changed } from './store';
 import { convertTargets, defaultExt, defaultBaseName, dirname, basename, toQuery } from './util';
-import { LIB_ROOT, canon, openEditor, filesRoute, createFile, convertEntry, openInDesktop, toggleFavorite, saveAsTemplate, restoreTrash, purgeTrash, emptyTrash, uploadFiles } from './ops';
+import { LIB_ROOT, canon, openEditor, filesRoute, createFile, newFromOwnTemplate, convertEntry, openInDesktop, toggleFavorite, saveAsTemplate, restoreTrash, purgeTrash, emptyTrash, uploadFiles } from './ops';
 import { NewDialog, ShareDialog, InfoDialog, TagsDialog, VersionsSheet, ConvertDialog, TemplateCard } from './dialogs';
 import { EngineDialogHost, FullEditorDialogHost, ensureFullEditor } from './engine';
 import { DefaultAppHint, checkOsNotice } from './osCard';
@@ -240,6 +240,13 @@ export function OfficeSection({ ctx }) {
   useEffect(() => { if (focusSearch && searchRef.current) { focusSearch = false; searchRef.current.focus(); } }, []);
   const where = { root: LIB_ROOT, dir };
   const openE = useCallback((e) => openEditor(e, { back: filesRoute(e) }), []);
+  // own template: ask for the name, create the file in this folder and open it (no detour through the New dialog)
+  const tplBusy = useRef(false);
+  const fromTemplate = (x) => {
+    if (tplBusy.current) return; // click + double click: one name dialog
+    tplBusy.current = true;
+    newFromOwnTemplate(x, { root: null, dir }).then((e) => { if (e) { refreshFiles(); openE(e); } }, (er) => toast.error(er)).finally(() => { tplBusy.current = false; });
+  };
   const isFavNow = (e) => { const k = `${e.root || ''}|${e.path}`; return k in favs ? favs[k] : !!e.favorite; };
   const toggleFav = async (e) => {
     const k = `${e.root || ''}|${e.path}`;
@@ -250,7 +257,7 @@ export function OfficeSection({ ctx }) {
   const menu = (ev, e) => {
     ev.preventDefault();
     if (view === 'trash' && !hits) { contextMenu(ev, trItems([{ label: 'Restore', icon: RotateCcw, onClick: run(() => restoreTrash([e])) }, '-', { label: 'Delete forever …', icon: Trash2, danger: true, onClick: run(() => purgeTrash([e])) }])); return; }
-    if (e.template) { contextMenu(ev, trItems([{ label: 'New from this template', icon: FilePlus2, onClick: () => openDialog({ type: 'new', kind: e.kind || (FORMATS[e.ext] || {}).kind || 'docs', gallery: true, ...where }) }])); return; }
+    if (e.template) { contextMenu(ev, trItems([{ label: 'New from this template …', icon: FilePlus2, onClick: () => fromTemplate(e) }, { label: 'More templates and formats …', icon: LayoutTemplate, onClick: () => openDialog({ type: 'new', kind: e.kind || (FORMATS[e.ext] || {}).kind || 'docs', gallery: true, ...where }) }])); return; }
     const fe = { root: e.root, path: e.path, name: e.name };
     contextMenu(ev, trItems([
       { label: 'Open', icon: Pencil, hint: 'Enter', onClick: () => openE(e) },
@@ -343,7 +350,7 @@ export function OfficeSection({ ctx }) {
           {list.length > shown.length && <div className="of-shell-center row-tight"><Btn className="sm ghost" onClick={() => setMore((m) => m + 1)}>{t('Show more ({n})', { n: list.length - shown.length })}</Btn></div>}
         </>
       ) : view === 'templates' && !hits ? (
-        <div className="of-shell-tpls is-wide">{shown.map((x) => <TemplateCard key={x.id} kind={x.kind || (FORMATS[x.ext] || {}).kind || 'docs'} ext={x.ext} name={x.name} cat={x.category || t('My templates')} own on={false} onPick={() => openDialog({ type: 'new', kind: x.kind || 'docs', gallery: true, ...where })} onOpen={() => openDialog({ type: 'new', kind: x.kind || 'docs', gallery: true, ...where })} />)}</div>
+        <div className="of-shell-tpls is-wide">{shown.map((x) => <TemplateCard key={x.id} kind={x.kind || (FORMATS[x.ext] || {}).kind || 'docs'} ext={x.ext} name={x.name} cat={x.category || t('My templates')} own on={false} onPick={() => fromTemplate(x)} onOpen={() => fromTemplate(x)} onMenu={(ev) => menu(ev, x)} />)}</div>
       ) : (
         <VirtualRows items={shown} height={hits ? 58 : 44} render={(e) => (
           <li key={`${e.root || ''}|${e.id || e.path}`} className="of-shell-row is-click" tabIndex={0} style={{ height: hits ? 58 : 44 }}

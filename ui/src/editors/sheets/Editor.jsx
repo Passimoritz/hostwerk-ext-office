@@ -25,6 +25,7 @@ import { isErr } from './formula/errors.js';
 import { REF_COLORS } from './render.js';
 import { axesOf } from './layout.js';
 import { resolveChartData, PALETTE } from './chartData.js';
+import { recalcDataTables } from './whatif.js';
 import { openBytes, saveBytes, bookToHTML, csvToBook, OOXML, CSV } from './io/formats.js';
 import { writeXlsx, vbaProjectBytes } from './io/xlsx.js';
 import { readVba } from './io/vba.js';
@@ -120,6 +121,8 @@ export function Editor({ file, bytes, readOnly = false, settings = {}, host = {}
   useEffect(() => {
     if (!book) return undefined;
     return book.on((info) => {
+      // what-if data tables follow their inputs (results are calculated values: no undo step)
+      if (!(info && info.viewOnly) && book.sheets.some((s) => s.dataTables && s.dataTables.length)) { try { recalcDataTables(book); } catch { /* keep the stored results */ } }
       setVer((v) => v + 1);
       if (!loading.current && !readOnly && !(info && info.viewOnly) && host.dirty && !(plusRef.current && plusRef.current.follower())) host.dirty(true);
     });

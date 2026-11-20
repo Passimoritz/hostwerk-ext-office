@@ -17,7 +17,8 @@ import { toInternal, toDisplay } from '../formula/parser.js';
 import { toR1C1, fromR1C1 } from '../formula/r1c1.js';
 import { PivotPanel, SparklineDialog, FormDialog, AiDialog, CalcOptionsDialog, TableStyleGrid } from './dialogs.jsx';
 import { ViewBar, KanbanView, CalendarView, GalleryView, sheetList } from './Views.jsx';
-import { ObjBox, ShapeSVG, SlicerBox } from './objects.jsx';
+import { ObjBox, ShapeSVG, SlicerBox, ControlBox } from './objects.jsx';
+import { controlItems, controlState, applyControl } from '../formcontrols.js';
 import { startCollab } from './collab.js';
 
 const K = (r, c) => r * MAXC + c;
@@ -447,7 +448,7 @@ export function usePlus(ctx) {
       return [...new Set(src.records.map((r) => r[i]))].sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true })).map((v) => ({ v, on: !ex.has(String(v)) }));
     };
     return <>
-      {(sheet.shapes || []).map((s) => { const rc = objRect(s.anchor); return (
+      {(sheet.shapes || []).filter((s) => !s._ctl).map((s) => { const rc = objRect(s.anchor); return (
         <ObjBox key={s.id} obj={s} rect={rc} z={z} selected={objSel && objSel.id === s.id} readOnly={readOnly} label={t('Shape')}
           onSelect={() => setObjSel({ kind: 'shape', id: s.id })} onChange={(a) => updObj('shape', s.id, { anchor: ctx.normAnchor(a) })}
           onOpen={async () => { if (readOnly) return; const v = await promptDialog({ title: t('Text of the shape'), value: s.text || '', multiline: true, confirm: t('OK') }).catch(() => null); if (v != null) updObj('shape', s.id, { text: v }, 'Shape text'); }}
@@ -460,6 +461,7 @@ export function usePlus(ctx) {
           onMenu={(at) => ctx.showMenu(at, [{ label: t('Bring to front'), onClick: () => orderObj('image', im.id, true) }, { label: t('Send to back'), onClick: () => orderObj('image', im.id, false) }, { label: t('Reset size'), onClick: () => { const img = new Image(); img.onload = () => updObj('image', im.id, { anchor: { ...im.anchor, w: img.width, h: img.height } }, 'Size'); img.src = im.src; } }, '-', { label: t('Delete'), danger: true, kbd: 'Del', disabled: !editable, onClick: () => delObj('image', im.id) }])}>
           <img src={im.src} alt={im.alt || ''} draggable={false} />
         </ObjBox>); })}
+      {(sheet.controls || []).map((c) => { const st = controlState(book, sheet, c); return <ControlBox key={c.id} ctl={st} rect={objRect(c.anchor)} z={z} readOnly={readOnly} items={c.type === 'dropdown' || c.type === 'list' ? controlItems(book, sheet, c) : []} onAct={(a) => { if (guard && !guard()) return; applyControl(book, sheet, c.id, a, t('Form control')); }} />; })}
       {(sheet.slicers || []).map((s) => <div key={s.id} className="of-sheet-obj is-slicer" style={objRect(s.anchor)} title={t('Slicer – filter with it in Excel')}><SlicerBox slicer={s} items={slicerItems(s)} /></div>)}
     </>;
   };

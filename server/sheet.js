@@ -7,7 +7,10 @@
  *   readBook(buf, ext, { maxCells })  → { sheets: [{ name, cells: { A1: value } , rows }] }   (cached formula results)
  *   cellValue(book, sheet, 'B2')      → value | null
  *   rangeValues(book, sheet, 'A1:B3') → [values]
- *   appendRow(buf, ext, { sheet, values: [..] }) → { data: Buffer, row }   (values: string | number | boolean | null)
+ *   appendRow(buf, ext, { sheet, values: [..] }) → { data: Buffer, row }   (values: string | number | boolean | null |
+ *                                     { $date: 'YYYY-MM-DD[THH:MM:SS]' } – a real date/time cell: xlsx serial + date format,
+ *                                     ODS office:date-value + date style, CSV ISO text)
+ *   dateValue(v) · localStamp(date) · dateText(v)
  *   colName(0) → 'A' · parseRef('AB12') → { c: 27, r: 11 }
  */
 const ZP = require('./zippatch');
@@ -146,7 +149,40 @@ function rangeValues(book, sheet, range) {
 }
 
 /* ---------------- append ---------------- */
-const clean = (v) => (v == null ? '' : typeof v === 'number' || typeof v === 'boolean' ? v : String(v).slice(0, 32000));
+/** { $date: 'YYYY-MM-DD' | 'YYYY-MM-DDTHH:MM[:SS]' } (local time, no zone) → { y, mo, d, h, mi, s, time } or null */
+function dateValue(v) {
+  if (!v || typeof v !== 'object' || typeof v.$date !== 'string') return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?$/.exec(v.$date.trim());
+  if (!m) return null;
+  const [y, mo, d, h, mi, s] = [m[1], m[2], m[3], m[4] || 0, m[5] || 0, m[6] || 0].map(Number);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59 || s > 59) return null;
+  return { y, mo, d, h, mi, s, time: m[4] != null };
+}
+const p2 = (n) => String(n).padStart(2, '0');
+/** the local time of a Date as { $date } (forms: "Submitted at") */
+const localStamp = (t = new Date()) => ({ $date: `${t.getFullYear()}-${p2(t.getMonth() + 1)}-${p2(t.getDate())}T${p2(t.getHours())}:${p2(t.getMinutes())}:${p2(t.getSeconds())}` });
+/** ISO text of a date value (CSV, notifications, pending rows): 2026-11-20 14:03:05 / 2026-11-20 – other values as text */
+const dateText = (v) => { const d = dateValue(v); return d ? `${d.y}-${p2(d.mo)}-${p2(d.d)}${d.time ? ` ${p2(d.h)}:${p2(d.mi)}:${p2(d.s)}` : ''}` : v == null ? '' : typeof v === 'object' ? '' : String(v); };
+/** Excel serial number (1900 system, or 1904 when the workbook says so) */
+function excelSerial(d, date1904 = false) {
+  const days = (Date.UTC(d.y, d.mo - 1, d.d) - (date1904 ? Date.UTC(1904, 0, 1) : Date.UTC(1899, 11, 30))) / 86400000;
+  return days + (d.h * 3600 + d.mi * 60 + d.s) / 86400;
+}
+const clean = (v) => (v == null ? '' : typeof v === 'number' || typeof v === 'boolean' ? v : dateValue(v) ? v : typeof v === 'object' ? '' : String(v).slice(0, 32000));
+
+/** the cellXfs index of a date (numFmt 14) / date-time (numFmt 22) style – reused or added to styles.xml */
+function xlsxDateStyle(styles, time) {
+  const fmt = time ? 22 : 14;
+  const m = /<cellXfs\b([^>]*)>([\s\S]*?)<\/cellXfs>/.exec(styles);
+  if (!m) return null;
+  const xfs = [...m[2].matchAll(/<xf\b[^>]*?(?:\/>|>[\s\S]*?<\/xf>)/g)].map((x) => x[0]);
+  const found = xfs.findIndex((x) => new RegExp(`\\bnumFmtId="${fmt}"`).test(x) && /\bfontId="0"/.test(x) && /\bfillId="0"/.test(x) && /\bborderId="0"/.test(x) && !/<alignment|<protection/.test(x));
+  if (found >= 0) return { index: found, styles };
+  const xf = `<xf numFmtId="${fmt}" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>`;
+  const open = /\bcount="\d+"/.test(m[1]) ? m[1].replace(/\bcount="\d+"/, `count="${xfs.length + 1}"`) : `${m[1]} count="${xfs.length + 1}"`;
+  return { index: xfs.length, styles: `${styles.slice(0, m.index)}<cellXfs${open}>${m[2]}${xf}</cellXfs>${styles.slice(m.index + m[0].length)}` };
+}
+const MIN_STYLES = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
 
 function appendXlsx(buf, sheetName, values) {
   const z = zipMap(buf);
@@ -157,9 +193,36 @@ function appendXlsx(buf, sheetName, values) {
   let last = 0;
   for (const m of xml.matchAll(/<row\b[^>]*\br="(\d+)"[^>]*?(\/>|>([\s\S]*?)<\/row>)/g)) if (m[2] !== '/>' && /<c\b/.test(m[3] || '')) last = Math.max(last, Number(m[1]));
   const r = last + 1;
+  const changes = {};
+  // date/time values: a real serial number with a date format (styles.xml gets the style once)
+  const styleOf = {};
+  if (values.some((v) => dateValue(v))) {
+    const wbx = part(z, 'xl/workbook.xml') || '';
+    styleOf.d1904 = /<workbookPr\b[^>]*\bdate1904="(1|true)"/.test(wbx);
+    const sp = [...rels(z, 'xl/workbook.xml').values()].find((t) => /\/styles$/.test(t.type));
+    let stylesName = sp ? sp.target : null;
+    let styles = stylesName ? part(z, stylesName) : null;
+    const before = styles;
+    if (!styles) {
+      // no styles part at all (rare, hand-made files): add a minimal one
+      stylesName = 'xl/styles.xml'; styles = MIN_STYLES;
+      const rp = 'xl/_rels/workbook.xml.rels'; const rx = part(z, rp);
+      if (rx) changes[rp] = rx.replace(/<\/Relationships>/, '<Relationship Id="rIdOfStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>');
+      const ct = part(z, '[Content_Types].xml');
+      if (ct && !/PartName="\/xl\/styles\.xml"/.test(ct)) changes['[Content_Types].xml'] = ct.replace(/<\/Types>/, '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>');
+    }
+    for (const time of [true, false]) {
+      if (!values.some((v) => { const d = dateValue(v); return d && d.time === time; })) continue;
+      const res = xlsxDateStyle(styles, time);
+      if (res) { styles = res.styles; styleOf[time] = res.index; }
+    }
+    if (styles !== before) changes[stylesName] = styles;
+  }
   const cells = values.map((v0, i) => {
     const v = clean(v0); const ref = `${colName(i)}${r}`;
     if (v === '') return '';
+    const dv = dateValue(v);
+    if (dv) { const sIdx = styleOf[dv.time]; return `<c r="${ref}"${sIdx != null ? ` s="${sIdx}"` : ''}><v>${Math.round(excelSerial(dv, styleOf.d1904) * 1e10) / 1e10}</v></c>`; }
     if (typeof v === 'number' && Number.isFinite(v)) return `<c r="${ref}"><v>${v}</v></c>`;
     if (typeof v === 'boolean') return `<c r="${ref}" t="b"><v>${v ? 1 : 0}</v></c>`;
     return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${xmlText(v)}</t></is></c>`;
@@ -174,9 +237,22 @@ function appendXlsx(buf, sheetName, values) {
     else if (/<sheetData\s*\/>/.test(xml)) xml = xml.replace(/<sheetData\s*\/>/, `<sheetData>${rowXml}</sheetData>`);
     else xml = xml.replace(/<\/sheetData>/, `${rowXml}</sheetData>`);
   }
+  // date columns without an own width: wide enough for "20.11.2026 14:03" (Excel shows ##### otherwise)
+  const dateCols = values.map((v, i) => { const d = dateValue(v); return d ? { i, w: d.time ? 17 : 11 } : null; }).filter(Boolean);
+  if (dateCols.length) {
+    const cols = /<cols>([\s\S]*?)<\/cols>/.exec(xml);
+    const ranges = cols ? [...cols[1].matchAll(/<col\b[^>]*\bmin="(\d+)"[^>]*\bmax="(\d+)"/g)].map((m) => [Number(m[1]), Number(m[2])]) : [];
+    const add = dateCols.filter(({ i }) => !ranges.some(([a, b]) => i + 1 >= a && i + 1 <= b)).map(({ i, w }) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`);
+    if (add.length) {
+      if (cols) {
+        const all = [...cols[1].matchAll(/<col\b[^>]*\/>/g)].map((m) => m[0]).concat(add).sort((a, b) => Number(/min="(\d+)"/.exec(a)[1]) - Number(/min="(\d+)"/.exec(b)[1]));
+        xml = xml.replace(cols[0], `<cols>${all.join('')}</cols>`);
+      } else xml = xml.replace(/<sheetData\b/, `<cols>${add.join('')}</cols><sheetData`);
+    }
+  }
   // dimension
   xml = xml.replace(/<dimension\b[^>]*\bref="([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?"/, (m, c1, r1, c2, r2) => { const endC = c2 || c1; const endR = Math.max(Number(r2 || r1), r); const wide = colName(Math.max(values.length - 1, parseRef(`${endC}1`).c)); return m.replace(/ref="[^"]*"/, `ref="${c1}${r1}:${wide}${endR}"`); });
-  const changes = { [s.part]: xml };
+  changes[s.part] = xml;
   // tables (ListObjects) that end on the row above grow by one row
   for (const [, t] of rels(z, s.part)) {
     if (!/\/table$/.test(t.type)) continue;
@@ -205,9 +281,34 @@ function appendOds(buf, sheetName, values) {
     if (/<text:p|office:value=/.test(row[2] || '')) { insertAt = row.index + row[0].length; lastRow = rowNo; }
   }
   if (insertAt < 0) { const h = /<table:table-row\b/.exec(body); insertAt = h ? h.index : body.length; }
+  // date/time values: office:date-value + a date style in the automatic styles (added once)
+  const dstyle = {};
+  for (const time of [true, false]) {
+    if (!values.some((v) => { const d = dateValue(v); return d && d.time === time; })) continue;
+    const ce = time ? 'ceOfDateTime' : 'ceOfDate'; const ns = time ? 'NOfDateTime' : 'NOfDate';
+    if (!content.includes(`style:name="${ce}"`)) {
+      const sep = (x) => `<number:text>${x}</number:text>`;
+      const num = `<number:date-style style:name="${ns}"><number:day number:style="long"/>${sep('.')}<number:month number:style="long"/>${sep('.')}<number:year number:style="long"/>${time ? `${sep(' ')}<number:hours number:style="long"/>${sep(':')}<number:minutes number:style="long"/>${sep(':')}<number:seconds number:style="long"/>` : ''}</number:date-style>`;
+      const st = `${num}<style:style style:name="${ce}" style:family="table-cell" style:data-style-name="${ns}"/>`;
+      if (/<office:automatic-styles\s*\/>/.test(content)) content = content.replace(/<office:automatic-styles\s*\/>/, `<office:automatic-styles>${st}</office:automatic-styles>`);
+      else if (/<\/office:automatic-styles>/.test(content)) content = content.replace(/<\/office:automatic-styles>/, `${st}</office:automatic-styles>`);
+      else content = content.replace(/<office:body>/, `<office:automatic-styles>${st}</office:automatic-styles><office:body>`);
+      if (!/xmlns:number=/.test(content)) content = content.replace(/<office:document-content\b/, '<office:document-content xmlns:number="urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0"');
+      if (!/xmlns:style=/.test(content)) content = content.replace(/<office:document-content\b/, '<office:document-content xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"');
+    }
+    dstyle[time] = ce;
+  }
+  // the table again (the styles above moved it)
+  const t2 = [...content.matchAll(/<table:table\b([^>]*)>([\s\S]*?)<\/table:table>/g)][tables.indexOf(t)] || t;
   const cells = values.map((v0) => {
     const v = clean(v0);
     if (v === '') return '<table:table-cell/>';
+    const dv = dateValue(v);
+    if (dv) {
+      const iso = `${dv.y}-${p2(dv.mo)}-${p2(dv.d)}${dv.time ? `T${p2(dv.h)}:${p2(dv.mi)}:${p2(dv.s)}` : ''}`;
+      const shown = `${p2(dv.d)}.${p2(dv.mo)}.${dv.y}${dv.time ? ` ${p2(dv.h)}:${p2(dv.mi)}:${p2(dv.s)}` : ''}`;
+      return `<table:table-cell table:style-name="${dstyle[dv.time]}" office:value-type="date" office:date-value="${iso}"><text:p>${shown}</text:p></table:table-cell>`;
+    }
     if (typeof v === 'number' && Number.isFinite(v)) return `<table:table-cell office:value-type="float" office:value="${v}"><text:p>${v}</text:p></table:table-cell>`;
     if (typeof v === 'boolean') return `<table:table-cell office:value-type="boolean" office:boolean-value="${v}"><text:p>${v ? 'TRUE' : 'FALSE'}</text:p></table:table-cell>`;
     return `<table:table-cell office:value-type="string"><text:p>${xmlText(v)}</text:p></table:table-cell>`;
@@ -215,7 +316,7 @@ function appendOds(buf, sheetName, values) {
   let nb = `${body.slice(0, insertAt)}<table:table-row>${cells}</table:table-row>${body.slice(insertAt)}`;
   // one repeated empty row after the data shrinks by one, so the sheet keeps its size
   nb = nb.replace(/(<table:table-row>[\s\S]*?<\/table:table-row>)(<table:table-row\b[^>]*table:number-rows-repeated=")(\d+)"/, (m, a, b, n) => (Number(n) > 1 ? `${a}${b}${Number(n) - 1}"` : m));
-  content = content.slice(0, t.index) + t[0].replace(body, () => nb) + content.slice(t.index + t[0].length);
+  content = content.slice(0, t2.index) + t2[0].replace(body, () => nb) + content.slice(t2.index + t2[0].length);
   return { data: ZP.patchZip(buf, { 'content.xml': content }, { first: ['mimetype'] }), row: lastRow + 1 };
 }
 
@@ -224,7 +325,7 @@ function appendCsv(buf, values, ext) {
   const bom = buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf;
   const d = ext === 'tsv' ? '\t' : sniffDelimiter(text.split(/\r?\n/, 1)[0] || '');
   const nl = /\r\n/.test(text) ? '\r\n' : '\n';
-  const q = (v0) => { let v = String(clean(v0)); if (/^[=+\-@\t\r]/.test(v) && typeof v0 !== 'number') v = `'${v}`; return /["\r\n]/.test(v) || v.includes(d) ? `"${v.replace(/"/g, '""')}"` : v; };
+  const q = (v0) => { let v = dateValue(v0) ? dateText(v0) : String(clean(v0)); if (/^[=+\-@\t\r]/.test(v) && typeof v0 !== 'number') v = `'${v}`; return /["\r\n]/.test(v) || v.includes(d) ? `"${v.replace(/"/g, '""')}"` : v; };
   const line = values.map(q).join(d);
   const out = `${text}${text && !/\r?\n$/.test(text) ? nl : ''}${line}${nl}`;
   const rows = parseCsv(text, d).filter((r) => r.some((x) => x !== '')).length;
@@ -240,4 +341,4 @@ function appendRow(buf, ext, { sheet = '', values = [] } = {}) {
   throw Object.assign(new Error('Forms work with xlsx, ods and csv files.'), { status: 415 });
 }
 
-module.exports = { readBook, cellValue, rangeValues, appendRow, colName, parseRef, parseCsv, sheetOf, xmlText, unxml, textOf, rels, zipMap, part };
+module.exports = { dateValue, localStamp, dateText, excelSerial, readBook, cellValue, rangeValues, appendRow, colName, parseRef, parseCsv, sheetOf, xmlText, unxml, textOf, rels, zipMap, part };
