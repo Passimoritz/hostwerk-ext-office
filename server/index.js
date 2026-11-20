@@ -27,6 +27,7 @@ const { ZipWriter, readZip } = require('./zip');
 const { routes } = require('./routes');
 const { extOf, FORMATS } = require('./formats');
 const { OsReg } = require('./osreg');
+const { OsDefault } = require('./osdefault');
 const V11 = require('./v11');
 const { routes11 } = require('./routes11');
 
@@ -165,7 +166,7 @@ function activate(host) {
     if (!(typeof host.supports === 'function' && host.supports('files.roots') && host.files)) return null;
     try { return host.files.addRoot({ id: LIB_ROOT, label: host.t('Office documents'), path: settings().libraryDir, icon: 'file', create: true }); } catch (e) { host.log('files.addRoot', e.message); return null; }
   }
-  const osreg = new OsReg({ host, file: file('os.json'), settings, log: host.log });
+  const osreg = new OsReg({ host, file: file('os.json'), settings, log: host.log, osdefault: new OsDefault({ dir: file('openwith') }) });
 
   const o = { settings, saveSettings, library, meta, versions, trash, templates, tplStore, index, libs, converters, resetConverters, convert, plan, targetsFor: C.targets, engine, servers, drive, canWindow,
     frames: new Map(), secret, shareList, saveShares, countView, sharePdf, guard, hasDesktop, userName, linkBases, osreg, libRoot: () => `ext:${host.id || 'office'}:${LIB_ROOT}` };

@@ -2,7 +2,8 @@
 /*
  * Hostwerk under the system's "Open with" for office files (SDK 3.15, host.fileTypes – the core writes the registry /
  * .desktop file, never this module). Windows: per user, no admin; the default stays the user's choice – Windows 10/11
- * only lets the user pick it (Settings → Default apps), so "Make default" opens that page. Linux: .desktop file, the
+ * only lets the user pick it, so the card opens Windows' own "Open with" dialog per file type (osdefault.js) or
+ * Settings → Default apps; the real choice (UserChoiceLatest\ProgId …) is read by osdefault.js. Linux: .desktop file, the
  * default only on request (xdg-mime, with consent). macOS: not possible at runtime.
  *
  * Registered once per install/upgrade (marker = version + list of types in <data>/office-data/os.json); a registration
@@ -12,6 +13,7 @@
 const crypto = require('crypto');
 const { FORMATS } = require('./formats');
 const { readJson, writeJson } = require('./store');
+const { mergeChoices, KIND_EXT } = require('./osdefault');
 
 const REG_ID = 'office';
 const APP_NAME = 'Hostwerk Office';
@@ -58,8 +60,8 @@ function kindStates(types) {
 }
 
 class OsReg {
-  /** deps: { host, file (os.json), settings(), log } */
-  constructor({ host, file, settings, log = () => {} }) { this.host = host; this.file = file; this.settings = settings; this.log = log; this.busy = Promise.resolve(); }
+  /** deps: { host, file (os.json), settings(), log, osdefault (osdefault.js – Windows' state + dialogs; optional) } */
+  constructor({ host, file, settings, log = () => {}, osdefault = null }) { this.host = host; this.file = file; this.settings = settings; this.log = log; this.osd = osdefault; this.busy = Promise.resolve(); }
   get ft() { return this.host.fileTypes; }
   supported() { try { return typeof this.host.supports === 'function' && this.host.supports('fileTypes') && !!this.host.fileTypes; } catch { return false; } }
   enabled() { const s = this.settings(); return !(s && s.integrations && s.integrations.osOpenWith === false); }
@@ -81,7 +83,11 @@ class OsReg {
     let st = null;
     try { st = await this.ft.state(REG_ID); } catch (e) { st = { registered: false, types: [], code: e.code || null, reason: e.message }; }
     const code = st.code || (st.ok === false ? 'ENOTSUPPORTED' : null) || (m.lastError === 'EDEVBUILD' && !st.registered ? 'EDEVBUILD' : null);
-    return { ...base, code, dev: !!st.dev, registered: !!st.registered, stale: !!st.stale, kinds: kindStates(st.types), types: (st.types || []).map((x) => ({ ext: x.ext, kind: x.kind, registered: !!x.registered, isDefault: !!x.isDefault })) };
+    // Windows: read the user's choice ourselves too – the core (≤ 3.3.0) misses UserChoiceLatest\ProgId (Windows 11 24H2+)
+    let types = st.types || [];
+    if (this.osd && this.osd.win && types.length) { try { types = mergeChoices(types, await this.osd.choices()); } catch { /* core's answer */ } }
+    return { ...base, code, dev: !!st.dev, registered: !!st.registered, stale: !!st.stale, openWithDialog: !!(this.osd && this.osd.win), kindExt: KIND_EXT,
+      kinds: kindStates(types), types: types.map((x) => ({ ext: x.ext, kind: x.kind, registered: !!x.registered, isDefault: !!x.isDefault })) };
   }
 
   /** Register now (button or start). opts: { setDefault (Linux), notice (undefined = only the very first time) } → state() */
@@ -108,14 +114,32 @@ class OsReg {
       return this.state();
     });
   }
-  /** Windows: Settings → Default apps (the user picks Hostwerk there – Windows' rule). Linux: xdg-mime with consent. */
+  /**
+   * Windows: Settings → Default apps (the user picks Hostwerk there – Windows' rule). Opened by ourselves through
+   * ShellExecute: the core's openDefaultsSettings (≤ 3.3.0) hands the link to explorer.exe, which drops a ms-settings:
+   * link with a query – Settings did not move. Linux: xdg-mime with consent.
+   */
   async openDefaults() {
     if (!this.supported()) throw Object.assign(new Error(this.t('“Open with” needs the Hostwerk desktop app on Windows or Linux.')), { status: 409, code: 'ENODESKTOP' });
     if (process.platform === 'linux') { await this.register({ setDefault: true }); return { opened: false, linux: true, state: await this.state() }; }
     let st = await this.state();
     if (!st.registered) st = await this.register();
-    const r = await this.ft.openDefaultsSettings(REG_ID);
+    const r = this.osd && this.osd.win ? this.osd.openSettings(APP_NAME) : await this.ft.openDefaultsSettings(REG_ID);
     return { ...r, state: st };
+  }
+  /**
+   * Windows' own "How do you want to open this file?" for one kind (docs|sheets|slides|pdf) – the user picks Hostwerk
+   * Office → "Always". bytes = an empty file of that type (from the editor chunk), so "Just once" opens a real document.
+   */
+  async openWith(kind, bytes) {
+    if (!this.supported()) throw Object.assign(new Error(this.t('“Open with” needs the Hostwerk desktop app on Windows or Linux.')), { status: 409, code: 'ENODESKTOP' });
+    if (!this.osd || !this.osd.win) throw Object.assign(new Error(this.t('Only on Windows.')), { status: 409, code: 'ENOTWINDOWS' });
+    const ext = KIND_EXT[kind];
+    if (!ext) throw Object.assign(new Error('openWith: unknown kind'), { status: 400 });
+    let st = await this.state();
+    if (!st.registered) st = await this.register(); // Hostwerk Office must be in the list of the dialog
+    const r = this.osd.openWith(ext, bytes, this.t('Hostwerk Office sample'));
+    return { ...r, kind, state: st };
   }
   seen() { this.saveMarker({ notice: false }); return { ok: true }; }
 

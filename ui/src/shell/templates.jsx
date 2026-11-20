@@ -10,7 +10,7 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { LayoutTemplate, FilePlus2, Pencil, Star, StarOff, FolderOpen, Trash2, Plus, X, FolderInput, Check, Lock } from 'lucide-react';
-import { Modal, Btn, Field, Seg, Switch, Callout, Empty, Loading, SettingRow, PathInput, confirmDialog, promptDialog } from '@hostwerk/ui';
+import { Modal, Btn, Field, Seg, Switch, Callout, Empty, Loading, SettingRow, PathInput, InfoTip, confirmDialog, promptDialog } from '@hostwerk/ui';
 import { contextMenu } from '@hostwerk/kit';
 import { t } from '@hostwerk/i18n';
 import { office } from '../lib/api';
@@ -161,20 +161,24 @@ export function TemplatesPane({ v, set }) {
   const load = () => office.templates().then((r) => setInfo({ list: listOf(r), dir: r.dir || '', folders: r.folders || [] }), () => setInfo({ list: [], dir: '', folders: [] }));
   useEffect(() => { load(); office.templateFolders().then((r) => setSugg((r && r.folders) || []), () => setSugg([])); }, []);
   const folders = v('templates.folders') || [];
+  // the settings save themselves a moment after a change – then the backend knows the new folders
+  const folderKey = JSON.stringify(folders);
+  useEffect(() => { const h = setTimeout(load, 1800); return () => clearTimeout(h); }, [folderKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const addFolder = (p) => { const x = String(p || '').trim(); if (!x) return; if (!/^([a-zA-Z]:[\\/]|\/|\\\\)/.test(x)) { toast.error(t('Enter a full path, e.g. D:\\Documents\\Office.')); return; } if (!folders.some((f) => f.toLowerCase() === x.toLowerCase())) set('templates.folders')([...folders, x]); setAdd(''); };
   const byKind = useMemo(() => Object.fromEntries(APP_KINDS.map(([k]) => [k, ((info && info.list) || []).filter((x) => kindOfTpl(x) === k)])), [info]);
   const known = (p) => ((info && info.folders) || []).find((f) => f.path.toLowerCase() === String(p).toLowerCase());
   return <>
-    <div className="card"><div className="card-head"><LayoutTemplate size={16} className="of-shell-chead" aria-hidden="true" /><h3>My templates</h3></div><div className="card-body stack">
-      <Field label="Template folder" hint={t('Empty = the folder “Vorlagen” in the Office documents ({dir}). Sub folders become categories.', { dir: (info && info.dir) || '…' })}>
-        <PathInput mode="folder" title={t('Template folder')} value={v('templates.dir') || ''} onChange={set('templates.dir')} placeholder={(info && info.dir) || t('Vorlagen in the Office documents')} />
-      </Field>
-      <SettingRow title="“Save as template” saves" text="In the template folder it appears under “New”; next to the file it stays where you work.">
-        <Seg value={v('templates.saveTo') || 'folder'} onChange={set('templates.saveTo')} options={[{ id: 'folder', label: t('In the template folder') }, { id: 'next', label: t('Next to the file') }, { id: 'both', label: t('Both') }]} />
+    <div className="card of-set-card"><div className="card-head"><LayoutTemplate size={16} className="of-shell-chead" aria-hidden="true" /><h3>My templates</h3><InfoTip title={t('My templates')}>{t('Sub folders of the template folder become categories in the gallery.')}</InfoTip></div><div className="card-body">
+      <div className="of-set-field">
+        <label className="of-set-label">{t('Template folder')}</label>
+        <PathInput mode="folder" title={t('Template folder')} value={v('templates.dir') || ''} onChange={set('templates.dir')} placeholder={t('Folder “Vorlagen” in the Office documents')} />
+        <span className="tiny muted">{t('Empty = the folder “Vorlagen” in the Office documents.')}</span>
+      </div>
+      <SettingRow title="“Save as template” saves" text="In the template folder it appears under “New”.">
+        <div className="of-set-ctl"><Seg value={v('templates.saveTo') || 'folder'} onChange={set('templates.saveTo')} options={[{ id: 'folder', label: t('In the template folder') }, { id: 'next', label: t('Next to the file') }, { id: 'both', label: t('Both') }]} /></div>
       </SettingRow>
     </div></div>
-    <div className="card"><div className="card-head"><Star size={16} className="of-shell-chead" aria-hidden="true" /><h3>Default templates</h3></div><div className="card-body">
-      <p className="small muted of-shell-p">{t('Like Normal.dotm in Word: a new blank file starts from this template – its styles, fonts and page setup.')}</p>
+    <div className="card of-set-card"><div className="card-head"><Star size={16} className="of-shell-chead" aria-hidden="true" /><h3>Default templates</h3><InfoTip title={t('Default templates')}>{t('Like Normal.dotm in Word: a new blank file starts from this template – its styles, fonts and page setup.')}</InfoTip></div><div className="card-body">
       {APP_KINDS.map(([k, label]) => (
         <SettingRow key={k} title={t(label)}>
           <select className="input select of-shell-select" value={v(`templates.defaults.${k}`) || ''} onChange={(e) => set(`templates.defaults.${k}`)(e.target.value)} aria-label={t(label)}>
@@ -184,12 +188,11 @@ export function TemplatesPane({ v, set }) {
         </SettingRow>
       ))}
     </div></div>
-    <div className="card"><div className="card-head"><FolderInput size={16} className="of-shell-chead" aria-hidden="true" /><h3>Template folders of other apps</h3></div><div className="card-body stack">
-      <p className="small muted of-shell-p">{t('Templates in these folders appear in the gallery – used where they are (read-only, nothing is copied). E.g. Word’s personal templates, “Custom Office Templates” or LibreOffice’s template folder.')}</p>
+    <div className="card of-set-card"><div className="card-head"><FolderInput size={16} className="of-shell-chead" aria-hidden="true" /><h3>Template folders of other apps</h3><InfoTip title={t('Template folders of other apps')}>{t('Templates in these folders appear in the gallery – used where they are (read-only, nothing is copied). E.g. Word’s personal templates, “Custom Office Templates” or LibreOffice’s template folder.')}</InfoTip></div><div className="card-body stack of-set-tplbody">
       {folders.length > 0 && <ul className="of-shell-rows">{folders.map((p) => { const k = known(p); return (
         <li key={p} className="of-shell-row">
           <FolderOpen size={16} aria-hidden="true" />
-          <div className="grow of-shell-min0"><div className="small ellipsis mono"><Keep>{p}</Keep></div><div className="tiny muted">{k ? (k.exists ? t('{n} templates', { n: k.count }) : t('Folder not found')) : t('Save to apply')}</div></div>
+          <div className="grow of-shell-min0"><div className="small ellipsis mono"><Keep>{p}</Keep></div><div className="tiny muted">{k ? (k.exists ? t('{n} templates', { n: k.count }) : t('Folder not found')) : t('Checking …')}</div></div>
           <button type="button" className="btn ghost xs icon" title={t('Remove')} aria-label={t('Remove')} onClick={() => set('templates.folders')(folders.filter((x) => x !== p))}><X size={12} /></button>
         </li>); })}</ul>}
       <div className="row-tight">
@@ -199,12 +202,15 @@ export function TemplatesPane({ v, set }) {
       {!sugg ? <Loading inline /> : sugg.filter((x) => !folders.some((f) => f.toLowerCase() === x.path.toLowerCase())).length > 0 && (
         <div className="stack of-shell-gap-1">
           <span className="tiny muted">{t('Found on this computer:')}</span>
-          {sugg.filter((x) => !folders.some((f) => f.toLowerCase() === x.path.toLowerCase())).map((x) => (
-            <div key={x.path} className="row-tight of-shell-wrap">
-              <span className="small grow of-shell-min0"><b>{t(x.label)}</b> <span className="tiny muted mono ellipsis"><Keep>{x.path}</Keep></span> <span className="tiny muted">{t('{n} templates', { n: x.count })}</span></span>
-              <Btn className="xs" icon={Plus} onClick={() => addFolder(x.path)}>Add</Btn>
-            </div>
-          ))}
+          <ul className="of-shell-rows">
+            {sugg.filter((x) => !folders.some((f) => f.toLowerCase() === x.path.toLowerCase())).map((x) => (
+              <li key={x.path} className="of-shell-row">
+                <FolderOpen size={16} aria-hidden="true" />
+                <div className="grow of-shell-min0"><div className="small"><b>{t(x.label)}</b> <span className="tiny muted">· {t('{n} templates', { n: x.count })}</span></div><div className="tiny muted mono ellipsis" title={x.path}><Keep>{x.path}</Keep></div></div>
+                <Btn className="xs" icon={Plus} onClick={() => addFolder(x.path)}>Add</Btn>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
       {sugg && sugg.length === 0 && folders.length === 0 && <span className="tiny muted">{t('No template folders of Word or LibreOffice found on this computer.')}</span>}

@@ -89,6 +89,8 @@ function routes(host, o) {
   r.post('/office/os/register', async (req, res) => res.json(await o.osreg.register({ notice: false })));
   r.post('/office/os/unregister', async (req, res) => res.json(await o.osreg.unregister({ byUser: true })));
   r.post('/office/os/defaults', async (req, res) => res.json(await o.osreg.openDefaults()));
+  // Windows' "How do you want to open this file?" for one kind – body (raw, optional): an empty file of that type
+  r.post('/office/os/openwith', express.raw({ type: () => true, limit: '8mb' }), async (req, res) => res.json(await o.osreg.openWith(String(req.query.kind || ''), Buffer.isBuffer(req.body) ? req.body : null)));
   r.post('/office/os/seen', (req, res) => res.json(o.osreg.seen()));
   // live refresh: { type: 'office' } after every successful change (debounced)
   let bcTimer = null;

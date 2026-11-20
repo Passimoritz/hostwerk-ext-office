@@ -89,5 +89,41 @@ export function validateSettings(s) {
   if (lib && !/^([a-zA-Z]:[\\/]|\/|\\\\)/.test(lib)) err.libraryDir = { text: 'Enter a full path, e.g. D:\\Documents\\Office.' };
   return err;
 }
+/** Sections of the settings page (order = the list on the left) – label + one sentence (English, translated in the UI) */
+export const SETTING_GROUPS = [
+  { id: 'general', label: 'General', text: 'Saving, new files, language and what a click in Files opens.' },
+  { id: 'os', label: 'Default app', text: 'Open office files from Explorer and the desktop in Hostwerk.' },
+  { id: 'docs', label: 'Documents', text: 'Font, page and view of text documents.' },
+  { id: 'sheets', label: 'Spreadsheets', text: 'View, calculation, number formats and CSV.' },
+  { id: 'slides', label: 'Presentations', text: 'Slide size, design and presenting.' },
+  { id: 'pdf', label: 'PDF', text: 'How PDFs open and the name for signatures.' },
+  { id: 'templates', label: 'Templates', text: 'Your own templates and where they come from.' },
+  { id: 'converters', label: 'Converting & engine', text: 'Office engine, LibreOffice and Microsoft Office on this PC.' },
+  { id: 'fulleditor', label: 'Full editor', text: 'ONLYOFFICE Docs for 100 % compatible editing.' },
+  { id: 'google', label: 'Google Drive', text: 'Google Docs, Sheets and Slides in Office’s editors.' },
+  { id: 'sharing', label: 'Sharing', text: 'Read-only links for single files.' },
+  { id: 'storage', label: 'Storage & versions', text: 'Folder of the Office documents, trash, versions and backups.' },
+  { id: 'components', label: 'Components', text: 'Parts Office downloads when a file needs them.' },
+];
+/** The section a settings path belongs to (badge with the number of invalid fields) */
+export function groupOfPath(p) {
+  const s = String(p);
+  if (s === 'libraryDir' || /^general\.(trashDays|keepVersions|versionDays)$/.test(s)) return 'storage';
+  if (s === 'integrations.osOpenWith') return 'os';
+  if (s === 'integrations.defaultOpen') return 'general';
+  if (s.startsWith('integrations.google')) return 'google';
+  if (s.startsWith('integrations.')) return 'fulleditor';
+  const head = s.split('.')[0];
+  return SETTING_GROUPS.some((g) => g.id === head) ? head : 'general';
+}
+/** Typed values that are only saved when the field is left (a half-typed path must not move the library) */
+export const LAZY_PATHS = ['libraryDir', 'templates.dir','converters.libreoffice', 'integrations.onlyoffice.url', 'integrations.onlyoffice.secret', 'integrations.google.clientId', 'integrations.google.clientSecret'];
+/** "Reset section to defaults": the paths of each section (none = no reset button) */
+export const GROUP_RESET = {
+  general: ['general.autosave', 'general.autosaveSeconds', 'general.newFormat', 'general.author', 'general.spellcheck', 'general.language', 'general.confirmDelete', 'general.openFromFiles', 'general.recentCount', 'general.units', 'integrations.defaultOpen'],
+  docs: ['docs'], sheets: ['sheets'], slides: ['slides'], pdf: ['pdf'],
+  converters: ['converters'], sharing: ['sharing'],
+  storage: ['libraryDir', 'general.trashDays', 'general.keepVersions', 'general.versionDays'],
+};
 /** Is this integration set up? (URL entered) */
 export const integrationReady = (s, app) => !!String(getIn(s, `integrations.${app}.url`) || '').trim();

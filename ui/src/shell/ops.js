@@ -84,6 +84,14 @@ async function blankBytes(kind, ext) {
   e.code = 'NO_CHUNK';
   throw e;
 }
+/** An empty file of `kind` (docs|sheets|slides|pdf) in `ext` – for Windows' "Open with" sample file; null when none can be made */
+export async function sampleBytes(kind, ext) {
+  try {
+    const chunk = await loadEditor(kind);
+    if (chunk && typeof chunk.create === 'function') return await chunk.create({ ext, template: 'blank', settings: settingsNow() });
+  } catch { /* below */ }
+  try { return await blankBytes(kind, ext); } catch { return null; }
+}
 /**
  * Creates a file and returns its entry. template: { id, own } – own templates come from the backend, built-ins from the
  * chunk (create({ ext, template, settings })).

@@ -41,3 +41,26 @@ test('validateSettings', () => {
   assert.equal(integrationReady(setIn(ok, 'integrations.onlyoffice.url', 'https://oo'), 'onlyoffice'), true);
   assert.equal(integrationReady(ok, 'onlyoffice'), false);
 });
+
+// 1.3.1: sections of the settings page, which section a field belongs to, what saves only on leaving a field
+import { SETTING_GROUPS, groupOfPath, LAZY_PATHS, GROUP_RESET } from '../ui/src/shell/settingsModel.js';
+test('sections: unique ids with label + sentence; every validated field maps to an existing section', () => {
+  const ids = SETTING_GROUPS.map((g) => g.id);
+  assert.equal(new Set(ids).size, ids.length);
+  for (const g of SETTING_GROUPS) assert.ok(g.label && g.text && /\.$/.test(g.text), g.id);
+  assert.equal(ids[1], 'os', 'the default app right after General');
+  const bad = validateSettings(setIn(setIn(setIn(DEFAULT_SETTINGS, 'libraryDir', 'relative'), 'integrations.onlyoffice.url', 'x'), 'docs.margins.top', 999));
+  for (const p of Object.keys(bad)) assert.ok(ids.includes(groupOfPath(p)), p);
+  assert.equal(groupOfPath('libraryDir'), 'storage');
+  assert.equal(groupOfPath('general.trashDays'), 'storage');
+  assert.equal(groupOfPath('general.autosave'), 'general');
+  assert.equal(groupOfPath('integrations.onlyoffice.url'), 'fulleditor');
+  assert.equal(groupOfPath('integrations.google.clientId'), 'google');
+  assert.equal(groupOfPath('integrations.osOpenWith'), 'os');
+  assert.equal(groupOfPath('docs.margins.top'), 'docs');
+});
+test('lazy paths and reset lists only name real settings', () => {
+  for (const p of LAZY_PATHS) assert.notEqual(getIn(DEFAULT_SETTINGS, p), undefined, p);
+  assert.ok(LAZY_PATHS.includes('libraryDir'), 'a half-typed path never moves the library');
+  for (const [g, list] of Object.entries(GROUP_RESET)) { assert.ok(SETTING_GROUPS.some((x) => x.id === g), g); for (const p of list) assert.notEqual(getIn(DEFAULT_SETTINGS, p), undefined, p); }
+});

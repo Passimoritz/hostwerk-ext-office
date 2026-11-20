@@ -95,6 +95,11 @@ export const office = {
     const r = await check(await fetch(url('/encrypt/raw', { ...loc(f), mtime, force: force ? 1 : undefined }), { method: 'PUT', credentials: 'same-origin', headers: { 'content-type': 'application/octet-stream', ...(password ? { 'x-office-password': encodeURIComponent(password) } : {}) }, body: bytes }));
     return r.json(); // { ok, mtime, size, version }
   },
+  /** Windows' "How do you want to open this file?" for one kind; bytes = an empty file of its type (sample) → { opened, ext, state } */
+  async osOpenWith(kind, bytes) {
+    const r = await check(await fetch(url('/os/openwith', { kind }), { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/octet-stream' }, body: bytes || new Uint8Array() }));
+    return r.json();
+  },
   /** dir: library folder, or { root, dir } = a folder of Hostwerk's Files */
   async create(dir, name, bytes) {
     const where = dir && typeof dir === 'object' ? { root: dir.root, dir: dir.dir || '' } : { dir };
