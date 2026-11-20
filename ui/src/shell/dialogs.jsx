@@ -7,7 +7,7 @@ import { Modal, Btn, Seg, Field, Switch, Loading, Empty, Callout, toast, confirm
 import { t, pl } from '@hostwerk/i18n';
 import { get } from '@hostwerk/api';
 import { office } from '../lib/api';
-import { TEMPLATES, KINDS, FORMATS, extOf } from '../lib/formats';
+import { TEMPLATES, KINDS, FORMATS, extOf, DOC_OF } from '../lib/formats';
 import { formatChoices, defaultExt, defaultBaseName, validateName, ensureExt, uniqueName, crumbsOf, parseTags, shareExpiry, fmtBytes, COLORS, splitExt, convertTargets } from './util';
 import { FolderTree } from './tree';
 import { FileIcon, Thumb, Keep, Raw, fmtDateTime, fmtWhen, fmtTime, copyText, fmtNum, uiLang } from './common';
@@ -18,6 +18,7 @@ import { download } from '../lib/api';
 import { loadEditor, prefetchEditor } from '../lib/loader';
 import { templateThumb } from '../lib/thumbs';
 import { CHUNK_VERSION } from '../lib/version';
+import { OwnTemplateCard } from './templates';
 import { QrImage } from './features';
 const NEW_KINDS = ['docs', 'sheets', 'slides', 'pdf'];
 
@@ -51,27 +52,38 @@ export function NewDialog({ kind: startKind = 'docs', dir: startDir = '', root =
   const choices = formatChoices(kind, s.general.newFormat);
   const builtIn = TEMPLATES.filter((x) => x.kind === kind);
   const mine = (own || []).filter((x) => (x.kind || (FORMATS[x.ext] || {}).kind) === kind);
-  const finalExt = tpl.own ? ((mine.find((m) => m.id === tpl.id) || {}).ext || ext) : ext;
+  const ownExt = (x) => (x ? DOC_OF[x.ext] || x.ext : '');
+  const defTpl = ((s.templates || {}).defaults || {})[kind] ? (own || []).find((x) => x.id === s.templates.defaults[kind]) || null : null;
+  // the listed template the file is made of: the chosen own one, or the app's default template for "Blank" (Normal.dotm)
+  const tplOf = (tp) => (tp.own ? mine.find((m) => m.id === tp.id) || null : tp.id === 'blank' ? defTpl : null);
+  const extFor = (tp) => ownExt(tplOf(tp)) || ext;
+  const finalExt = extFor(tpl);
+  const fromTpl = tplOf(tpl);
   const fileName = ensureExt(name.trim(), finalExt);
   const nameErr = validateName(fileName);
   // live preview of the chosen template: the chunk builds it (built-in) or the server sends it (own)
-  const liveKey = `${kind}|${tpl.own ? 'o' : 'b'}:${tpl.id}|${finalExt}`;
+  const liveKey = `${kind}|${tpl.own ? 'o' : 'b'}:${tpl.id}|${finalExt}|${fromTpl ? fromTpl.id : ''}`;
   useEffect(() => {
     let alive = true;
     const h = setTimeout(async () => {
       try {
         let bytes;
-        if (tpl.own) bytes = await office.templateBytes(tpl.id);
+        if (fromTpl) bytes = (await office.templateDoc(fromTpl.id)).bytes;
         else { const c = await loadEditor(kind); if (!c || !c.create) return; bytes = await c.create({ ext: finalExt, template: tpl.id, settings: settingsNow() }); }
         if (alive) setLive({ key: liveKey, bytes });
       } catch { if (alive) setLive({ key: liveKey, bytes: null }); }
     }, 120);
     return () => { alive = false; clearTimeout(h); };
   }, [liveKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  const create = async () => {
+  /** over: a template picked by double-click (state is not updated yet) */
+  const create = async (over) => {
+    const tp = over && typeof over === 'object' && over.id && !over.nativeEvent ? over : tpl;
+    const e2 = extFor(tp);
+    const fn = ensureExt(name.trim(), e2, { replace: true });
+    if (validateName(fn)) return;
     setBusy(true); setErr(null);
     try {
-      const e = await createFile({ kind, ext: finalExt, name: dir === startDir ? uniqueName(fileName, siblings) : fileName, dir, root, template: tpl.own ? { id: tpl.id, own: true, ext: finalExt } : tpl });
+      const e = await createFile({ kind, ext: e2, name: dir === startDir ? uniqueName(fn, siblings) : fn, dir, root, template: tp.own ? { id: tp.id, own: true, ext: e2 } : tp });
       onCreated(e);
     } catch (e) { setErr(e.message || String(e)); setBusy(false); }
   };
@@ -91,9 +103,15 @@ export function NewDialog({ kind: startKind = 'docs', dir: startDir = '', root =
           <div className="of-shell-sec-title"><LayoutTemplate size={14} aria-hidden="true" /> Template</div>
           <div className="of-shell-tpls" role="listbox" aria-label={t('Template')}>
             {builtIn.map((x) => <TemplateCard key={`b:${x.id}`} kind={kind} ext={finalExt} tplId={x.id} name={t(x.name)} cat={t(x.category)} on={!tpl.own && tpl.id === x.id} onPick={() => setTpl({ id: x.id, own: false })} onOpen={create} blank={x.id === 'blank'} />)}
-            {mine.map((x) => <TemplateCard key={`o:${x.id}`} kind={kind} ext={x.ext} name={ownTitle(x)} cat={x.category || t('My templates')} own on={tpl.own && tpl.id === x.id} onPick={() => setTpl({ id: x.id, own: true })} onOpen={create} onRemove={async () => { if (await confirmDialog({ title: t('Remove the template “{name}”?', { name: x.name }), text: 'Files made from it stay.', confirm: 'Remove', danger: true })) { await office.removeTemplate(x.id); setOwn((o) => o.filter((y) => y.id !== x.id)); if (tpl.id === x.id) setTpl({ id: 'blank', own: false }); } }} />)}
           </div>
-          {own && !mine.length && <p className="tiny muted of-shell-p">Own templates: right-click a file → “Save as template”.</p>}
+          {mine.length > 0 && <>
+            <div className="of-shell-sec-title"><LayoutTemplate size={14} aria-hidden="true" /> {t('My templates')}<span className="tiny muted">{mine.length}</span></div>
+            <div className="of-shell-tpls" role="listbox" aria-label={t('My templates')}>
+              {mine.map((x) => <OwnTemplateCard key={`o:${x.id}`} x={x} compact on={tpl.own && tpl.id === x.id} onPick={() => setTpl({ id: x.id, own: true })} onOpen={() => { setTpl({ id: x.id, own: true }); create({ id: x.id, own: true }); }} />)}
+            </div>
+          </>}
+          {own && !mine.length && <p className="tiny muted of-shell-p">{t('Own templates: right-click a file → “Save as template …”. Templates of Word or LibreOffice: Office settings → Templates.')}</p>}
+          {defTpl && tpl.id === 'blank' && !tpl.own && <p className="tiny muted of-shell-p">{t('“Blank” starts from your default template “{name}”.', { name: defTpl.name })}</p>}
         </div>
         <div className="stack of-shell-newdlg-right">
           <div className={`of-shell-newprev of-shell-k-${kind}`}>
@@ -101,8 +119,8 @@ export function NewDialog({ kind: startKind = 'docs', dir: startDir = '', root =
           </div>
           <Field label="Name"><Raw as="input" className="input" autoFocus value={name} onFocus={(e) => e.target.select()} onChange={(e) => { setName(e.target.value); setTouched(true); }} onKeyDown={(e) => { if (e.key === 'Enter' && !nameErr) create(); }} /></Field>
           {nameErr && name && <span className="small c-err">{t(nameErr)}</span>}
-          <Field label="Format" hint={tpl.own ? t('The template decides the format.') : undefined}>
-            <select className="input select" value={finalExt} disabled={tpl.own} onChange={(e) => setExt(e.target.value)}>
+          <Field label="Format" hint={fromTpl ? t('The template decides the format.') : undefined}>
+            <select className="input select" value={finalExt} disabled={!!fromTpl} onChange={(e) => setExt(e.target.value)}>
               {choices.map((c) => <option key={c.ext} value={c.ext}>{`${t(c.label)} (.${c.ext})${c.isDefault ? ` · ${t('default')}` : ''}`}</option>)}
             </select>
           </Field>

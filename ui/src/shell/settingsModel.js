@@ -12,6 +12,7 @@ export const DEFAULT_SETTINGS = {
   converters: { libreoffice: '', msoffice: true, preferred: 'auto', timeout: 120, autoEngine: 'ask' },
   integrations: { onlyoffice: { url: '', secret: '' }, defaultOpen: 'builtin', hostUrl: '', google: { clientId: '', clientSecret: '' }, osOpenWith: true },
   sharing: { enabled: true, defaultDays: 7, allowDownload: true },
+  templates: { dir: '', saveTo: 'folder', folders: [], defaults: { docs: '', sheets: '', slides: '' } },
 };
 
 const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);

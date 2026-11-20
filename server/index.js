@@ -16,6 +16,7 @@ const { Meta } = require('./meta');
 const { Versions } = require('./versions');
 const { Trash } = require('./trash');
 const { Library, Templates } = require('./library');
+const { TemplateStore } = require('./templates');
 const { Index } = require('./search');
 const { Engine } = require('./engine');
 const { Servers } = require('./servers');
@@ -57,6 +58,7 @@ function activate(host) {
     fs.mkdirSync(next.libraryDir, { recursive: true });
     writeJson(file('settings.json'), next);
     settingsCache = next;
+    if (tplStore) tplStore.invalidate();
     if (next.libraryDir !== before.libraryDir) { watch(); index.soon(500); addRoot(); }
     if (JSON.stringify(next.converters) !== JSON.stringify(before.converters)) resetConverters();
     // switched on: register right away (also when this version was done before); off: remove
@@ -69,6 +71,7 @@ function activate(host) {
   const versions = new Versions(file('versions'));
   const trash = new Trash(file('trash'));
   const templates = new Templates(file('templates'));
+  const tplStore = new TemplateStore({ settings, saveSettings: (p) => saveSettings(p), legacy: templates, lang: () => (typeof host.lang === 'function' ? host.lang() : 'de') });
   const libs = () => ({ unpdf: libOpt('unpdf'), mailparser: libOpt('mailparser') });
   const index = new Index({ file: file('index.json'), base: () => settings().libraryDir, libs, log: host.log });
   let shares = readJson(file('shares.json'), []);
@@ -164,7 +167,7 @@ function activate(host) {
   }
   const osreg = new OsReg({ host, file: file('os.json'), settings, log: host.log });
 
-  const o = { settings, saveSettings, library, meta, versions, trash, templates, index, libs, converters, resetConverters, convert, plan, targetsFor: C.targets, engine, servers, drive, canWindow,
+  const o = { settings, saveSettings, library, meta, versions, trash, templates, tplStore, index, libs, converters, resetConverters, convert, plan, targetsFor: C.targets, engine, servers, drive, canWindow,
     frames: new Map(), secret, shareList, saveShares, countView, sharePdf, guard, hasDesktop, userName, linkBases, osreg, libRoot: () => `ext:${host.id || 'office'}:${LIB_ROOT}` };
   hooks = V11.setup(host, o, { dataRoot, dataDir, every, later });
   o.extraRoutes = routes11;

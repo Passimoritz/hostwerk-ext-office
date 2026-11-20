@@ -604,3 +604,7 @@ const DIALOGS = {
   component: ComponentDialog, remote: RemoteDialog, vault: VaultDialog, clean: CleanDialog, publish: PublishDialog, report: ReportDialog,
   backups: BackupsDialog, compare: CompareDialog,
 };
+/** more dialogs from other shell modules (templates.jsx: 'save-template') */
+export function registerFeature(type, C) { DIALOGS[type] = C; }
+/** is a FeatureHost mounted (dialog host in Files, an editor host)? */
+export const featureHostMounted = () => mounted > 0;

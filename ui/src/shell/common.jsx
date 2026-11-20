@@ -121,4 +121,5 @@ export function openHostwerkWindow(route) {
   const sep = r.includes('?') ? '&' : '?';
   const w = window.open(`${location.pathname}${location.search}#${r}${sep}window=1`, '_blank');
   if (!w) location.hash = r; // pop-ups blocked (plain browser): stay in this window
+  return !!w;
 }

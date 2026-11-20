@@ -140,6 +140,38 @@ export function templateThumb({ kind, id, ext, lang = '', version = '', settings
   return p;
 }
 
+/*
+ * Thumbnails of listed templates (own folder, imported folders – server/templates.js): the embedded/stored one from
+ * GET /office/templates/:id/thumb, else rendered here from the template's bytes and stored (PUT …/thumb).
+ * tpl: { id, ext, kind, mtime }
+ */
+const ownMade = new Map();
+export function ownTemplateThumb(tpl) {
+  if (!tpl || !tpl.id) return Promise.resolve(null);
+  const k = `${tpl.id}|${tpl.mtime || 0}`;
+  if (ownMade.has(k)) return ownMade.get(k);
+  const p = new Promise((resolve) => {
+    queue.push({ k: `otpl:${k}`, cbs: new Set([resolve]), make: async () => {
+      const u = apiUrl(office.templateThumbUrl(tpl.id, tpl.mtime || ''));
+      try {
+        const r = await fetch(apiUrl(url(`/templates/${encodeURIComponent(tpl.id)}/thumb`, { v: tpl.mtime || '', probe: 1 })), { credentials: 'same-origin' });
+        if (r.status === 200 && /^image\//.test(r.headers.get('content-type') || '')) return u;
+      } catch { /* render it */ }
+      const kind = tpl.kind || (FORMATS[tpl.ext] || {}).kind;
+      if (!KINDS.has(kind)) return null;
+      const chunk = await loadEditor(kind);
+      const bytes = await office.templateBytes(tpl.id);
+      const blob = await paint(chunk, bytes, tpl.ext, `template.${tpl.ext}`);
+      if (!blob) return null;
+      office.putTemplateThumb(tpl.id, blob).catch(() => {});
+      return URL.createObjectURL(blob);
+    } });
+    pump();
+  });
+  ownMade.set(k, p);
+  return p;
+}
+
 async function paint(chunk, bytes, ext, name) {
   let blob = null;
   if (chunk && typeof chunk.thumbnail === 'function') {

@@ -12,6 +12,8 @@ import { parseXml, kids, serialize, esc, escAttr } from '../../_shared/xmltree.j
 import { pageBox, mmToTwip, firstFont, ptOf, hexColor, parseDataUrl, imageSize, walk, TEXTBLOCKS, fillFields, headingsOf, hfKey, hfHas } from './pm.js';
 import { equationOmml } from './equation.js';
 import { mathmlToOmml } from './mathml.js';
+import { paraPropsXml, runPropsXml } from './wordprops.js';
+import { bordersXml, marginsXml, lookXml, tableStyleXml, builtinTableStyles, TBL_BORDER_ORDER, TC_BORDER_ORDER } from './tables.js';
 
 const NS = {
   w: 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
@@ -54,6 +56,9 @@ const XMLH = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n';
 const HL_NAMES = { FFFF00: 'yellow', '00FF00': 'green', '00FFFF': 'cyan', FF00FF: 'magenta', '0000FF': 'blue', FF0000: 'red', '000080': 'darkBlue', '008080': 'darkCyan', '008000': 'darkGreen', '800080': 'darkMagenta', '800000': 'darkRed', '808000': 'darkYellow', '808080': 'darkGray', C0C0C0: 'lightGray', '000000': 'black' };
 const RPR_ORDER = ['w:ins', 'w:del', 'w:moveFrom', 'w:moveTo', 'w:rStyle', 'w:rFonts', 'w:b', 'w:bCs', 'w:i', 'w:iCs', 'w:caps', 'w:smallCaps', 'w:strike', 'w:dstrike', 'w:outline', 'w:shadow', 'w:emboss', 'w:imprint', 'w:noProof', 'w:snapToGrid', 'w:vanish', 'w:webHidden', 'w:color', 'w:spacing', 'w:w', 'w:kern', 'w:position', 'w:sz', 'w:szCs', 'w:highlight', 'w:u', 'w:effect', 'w:bdr', 'w:shd', 'w:fitText', 'w:vertAlign', 'w:rtl', 'w:cs', 'w:em', 'w:lang', 'w:eastAsianLayout', 'w:specVanish', 'w:oMath', 'w:rPrChange'];
 const PPR_ORDER = ['w:pStyle', 'w:keepNext', 'w:keepLines', 'w:pageBreakBefore', 'w:framePr', 'w:widowControl', 'w:numPr', 'w:suppressLineNumbers', 'w:pBdr', 'w:shd', 'w:tabs', 'w:suppressAutoHyphens', 'w:kinsoku', 'w:wordWrap', 'w:overflowPunct', 'w:topLinePunct', 'w:autoSpaceDE', 'w:autoSpaceDN', 'w:bidi', 'w:adjustRightInd', 'w:snapToGrid', 'w:spacing', 'w:ind', 'w:contextualSpacing', 'w:mirrorIndents', 'w:suppressOverlap', 'w:jc', 'w:textDirection', 'w:textAlignment', 'w:textboxTightWrap', 'w:outlineLvl', 'w:divId', 'w:cnfStyle', 'w:rPr', 'w:sectPr', 'w:pPrChange'];
+const TBLPR_ORDER = ['w:tblStyle', 'w:tblpPr', 'w:tblOverlap', 'w:bidiVisual', 'w:tblStyleRowBandSize', 'w:tblStyleColBandSize', 'w:tblW', 'w:jc', 'w:tblCellSpacing', 'w:tblInd', 'w:tblBorders', 'w:shd', 'w:tblLayout', 'w:tblCellMar', 'w:tblLook', 'w:tblCaption', 'w:tblDescription', 'w:tblPrChange'];
+const TRPR_ORDER = ['w:cnfStyle', 'w:divId', 'w:gridBefore', 'w:gridAfter', 'w:wBefore', 'w:wAfter', 'w:cantSplit', 'w:trHeight', 'w:tblHeader', 'w:tblCellSpacing', 'w:jc', 'w:hidden', 'w:ins', 'w:del', 'w:trPrChange'];
+const TCPR_ORDER = ['w:cnfStyle', 'w:tcW', 'w:gridSpan', 'w:hMerge', 'w:vMerge', 'w:tcBorders', 'w:shd', 'w:noWrap', 'w:tcMar', 'w:textDirection', 'w:tcFitText', 'w:vAlign', 'w:hideMark', 'w:headers', 'w:cellIns', 'w:cellDel', 'w:cellMerge', 'w:tcPrChange'];
 const SECT_ORDER = ['w:headerReference', 'w:footerReference', 'w:footnotePr', 'w:endnotePr', 'w:type', 'w:pgSz', 'w:pgMar', 'w:paperSrc', 'w:pgBorders', 'w:lnNumType', 'w:pgNumType', 'w:cols', 'w:formProt', 'w:vAlign', 'w:noEndnote', 'w:titlePg', 'w:textDirection', 'w:bidi', 'w:rtlGutter', 'w:docGrid', 'w:printerSettings', 'w:sectPrChange'];
 const ordered = (map, order) => {
   const entries = [...map.entries()];
@@ -130,9 +135,12 @@ export async function writeDocx(model, { ext = 'docx' } = {}) {
   let stylesRel = relOf(RT.styles);
   let stylesXml = stylesRel ? await read(partOf(stylesRel)) : null;
   const idByName = {}; let normalId = 'Normal';
+  const styleIds = new Set(); const usedTableStyles = new Set(); let tableNormalId = null;
   if (stylesXml) {
     for (const m of stylesXml.matchAll(/<w:style\b([^>]*)>([\s\S]*?)<\/w:style>/g)) {
       const id = /w:styleId="([^"]*)"/.exec(m[1]); const nm = /<w:name w:val="([^"]*)"/.exec(m[2]);
+      if (id) styleIds.add(id[1]);
+      if (id && /w:default="1"/.test(m[1]) && /w:type="table"/.test(m[1])) tableNormalId = id[1];
       if (id && nm) idByName[nm[1].toLowerCase()] = id[1];
       if (id && /w:default="1"/.test(m[1]) && /w:type="paragraph"/.test(m[1])) normalId = id[1];
     }
@@ -237,6 +245,7 @@ export async function writeDocx(model, { ext = 'docx' } = {}) {
           if (a.fontFamily) { const f = escAttr(firstFont(a.fontFamily)); map.set('w:rFonts', `<w:rFonts w:ascii="${f}" w:hAnsi="${f}" w:eastAsia="${f}" w:cs="${f}"/>`); }
           const pt = ptOf(a.fontSize); if (pt) { map.set('w:sz', `<w:sz w:val="${Math.round(pt * 2)}"/>`); map.set('w:szCs', `<w:szCs w:val="${Math.round(pt * 2)}"/>`); }
           const c = hexColor(a.color); if (c) map.set('w:color', `<w:color w:val="${c}"/>`);
+          for (const [k, v] of runPropsXml(a)) map.set(k, v);
           break;
         }
         case 'highlight': { const c = hexColor(a.color || '#FFFF00') || 'FFFF00'; if (HL_NAMES[c]) map.set('w:highlight', `<w:highlight w:val="${HL_NAMES[c]}"/>`); else map.set('w:shd', `<w:shd w:val="clear" w:color="auto" w:fill="${c}"/>`); break; }
@@ -417,15 +426,16 @@ export async function writeDocx(model, { ext = 'docx' } = {}) {
     if (opts.style) map.set('w:pStyle', `<w:pStyle w:val="${escAttr(opts.style)}"/>`);
     else if (a.styleId) map.set('w:pStyle', `<w:pStyle w:val="${escAttr(a.styleId)}"/>`);
     if (opts.num) map.set('w:numPr', `<w:numPr><w:ilvl w:val="${opts.num.level}"/><w:numId w:val="${opts.num.id}"/></w:numPr>`);
-    if (a.spaceBefore != null || a.spaceAfter != null || a.lineHeight || opts.spacing) {
+    if (a.spaceBefore != null || a.spaceAfter != null || a.lineHeight || (a.lineRule && a.lineExact) || opts.spacing) {
       const sp = { ...(opts.spacing || {}) };
       if (a.spaceBefore != null) sp.before = Math.round(a.spaceBefore * 20);
       if (a.spaceAfter != null) sp.after = Math.round(a.spaceAfter * 20);
-      if (a.lineHeight) { sp.line = Math.round(a.lineHeight * 240); sp.lineRule = 'auto'; }
+      if (a.lineRule && a.lineExact) { sp.line = Math.round(a.lineExact * 20); sp.lineRule = a.lineRule; } else if (a.lineHeight) { sp.line = Math.round(a.lineHeight * 240); sp.lineRule = 'auto'; }
       map.set('w:spacing', `<w:spacing${sp.before != null ? ` w:before="${sp.before}"` : ''}${sp.after != null ? ` w:after="${sp.after}"` : ''}${sp.line ? ` w:line="${sp.line}" w:lineRule="${sp.lineRule || 'auto'}"` : ''}/>`);
     }
     const left = (a.indent || 0) * 20 + (opts.indent || 0);
-    if (left || a.firstLine) map.set('w:ind', `<w:ind w:left="${Math.round(left)}"${a.firstLine < 0 ? ` w:hanging="${Math.round(-a.firstLine * 20)}"` : a.firstLine ? ` w:firstLine="${Math.round(a.firstLine * 20)}"` : ''}/>`);
+    for (const [k, v] of paraPropsXml(a)) map.set(k, v);
+    if (left || a.firstLine || a.rightIndent) map.set('w:ind', `<w:ind w:left="${Math.round(left)}"${a.rightIndent ? ` w:right="${Math.round(a.rightIndent * 20)}"` : ''}${a.firstLine < 0 ? ` w:hanging="${Math.round(-a.firstLine * 20)}"` : a.firstLine ? ` w:firstLine="${Math.round(a.firstLine * 20)}"` : ''}/>`);
     if (a.textAlign && a.textAlign !== 'left') map.set('w:jc', `<w:jc w:val="${a.textAlign === 'justify' ? 'both' : a.textAlign}"/>`);
     for (const [k, v] of Object.entries(opts.extra || {})) map.set(k, v);
     // tracked paragraph mark (Enter / joined paragraphs) and tracked paragraph formatting
@@ -536,6 +546,7 @@ export async function writeDocx(model, { ext = 'docx' } = {}) {
   };
   const table = (n) => {
     const rows = n.content || [];
+    const ta = n.attrs || {};
     const grid = [];
     rows.forEach((r, ri) => {
       grid[ri] = grid[ri] || [];
@@ -554,14 +565,36 @@ export async function writeDocx(model, { ext = 'docx' } = {}) {
     const free = widths.filter((w) => !w).length;
     const each = free ? Math.max(500, Math.round((usable() - known) / free)) : 0;
     const W2 = widths.map((w) => w || each);
-    const tblPr = n.attrs && n.attrs.ox && n.attrs.ox.tblPr && patch ? n.attrs.ox.tblPr
-      : `<w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblBorders>${['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map((s) => `<w:${s} w:val="single" w:sz="4" w:space="0" w:color="999999"/>`).join('')}</w:tblBorders><w:tblLayout w:type="fixed"/><w:tblCellMar><w:left w:w="108" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar><w:tblLook w:val="04A0" w:firstRow="1" w:lastRow="0" w:firstColumn="1" w:lastColumn="0" w:noHBand="0" w:noVBand="1"/></w:tblPr>`;
-    out.push(`<w:tbl>${tblPr}<w:tblGrid>${W2.map((w) => `<w:gridCol w:w="${w}"/>`).join('')}</w:tblGrid>`);
+    // tblPr: the original properties, the modelled ones replaced by the attributes (they are the truth)
+    const pr = new Map();
+    const orig = ta.ox && ta.ox.tblPr ? parseXml(ta.ox.tblPr) : null;
+    const MODELED = ['w:tblStyle', 'w:tblW', 'w:jc', 'w:tblInd', 'w:tblBorders', 'w:tblLayout', 'w:tblCellMar', 'w:tblLook'];
+    if (orig) for (const c of kids(orig, '*')) if (!MODELED.includes(c.n)) pr.set(c.n, serialize(c));
+    const fresh = !orig && !ta.styleId && !ta.borders;
+    if (ta.styleId && (patch || builtinTableStyles()[ta.styleId])) { pr.set('w:tblStyle', `<w:tblStyle w:val="${escAttr(ta.styleId)}"/>`); if (!styleIds.has(ta.styleId)) usedTableStyles.add(ta.styleId); }
+    const tw = ta.width;
+    pr.set('w:tblW', tw && tw.type === 'pct' ? `<w:tblW w:w="${Math.round(tw.w)}" w:type="pct"/>` : tw && tw.type === 'dxa' && tw.w > 0 ? `<w:tblW w:w="${Math.round(tw.w)}" w:type="dxa"/>` : '<w:tblW w:w="0" w:type="auto"/>');
+    if (ta.align) pr.set('w:jc', `<w:jc w:val="${ta.align === 'right' ? 'right' : 'center'}"/>`);
+    if (ta.indent) pr.set('w:tblInd', `<w:tblInd w:w="${Math.round(ta.indent)}" w:type="dxa"/>`);
+    if (ta.borders) pr.set('w:tblBorders', bordersXml('tblBorders', ta.borders, TBL_BORDER_ORDER));
+    else if (fresh) pr.set('w:tblBorders', `<w:tblBorders>${['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map((s) => `<w:${s} w:val="single" w:sz="4" w:space="0" w:color="999999"/>`).join('')}</w:tblBorders>`);
+    if (ta.layout === 'fixed' || (fresh && !ta.width)) pr.set('w:tblLayout', '<w:tblLayout w:type="fixed"/>');
+    if (ta.cellMargins) pr.set('w:tblCellMar', marginsXml('tblCellMar', ta.cellMargins));
+    else if (fresh) pr.set('w:tblCellMar', '<w:tblCellMar><w:left w:w="108" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar>');
+    pr.set('w:tblLook', lookXml(ta.look || { firstRow: true, lastRow: false, firstColumn: true, lastColumn: false, noHBand: false, noVBand: true }));
+    out.push(`<w:tbl><w:tblPr>${ordered(pr, TBLPR_ORDER)}</w:tblPr><w:tblGrid>${W2.map((w) => `<w:gridCol w:w="${w}"/>`).join('')}</w:tblGrid>`);
     grid.forEach((r, ri) => {
-      const isHeader = (rows[ri] && rows[ri].content || []).length && (rows[ri].content || []).every((c) => c.type === 'tableHeader');
-      const rc = rows[ri] && rows[ri].attrs && rows[ri].attrs.change;
-      const rcx = rc && (rc.type === 'ins' || rc.type === 'del') ? `<w:${rc.type} w:id="${revN++}" w:author="${escAttr(rc.author || 'Unknown')}"${rc.date ? ` w:date="${escAttr(rc.date)}"` : ''}/>` : '';
-      out.push(`<w:tr>${isHeader || rcx ? `<w:trPr>${isHeader ? '<w:tblHeader/>' : ''}${rcx}</w:trPr>` : ''}`);
+      const row = rows[ri] || { content: [] };
+      const ra = row.attrs || {};
+      const isHeader = (row.content || []).length && (row.content || []).every((c) => c.type === 'tableHeader');
+      const rc = ra.change;
+      const trPr = new Map();
+      for (const [nm, x] of ra.ox || []) trPr.set(nm, x);
+      if (ra.cantSplit) trPr.set('w:cantSplit', '<w:cantSplit/>');
+      if (ra.height) trPr.set('w:trHeight', `<w:trHeight w:val="${Math.round(ra.height)}"${ra.heightRule === 'exact' ? ' w:hRule="exact"' : ''}/>`);
+      if (isHeader) trPr.set('w:tblHeader', '<w:tblHeader/>');
+      if (rc && (rc.type === 'ins' || rc.type === 'del')) trPr.set(`w:${rc.type}`, `<w:${rc.type} w:id="${revN++}" w:author="${escAttr(rc.author || 'Unknown')}"${rc.date ? ` w:date="${escAttr(rc.date)}"` : ''}/>`);
+      out.push(`<w:tr>${trPr.size ? `<w:trPr>${ordered(trPr, TRPR_ORDER)}</w:trPr>` : ''}`);
       for (let k = 0; k < cols; k++) {
         const g = r[k];
         if (g && g.covered) continue;
@@ -569,9 +602,21 @@ export async function writeDocx(model, { ext = 'docx' } = {}) {
         const w = W2.slice(k, k + span).reduce((s, x) => s + x, 0);
         const ca = (g && g.cell.attrs) || {};
         const bg = hexColor(ca.backgroundColor);
-        const tcPr = `<w:tcPr><w:tcW w:w="${w}" w:type="dxa"/>${span > 1 ? `<w:gridSpan w:val="${span}"/>` : ''}${g && g.rs > 1 ? (g.origin ? '<w:vMerge w:val="restart"/>' : '<w:vMerge/>') : ''}${bg ? `<w:shd w:val="clear" w:color="auto" w:fill="${bg}"/>` : ''}</w:tcPr>`;
-        if (!g) { out.push(`<w:tc>${tcPr}<w:p/></w:tc>`); continue; }
-        if (g.cont) { out.push(`<w:tc>${tcPr}<w:p/></w:tc>`); continue; }
+        const tc = new Map();
+        for (const [nm, x] of ca.ox || []) tc.set(nm, x);
+        // a percentage/auto preferred width stays as Word wrote it while the column was not resized here
+        const oldW = tc.get('w:tcW');
+        if (!(oldW && /w:type="(pct|auto)"/.test(oldW) && ta.layout !== 'fixed')) tc.set('w:tcW', `<w:tcW w:w="${w}" w:type="dxa"/>`);
+        if (span > 1) tc.set('w:gridSpan', `<w:gridSpan w:val="${span}"/>`);
+        if (g && g.rs > 1) tc.set('w:vMerge', g.origin ? '<w:vMerge w:val="restart"/>' : '<w:vMerge/>');
+        if (ca.borders) tc.set('w:tcBorders', bordersXml('tcBorders', ca.borders, TC_BORDER_ORDER));
+        if (bg) tc.set('w:shd', `<w:shd w:val="clear" w:color="auto" w:fill="${bg}"/>`);
+        if (ca.noWrap) tc.set('w:noWrap', '<w:noWrap/>');
+        if (ca.margins) tc.set('w:tcMar', marginsXml('tcMar', ca.margins));
+        if (ca.textDir) tc.set('w:textDirection', `<w:textDirection w:val="${ca.textDir}"/>`);
+        if (ca.vAlign) tc.set('w:vAlign', `<w:vAlign w:val="${ca.vAlign}"/>`);
+        const tcPr = `<w:tcPr>${ordered(tc, TCPR_ORDER)}</w:tcPr>`;
+        if (!g || g.cont) { out.push(`<w:tc>${tcPr}<w:p/></w:tc>`); continue; }
         out.push(`<w:tc>${tcPr}`);
         cellContent(g.cell.content);
         out.push('</w:tc>');
@@ -787,9 +832,11 @@ export async function writeDocx(model, { ext = 'docx' } = {}) {
     ensureOverride(`${dir}styles.xml`, CT.styles);
     for (const name of Object.keys(STYLE_ID)) missingStyles.add(name);
   }
-  if (missingStyles.size) {
+  if (!tableNormalId && /w:styleId="TableNormal"/.test(stylesXml)) tableNormalId = 'TableNormal';
+  const tableDefs = [...usedTableStyles].map((id) => builtinTableStyles()[id]).filter(Boolean).map((def) => tableStyleXml(def, tableNormalId));
+  if (missingStyles.size || tableDefs.length) {
     const all = styleDefs(normalId, null);
-    stylesXml = stylesXml.replace('</w:styles>', `${[...missingStyles].map((n) => all[n]).join('')}</w:styles>`);
+    stylesXml = stylesXml.replace('</w:styles>', `${[...missingStyles].map((n) => all[n]).join('')}${tableDefs.join('')}</w:styles>`);
     zip.file(stylesRel.target.startsWith('/') ? stylesRel.target.slice(1) : dir + stylesRel.target, stylesXml);
   }
   void defs;
@@ -803,10 +850,11 @@ export async function writeDocx(model, { ext = 'docx' } = {}) {
     if (at < 0) at = xml.lastIndexOf('</w:settings>');
     return xml.slice(0, at) + snippet + xml.slice(at);
   };
+  const newSettings = !sx;
+  // a Word file without settings keeps having none (a compatibility mode of our own would change Word's layout of it)
+  if (!sx && patch) sx = `${XMLH}<w:settings xmlns:w="${NS.w}" xmlns:m="${NS.m}"></w:settings>`;
   if (!sx) {
     sx = `${XMLH}<w:settings xmlns:w="${NS.w}" xmlns:m="${NS.m}"><w:zoom w:percent="100"/><w:defaultTabStop w:val="708"/><w:hyphenationZone w:val="425"/><w:characterSpacingControl w:val="doNotCompress"/><w:footnotePr><w:footnote w:id="-1"/><w:footnote w:id="0"/></w:footnotePr><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>`;
-    addRel(RT.settings, 'settings.xml');
-    ensureOverride(`${dir}settings.xml`, CT.settings);
   }
   // settings may only reference separator notes that exist: Word reports the file as damaged when footnotePr /
   // endnotePr name w:footnote / w:endnote ids but there is no footnotes / endnotes part
@@ -825,7 +873,10 @@ export async function writeDocx(model, { ext = 'docx' } = {}) {
   sx = sx.replace(/<w:evenAndOddHeaders\b[^>]*\/>/g, '');
   if (model.evenOdd) sx = before(sx, ['w:bookFoldRevPrinting', 'w:bookFoldPrinting', 'w:bookFoldPrintingSheets', 'w:drawingGridHorizontalSpacing', 'w:drawingGridVerticalSpacing', 'w:displayHorizontalDrawingGridEvery', 'w:displayVerticalDrawingGridEvery', 'w:doNotUseMarginsForDrawingGridOrigin', 'w:drawingGridHorizontalOrigin', 'w:drawingGridVerticalOrigin', 'w:doNotShadeFormData', 'w:noPunctuationKerning', 'w:characterSpacingControl', 'w:printTwoOnOne', 'w:strictFirstAndLastChars', 'w:noLineBreaksAfter', 'w:noLineBreaksBefore', 'w:savePreviewPicture', 'w:doNotValidateAgainstSchema', 'w:saveInvalidXml', 'w:ignoreMixedContent', 'w:alwaysShowPlaceholderText', 'w:doNotDemarcateInvalidXml', 'w:saveXmlDataOnly', 'w:useXSLTWhenSaving', 'w:saveThroughXslt', 'w:showXMLTags', 'w:alwaysMergeEmptyNamespace', 'w:updateFields', 'w:hdrShapeDefaults', 'w:footnotePr', 'w:endnotePr', 'w:compat', 'w:docVars', 'w:rsids', 'm:mathPr', 'w:attachedSchema', 'w:themeFontLang', 'w:clrSchemeMapping', 'w:doNotIncludeSubdocsInStats', 'w:doNotAutoCompressPictures', 'w:forceUpgrade', 'w:captions', 'w:readModeInkLockDown', 'w:smartTagType', 'sl:schemaLibrary', 'w:shapeDefaults', 'w:doNotEmbedSmartTags', 'w:decimalSymbol', 'w:listSeparator', 'w14:', 'w15:'], '<w:evenAndOddHeaders/>');
   if (model.page.color && !/<w:displayBackgroundShape\b/.test(sx)) sx = before(sx, ['w:printPostScriptOverText', 'w:printFractionalCharacterWidth', 'w:printFormsData', 'w:embedTrueTypeFonts', 'w:embedSystemFonts', 'w:saveSubsetFonts', 'w:saveFormsData', 'w:mirrorMargins', 'w:alignBordersAndEdges', 'w:bordersDoNotSurroundHeader', 'w:bordersDoNotSurroundFooter', 'w:gutterAtTop', 'w:hideSpellingErrors', 'w:hideGrammaticalErrors', 'w:activeWritingStyle', 'w:proofState', 'w:formsDesign', 'w:attachedTemplate', 'w:linkStyles', 'w:stylePaneFormatFilter', 'w:stylePaneSortMethod', 'w:documentType', 'w:mailMerge', 'w:revisionView', 'w:trackRevisions', 'w:doNotTrackMoves', 'w:defaultTabStop'], '<w:displayBackgroundShape/>');
-  zip.file(sRel ? partOf(sRel) : `${dir}settings.xml`, sx);
+  if (!newSettings || /<w:settings[^>]*>\s*<[a-z]/.test(sx)) {
+    zip.file(sRel ? partOf(sRel) : `${dir}settings.xml`, sx);
+    if (newSettings) { addRel(RT.settings, 'settings.xml'); ensureOverride(`${dir}settings.xml`, CT.settings); }
+  }
 
   /* ============ relationships, package parts ============ */
   for (const id of removed) relsXml = relsXml.replace(new RegExp(`<Relationship\\b[^>]*Id="${id}"[^>]*/>`), '');

@@ -113,11 +113,11 @@ function routes(host, o) {
     else if (view === 'trash') {
       entries = o.trash.list().map((e) => { const ext = e.dir ? '' : extOf(e.name); const f = FORMATS[ext] || {}; return { id: e.id, path: e.path, name: e.name, dir: !!e.dir, ext, kind: e.dir ? null : f.kind || null, family: e.dir ? null : f.family || null, size: e.size || 0, mtime: Math.floor(e.mtime || e.deletedAt), ctime: Math.floor(e.mtime || e.deletedAt), deletedAt: e.deletedAt, from: e.from, purgeAt: e.deletedAt + s.general.trashDays * 86400000, favorite: false, tags: [], color: '', note: '', lock: null, shared: false, thumb: false }; });
     } else if (view === 'templates') {
-      entries = o.templates.list().map((t) => ({ id: t.id, template: true, path: '', name: t.name, category: t.category, dir: false, ext: t.ext, kind: t.kind, family: t.family, size: t.size, mtime: t.created, ctime: t.created, favorite: false, tags: [], color: '', note: '', lock: null, shared: false, thumb: false }));
+      entries = o.tplStore.list().map((t) => ({ id: t.id, template: true, path: t.path != null ? t.path : '', name: t.name, category: t.category, source: t.source, readOnly: t.readOnly, default: t.default, dir: false, ext: t.ext, kind: t.kind, family: t.family, size: t.size, mtime: t.mtime, ctime: t.created, favorite: false, tags: [], color: '', note: '', lock: null, shared: false, thumb: false }));
     } else entries = lib.listDir(dir, { recursive: !!filt.q || !!filt.tag });
     entries = Library.filter(entries, filt);
     if (view !== 'recent' || req.query.sort) entries = Library.sortEntries(entries, sort);
-    const counts = { favorites: lib.fromKeys(o.meta.favorites()).length, trash: o.trash.list().length, shared: new Set(o.shareList().filter((x) => !S.expired(x)).map((x) => x.key)).size, templates: o.templates.list().length };
+    const counts = { favorites: lib.fromKeys(o.meta.favorites()).length, trash: o.trash.list().length, shared: new Set(o.shareList().filter((x) => !S.expired(x)).map((x) => x.key)).size, templates: o.tplStore.list().length };
     res.json({ dir, view, entries, counts, crumbs: lib.crumbs(dir).map((c, i) => (i === 0 ? { ...c, name: host.t('Library') } : c)) });
   });
   r.get('/office/search', async (req, res) => {
@@ -162,14 +162,17 @@ function routes(host, o) {
     try { list = fs.readdirSync(d.full, { withFileTypes: true }); } catch { return res.json({ names: {} }); }
     const shared = new Set(o.shareList().filter((x) => !S.expired(x)).map((x) => x.key));
     const names = {};
+    // types=1: every office file of the folder (Hostwerk 3.2.x without files.icon shows the file type as a mark)
+    const types = req.query.types === '1' ? [] : null;
     for (const e of list.slice(0, 5000)) {
       if (!e.isFile() || !FORMATS[extOf(e.name)]) continue;
       const key = d.root ? `@${d.root}/${d.rel ? `${d.rel}/` : ''}${e.name}` : (d.rel ? `${d.rel}/${e.name}` : e.name);
       const f = o.meta.fields(key);
       const m = { ...(f.favorite ? { favorite: true } : {}), ...(shared.has(key) ? { shared: true } : {}), ...(f.lock ? { lock: { by: f.lock.by } } : {}), ...((f.tags || []).length ? { tags: f.tags } : {}) };
       if (Object.keys(m).length) names[e.name] = m;
+      if (types) types.push(e.name);
     }
-    res.json({ names });
+    res.json({ names, ...(types ? { types } : {}) });
   });
 
   /* ---------------- raw ---------------- */
@@ -271,10 +274,7 @@ function routes(host, o) {
   r.delete('/office/versions', (req, res) => { const l = lib.loc(q(req)); o.versions.remove(l.key, String(req.query.id || '')); res.json({ ok: true }); });
 
   /* ---------------- templates ---------------- */
-  r.get('/office/templates', (req, res) => res.json({ templates: o.templates.list() }));
-  r.post('/office/templates', (req, res) => { const f = lib.file(b(req)); res.json(o.templates.add(f.full, { name: (req.body || {}).name || path.basename(f.full, path.extname(f.full)), category: (req.body || {}).category, ext: extOf(f.full) })); });
-  r.get('/office/templates/:id/raw', (req, res) => { const p = o.templates.path(String(req.params.id)); if (!p) throw err(404, 'Template not found'); res.setHeader('Content-Type', mimeOf(p)); fs.createReadStream(p).pipe(res); });
-  r.delete('/office/templates/:id', (req, res) => { o.templates.remove(String(req.params.id)); res.json({ ok: true }); });
+  require('./routesTpl').templateRoutes(host, o, { raw, err, b, q });
 
   /* ---------------- convert ---------------- */
   r.post('/office/convert', raw, async (req, res) => {

@@ -26,6 +26,9 @@ function defaults(libraryDir = '') {
     // google: own OAuth client (Desktop app) for Google Drive – see GET /office/google/state for the guide
     integrations: { onlyoffice: { url: '', secret: '' }, defaultOpen: 'builtin', hostUrl: '', google: { clientId: '', clientSecret: '' }, osOpenWith: true },
     sharing: { enabled: true, defaultDays: 7, allowDownload: true },
+    // 1.3 templates: dir '' = <library>/Vorlagen · saveTo: where "Save as template" writes · folders: imported template
+    // folders (read-only, absolute paths) · defaults: template id per app that new blank documents start from
+    templates: { dir: '', saveTo: 'folder', folders: [], defaults: { docs: '', sheets: '', slides: '' } },
   };
 }
 
@@ -44,6 +47,7 @@ const ENUMS = {
   'converters.preferred': ['auto', 'libreoffice', 'msoffice'],
   'converters.autoEngine': ['ask', 'auto', 'off'],
   'integrations.defaultOpen': ['builtin', 'onlyoffice', 'desktop'],
+  'templates.saveTo': ['folder', 'next', 'both'],
 };
 const RANGES = {
   'general.autosaveSeconds': [3, 3600], 'general.trashDays': [1, 3650], 'general.keepVersions': [0, 1000], 'general.versionDays': [1, 3650],
@@ -66,7 +70,24 @@ const STRINGS = {
   'integrations.google.clientId': (v) => v === '' || /^[\w.-]{10,200}\.apps\.googleusercontent\.com$/.test(v),
   'integrations.google.clientSecret': (v) => /^[\w-]{0,100}$/.test(v),
   'slides.theme': (v) => /^[a-z0-9_-]{1,40}$/i.test(v),
+  'templates.dir': (v) => v === '' || (path.isAbsolute(v) && !v.includes('\0')),
+  'templates.defaults.docs': (v) => /^[\w-]{0,64}$/.test(v),
+  'templates.defaults.sheets': (v) => /^[\w-]{0,64}$/.test(v),
+  'templates.defaults.slides': (v) => /^[\w-]{0,64}$/.test(v),
 };
+/** Lists of absolute folder paths (templates.folders): at most 20, no duplicates */
+function checkFolders(v) {
+  if (!Array.isArray(v) || v.length > 20) return [false];
+  const out = [];
+  for (const x of v) {
+    if (typeof x !== 'string') return [false];
+    const p = x.trim();
+    if (!p || p.length > 1000 || p.includes('\0') || !path.isAbsolute(p)) return [false];
+    const r = path.resolve(p);
+    if (!out.some((y) => y.toLowerCase() === r.toLowerCase())) out.push(r);
+  }
+  return [true, out];
+}
 
 const isObj = (x) => !!x && typeof x === 'object' && !Array.isArray(x);
 
@@ -87,7 +108,7 @@ function check(key, def, v) {
     if (s.length > 1000) return [false];
     if (ENUMS[key] && !ENUMS[key].includes(s)) return [false];
     if (STRINGS[key] && !STRINGS[key](s)) return [false];
-    return [true, /url$/i.test(key) ? s.replace(/\/+$/, '') : s];
+    return [true, /url$/i.test(key) ? s.replace(/\/+$/, '') : key === 'templates.dir' && s ? path.resolve(s) : s];
   }
   return [false];
 }
@@ -101,6 +122,11 @@ function mergeInto(base, def, patch, prefix, errors) {
     if (isObj(def[k])) {
       if (!isObj(v)) { errors.push(key); continue; }
       out[k] = mergeInto(isObj(base[k]) ? base[k] : def[k], def[k], v, key, errors);
+      continue;
+    }
+    if (Array.isArray(def[k])) {
+      const [ok, val] = key === 'templates.folders' ? checkFolders(v) : [false];
+      if (ok) out[k] = val; else errors.push(key);
       continue;
     }
     if (key === 'libraryDir') {

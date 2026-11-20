@@ -32,6 +32,13 @@ export const PAGE_SIZES = {
   Legal: { width: 215.9, height: 355.6 },
 };
 
+/**
+ * Word's "single" line of a font = its ascent + descent + line gap (not 1 × the font size like CSS line-height: 1).
+ * A Word line spacing "multiple m" is m × this factor × the font size – the factor of the common fonts:
+ */
+const LINE_FACTOR = { calibri: 1.2207, 'calibri light': 1.2207, carlito: 1.2207, aptos: 1.2234, 'aptos display': 1.2234, 'aptos narrow': 1.2234, arial: 1.149, 'liberation sans': 1.149, helvetica: 1.149, 'times new roman': 1.149, 'liberation serif': 1.149, cambria: 1.1724, 'courier new': 1.133, consolas: 1.1709, georgia: 1.1362, verdana: 1.2153, tahoma: 1.2075, 'segoe ui': 1.3301, 'trebuchet ms': 1.1626, garamond: 1.1259, 'century gothic': 1.2251, 'palatino linotype': 1.3271, 'franklin gothic medium': 1.1338, 'lucida sans': 1.1612, candara: 1.2207, constantia: 1.2207, corbel: 1.2207, 'comic sans ms': 1.3936, impact: 1.2192 };
+export function lineFactor(font) { const f = String(font || '').split(',')[0].replace(/["']/g, '').trim().toLowerCase(); return LINE_FACTOR[f] || 1.17; }
+
 export const MM_PX = 96 / 25.4;
 export const PT_PX = 96 / 72;
 export const TWIP_MM = 25.4 / 1440;

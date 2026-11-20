@@ -23,6 +23,8 @@ function once(key, fn) {
 export const math = () => once('math', async () => (await import(/* @vite-ignore */ sibling('docs-math.js'))).default);
 /** compareDocs / applyAsTrackedChanges (diff-match-patch) */
 export const compareLib = () => math().then((m) => m.compare);
+/** the Word dialogs (paragraph, font, table properties, borders, sort) */
+export const wordPack = () => math().then((m) => m.word);
 
 /** LaTeX → MathML (null + error text when it cannot be parsed) */
 export async function renderLatex(latex, display = false) {

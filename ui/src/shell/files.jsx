@@ -11,7 +11,7 @@
  * Dialogs open in Office's dialog host – mounted once in Hostwerk's sidebar footer (renders nothing itself, its Modals go
  * to .app), so they work in every folder; a screen fallback covers a missing host.
  */
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   FileText, Sheet, Presentation, FileType, LayoutTemplate, Pencil, Sparkles, FileOutput, Link2, History, Star, Tag, Info, Monitor, Clock, Share2,
   Trash2, RotateCcw, Search, Settings2, Lock, FilePlus2, X, Plus, Upload, FolderOpen, ChevronLeft, ChevronRight,
@@ -19,10 +19,12 @@ import {
 import { Btn, Empty } from '@hostwerk/ui';
 import * as HAPI from '@hostwerk/api';
 import { contextMenu } from '@hostwerk/kit';
+import * as KIT from '@hostwerk/kit';
 import { t, pl } from '@hostwerk/i18n';
 import { office, isMissing } from '../lib/api';
 import { toast } from '../lib/toast';
-import { FORMATS, OFFICE_RE, TEMPLATES, KINDS, extOf } from '../lib/formats';
+import { FORMATS, OFFICE_RE, TEMPLATES, KINDS, extOf, isTemplateName, templateExtFor } from '../lib/formats';
+import { openTemplateFile, TemplateGallery } from './templates';
 import { KIND_COLOR } from '../lib/fileTypes';
 import { prefetchEditor, prefetchFor, warmEditor, kindFor } from '../lib/loader';
 import { keyLabel } from '../editors/_shared/keys.js';
@@ -66,6 +68,10 @@ export async function openFromFiles({ root, path, back, from }) {
   const s = await loadSettings().catch(() => settingsNow());
   const mode = (s && s.integrations && s.integrations.defaultOpen) || 'builtin';
   if (mode === 'desktop' && from !== 'os') { await openInDesktop(f); return; }
+  // a template (dotx, xltx, potx, ott …): like Word – a NEW document from it; "Edit template" is in the right-click menu
+  if (isTemplateName(f.name) && mode !== 'onlyoffice') {
+    try { await openTemplateFile(f, { openEditor, filesRoute, editTemplate: (x) => openEditor(x, { back: back || filesRoute(x) }) }); return; } catch (e) { toast.error(e); return; }
+  }
   const extra = { back: back || filesRoute(f), ...(from === 'os' ? { os: 1 } : {}) };
   if (mode === 'onlyoffice') { const app = await ensureFullEditor(); if (app) extra.app = app; }
   openEditor(f, extra);
@@ -146,7 +152,10 @@ export const fileActions = [
   { id: 'fav-add', title: 'Add to favourites', icon: Star, when: (e) => isOfficeFile(e) && !isFav(e), run: (e) => toggleFavorite([entryOf(e)], true).then(refreshFiles).catch((er) => toast.error(er)) },
   { id: 'fav-remove', title: 'Remove from favourites', icon: Star, when: (e) => isOfficeFile(e) && isFav(e), run: (e) => toggleFavorite([entryOf(e)], false).then(refreshFiles).catch((er) => toast.error(er)) },
   { id: 'tags', title: 'Tags, colour and note …', icon: Tag, when: isOfficeFile, run: (e) => dialogOr({ type: 'tags', entries: [entryOf(e)] }) },
-  { id: 'template', title: 'Save as template …', icon: LayoutTemplate, when: (e) => isOfficeFile(e) && ['docs', 'sheets', 'slides'].includes((FORMATS[extOf(e.name || e.path)] || {}).kind), run: (e) => saveAsTemplate(entryOf(e)).catch((er) => toast.error(er)) },
+  // templates (dotx, xltx, potx, ott …): a click makes a new document – these two say it and open the template itself
+  { id: 'tpl-new', title: 'New document from this template', icon: FilePlus2, when: (e) => isOfficeFile(e) && isTemplateName(e.name || e.path), run: (e) => openTemplateFile(entryOf(e), { openEditor, filesRoute, editTemplate: (x) => openEditor(x, { back: filesRoute(x) }) }).catch((er) => toast.error(er)) },
+  { id: 'tpl-edit', title: 'Edit template', icon: Pencil, when: (e) => isOfficeFile(e) && isTemplateName(e.name || e.path), run: (e) => openEditor(entryOf(e), { back: filesRoute(e) }) },
+  { id: 'template', title: 'Save as template …', icon: LayoutTemplate, when: (e) => isOfficeFile(e) && !isTemplateName(e.name || e.path) && !!templateExtFor(e.name || e.path), run: (e) => saveAsTemplate(entryOf(e)).catch((er) => toast.error(er)) },
   { id: 'info', title: 'Office info', icon: Info, when: isOfficeFile, run: (e) => dialogOr({ type: 'info', entry: entryOf(e) }) },
   // Office 1.1: clean, publish, report, rules, forms, encrypt/decrypt, older states (fileFeatures.js – same list as in the editor)
   ...['clean', 'publish', 'report', 'rules', 'forms', 'encrypt', 'decrypt', 'backups'].map((id) => {
@@ -163,20 +172,36 @@ function folderMarks(root, path) {
   const k = `${root}|${path}`;
   const hit = markCache.get(k);
   if (hit && Date.now() - hit.t < 1500) return hit.p;
-  const p = office.marks({ root, path }).then((r) => {
-    const names = (r && r.names) || {};
+  const legacy = !hasIconSlot();
+  const p = office.marks({ root, path, types: legacy }).then((r) => {
+    const names = { ...((r && r.names) || {}) };
     for (const [n, m] of Object.entries(names)) favCache.set(favKey(root, path ? `${path}/${n}` : n), !!m.favorite);
+    // Hostwerk without files.icon (3.2.x, SDK 3.15): every office file gets its coloured type mark behind the name
+    if (legacy) for (const n of (r && r.types) || []) names[n] = { ...(names[n] || {}), type: true };
     return names;
   }).catch(() => ({}));
   markCache.set(k, { t: Date.now(), p });
   return p;
 }
-const pick = (fn) => async ({ root, path }) => { const names = await folderMarks(root, path || ''); const out = {}; for (const [n, m] of Object.entries(names)) { const v = fn(m); if (v) out[n] = v; } return out; };
+const pick = (fn) => async ({ root, path }) => { const names = await folderMarks(root, path || ''); const out = {}; for (const [n, m] of Object.entries(names)) { const v = fn(m, n); if (v) out[n] = v; } return out; };
 export const fileMarks = [
   { id: 'favourite', icon: Star, marks: pick((m) => m.favorite && { title: t('Favourite') }) },
   { id: 'shared', icon: Link2, marks: pick((m) => m.shared && { title: t('Shared by link (read-only)') }) },
   { id: 'locked', icon: Lock, marks: pick((m) => m.lock && { title: t('Open in an editor by {by}', { by: m.lock.by || '?' }) }) },
 ];
+/*
+ * File types on Hostwerk 3.2.x (SDK 3.15 has no files.icon – Files draws a grey file symbol for office files): a
+ * coloured type icon as a mark behind the name. The mark's icon is one component per provider, so it finds its file
+ * name in the row (data-fb-name of Files' list/tile). Off on Hostwerk with files.icon (SDK 3.16: @hostwerk/kit FileThumb).
+ */
+export function hasIconSlot() { return typeof KIT.FileThumb === 'function' || typeof KIT.FileIcon === 'function'; }
+function TypeMark() {
+  const ref = useRef(null);
+  const [name, setName] = useState('');
+  useLayoutEffect(() => { const row = ref.current && ref.current.closest('[data-fb-name]'); if (row) setName(row.getAttribute('data-fb-name') || ''); }, []);
+  return <span ref={ref} className="of-shell-tmark">{name ? <FileIcon name={name} size={14} /> : null}</span>;
+}
+if (!hasIconSlot()) fileMarks.push({ id: 'type', icon: TypeMark, marks: pick((m, n) => m.type && { title: t((FORMATS[extOf(n)] || {}).label || 'Office file') }) });
 
 /* ---------------- the "Office" section in the Office documents root ---------------- */
 const VIEWS = [['recent', 'Recent', Clock], ['favorites', 'Favourites', Star], ['shared', 'Shared', Share2], ['tags', 'Tags', Tag], ['templates', 'Templates', LayoutTemplate], ['trash', 'Trash', Trash2]];
@@ -291,7 +316,7 @@ export function OfficeSection({ ctx }) {
     favorites: ['No favourites yet', 'Click the star on a file to find it here.', Star],
     shared: ['Nothing shared', 'Right-click a file → “Share link …” for a read-only link.', Share2],
     tags: ['No tags yet', 'Right-click a file → “Tags, colour and note …”.', Tag],
-    templates: ['No own templates yet', 'Right-click a document → “Save as template …”.', LayoutTemplate],
+    templates: ['No own templates yet', 'Right-click a document → “Save as template …” – or add the template folder of Word or LibreOffice in the Office settings (Templates).', LayoutTemplate],
     trash: ['The trash is empty', 'Files you delete in Files are in Hostwerk’s trash.', Trash2],
   }[view];
   const cards = !hits && view !== 'trash' && view !== 'templates';
@@ -334,6 +359,7 @@ export function OfficeSection({ ctx }) {
           return <button key={id} type="button" role="tab" aria-selected={view === id} className={`of-shell-tab ${view === id ? 'on' : ''}`} onClick={() => setView(id)}><I size={14} aria-hidden="true" />{t(label)}{n ? <span className="of-shell-count">{n}</span> : null}</button>;
         })}
       </div>}
+      {!hits && view === 'templates' && <div className="row-tight of-shell-wrap"><span className="tiny muted grow">{t('Double-click a template: a new document from it. Right-click: edit, rename, use as default.')}</span><a className="link-btn tiny" href="#/ext/office/settings?group=templates"><Settings2 size={12} aria-hidden="true" /> {t('Template folders and defaults …')}</a></div>}
       {!hits && view === 'tags' && tags.length > 0 && <div className="row-tight of-shell-wrap">{tags.map((x) => <Raw as="button" key={x} type="button" className={`of-shell-tag is-btn ${x === tag ? 'on' : ''}`} onClick={() => setTag(x)}><Keep>{x}</Keep></Raw>)}</div>}
       {hits && <div className="small muted of-shell-hitsinfo">{hits.length ? pl(hits.length, '{n} hit', '{n} hits') : ''}{semantic ? ` · ${t('by meaning')}` : ''}</div>}
 
@@ -350,7 +376,7 @@ export function OfficeSection({ ctx }) {
           {list.length > shown.length && <div className="of-shell-center row-tight"><Btn className="sm ghost" onClick={() => setMore((m) => m + 1)}>{t('Show more ({n})', { n: list.length - shown.length })}</Btn></div>}
         </>
       ) : view === 'templates' && !hits ? (
-        <div className="of-shell-tpls is-wide">{shown.map((x) => <TemplateCard key={x.id} kind={x.kind || (FORMATS[x.ext] || {}).kind || 'docs'} ext={x.ext} name={x.name} cat={x.category || t('My templates')} own on={false} onPick={() => fromTemplate(x)} onOpen={() => fromTemplate(x)} onMenu={(ev) => menu(ev, x)} />)}</div>
+        <TemplateGallery list={shown} reload={load} act={{ create: fromTemplate, edit: (x) => openE({ path: x.path, name: `${x.name}.${x.ext}` }), reveal: (x) => { location.hash = filesRoute({ path: x.path }).slice(1); } }} />
       ) : (
         <VirtualRows items={shown} height={hits ? 58 : 44} render={(e) => (
           <li key={`${e.root || ''}|${e.id || e.path}`} className="of-shell-row is-click" tabIndex={0} style={{ height: hits ? 58 : 44 }}

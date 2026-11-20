@@ -3,7 +3,34 @@
  * cell background, invisible "keep" attributes for lossless saving (ox/oo), run properties we do not edit (runKeep)
  * and Word-like keyboard shortcuts that never take Hostwerk's global ones (Ctrl+K, Ctrl+J, Ctrl+1…9, Ctrl+, …).
  */
-import { Extension, Mark } from '@tiptap/core';
+import { Extension, Mark, mergeAttributes } from '@tiptap/core';
+import Paragraph from '@tiptap/extension-paragraph';
+import Heading from '@tiptap/extension-heading';
+
+/**
+ * Word measures a line by the fonts ON it; CSS also counts the paragraph's own font ("strut"). When every run of a
+ * paragraph has its own size, the paragraph takes the largest of them – a 9 pt table cell in a 10 pt document then
+ * gets 9 pt lines like in Word, not 10 pt ones.
+ */
+function strut(node, attrs) {
+  let max = 0; let all = true; let any = false;
+  node.forEach((c) => {
+    if (!c.isText) return;
+    any = true;
+    const ts = c.marks.find((m) => m.type.name === 'textStyle' && m.attrs.fontSize);
+    const v = ts ? parseFloat(ts.attrs.fontSize) : 0;
+    if (!v || !/pt$/.test(ts.attrs.fontSize)) all = false; else if (v > max) max = v;
+  });
+  if (!any || !all || !max) return attrs;
+  return { ...attrs, style: `${attrs.style ? `${attrs.style};` : ''}font-size:${max}pt` };
+}
+export const ParagraphEx = Paragraph.extend({ renderHTML({ node, HTMLAttributes }) { return ['p', strut(node, mergeAttributes(this.options.HTMLAttributes, HTMLAttributes)), 0]; } });
+export const HeadingEx = Heading.extend({
+  renderHTML({ node, HTMLAttributes }) {
+    const level = this.options.levels.includes(node.attrs.level) ? node.attrs.level : this.options.levels[0];
+    return [`h${level}`, strut(node, mergeAttributes(this.options.HTMLAttributes, HTMLAttributes)), 0];
+  },
+});
 
 const keepAttr = (name) => ({ [name]: { default: null, parseHTML: () => null, renderHTML: () => ({}), keepOnSplit: false } });
 const ptStyle = (v) => (v == null ? null : `${v}pt`);
@@ -29,7 +56,7 @@ export const ParagraphFormat = Extension.create({
       {
         types: ['paragraph', 'heading'],
         attributes: {
-          lineHeight: { default: null, parseHTML: (el) => { const v = el.style.lineHeight; return v && /^[\d.]+$/.test(v) ? Number(v) : null; }, renderHTML: (a) => (a.lineHeight ? { style: `line-height:${a.lineHeight}` } : {}) },
+          lineHeight: { default: null, parseHTML: (el) => { const v = el.style.lineHeight || ''; const m = /^(?:calc\()?([\d.]+)/.exec(v); return m && !/px|pt|%/.test(v) ? Number(m[1]) : null; }, renderHTML: (a) => (a.lineHeight ? { style: `line-height:calc(${a.lineHeight} * var(--of-lf, 1))` } : {}) },
           spaceBefore: { default: null, parseHTML: (el) => parsePt(el.style.marginTop), renderHTML: (a) => (a.spaceBefore != null ? { style: `margin-top:${ptStyle(a.spaceBefore)}` } : {}) },
           spaceAfter: { default: null, parseHTML: (el) => parsePt(el.style.marginBottom), renderHTML: (a) => (a.spaceAfter != null ? { style: `margin-bottom:${ptStyle(a.spaceAfter)}` } : {}) },
           indent: { default: null, parseHTML: (el) => parsePt(el.style.marginLeft), renderHTML: (a) => (a.indent ? { style: `margin-left:${ptStyle(a.indent)}` } : {}) },

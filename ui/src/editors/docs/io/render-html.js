@@ -3,15 +3,16 @@
  * clipboard. The markup matches the parse rules of the editor extensions, so exported HTML opens again with all
  * features (footnotes, comments, TOC, equations, page breaks, call-outs, page setup in a <meta>).
  */
-import { escHtml as esc, pageBox, fillFields, footnotesOf } from './pm.js';
+import { escHtml as esc, pageBox, fillFields, footnotesOf, lineFactor } from './pm.js';
 import { equationHtml } from './equation.js';
+import { tableLook, tableWidthCss, gridOf, cellCss, rowCss, wordTableCss } from './tables.js';
 
 const styleOf = (o) => Object.entries(o).filter(([, v]) => v !== null && v !== undefined && v !== '').map(([k, v]) => `${k}:${v}`).join(';');
 
 export function blockStyle(a = {}) {
   return styleOf({
     'text-align': a.textAlign && a.textAlign !== 'left' ? a.textAlign : null,
-    'line-height': a.lineHeight || null,
+    'line-height': a.lineHeight ? `calc(${a.lineHeight} * var(--of-lf, 1))` : null,
     'margin-top': a.spaceBefore != null ? `${a.spaceBefore}pt` : null,
     'margin-bottom': a.spaceAfter != null ? `${a.spaceAfter}pt` : null,
     'margin-left': a.indent ? `${a.indent}pt` : null,
@@ -117,16 +118,25 @@ function renderBlock(n, ctx) {
     }
     case 'callout': return `<div data-type="callout" data-kind="${esc(a.kind || 'info')}" class="of-docs-callout of-callout-${esc(a.kind || 'info')}">${renderBlocks(n.content, ctx)}</div>`;
     case 'table': {
-      // column widths from the first row
-      const first = (n.content && n.content[0] && n.content[0].content) || [];
-      const cols = [];
-      for (const c of first) { const cw = (c.attrs && c.attrs.colwidth) || []; for (let k = 0; k < ((c.attrs && c.attrs.colspan) || 1); k++) cols.push(cw[k] || null); }
-      const colgroup = cols.some(Boolean) ? `<colgroup>${cols.map((w) => `<col${w ? ` style="width:${w}px"` : ''}>`).join('')}</colgroup>` : '';
-      return `<table class="of-docs-table">${colgroup}<tbody>${(n.content || []).map((r) => `<tr>${(r.content || []).map((c) => {
-        const ca = c.attrs || {};
-        const tag = c.type === 'tableHeader' ? 'th' : 'td';
-        return `<${tag}${ca.colspan > 1 ? ` colspan="${ca.colspan}"` : ''}${ca.rowspan > 1 ? ` rowspan="${ca.rowspan}"` : ''}${ca.colwidth ? ` colwidth="${ca.colwidth.join(',')}"` : ''}${ca.backgroundColor ? ` data-background="${esc(ca.backgroundColor)}" style="background-color:${esc(ca.backgroundColor)}"` : ''}>${renderBlocks(c.content, ctx)}</${tag}>`;
-      }).join('')}</tr>`).join('')}</tbody></table>`;
+      // column widths from the first row; Word tables: width rules, style look, cell/row formatting
+      const cols = gridOf(n);
+      const look = tableLook(a);
+      const word = !!(look || a.layout || a.width || a.indent || a.align);
+      const wcss = word ? tableWidthCss(a, cols) : null;
+      const colgroup = cols.some(Boolean) ? `<colgroup>${cols.map((w, i) => `<col${wcss && wcss.cols[i] ? ` style="width:${wcss.cols[i]}"` : w ? ` style="width:${w}px"` : ''}>`).join('')}</colgroup>` : '';
+      const tstyle = [wcss ? styleOf(wcss.table) : '', look ? Object.entries(look.vars).map(([k, v]) => `${k}:${v}`).join(';') : ''].filter(Boolean).join(';');
+      const rows = (n.content || []).map((r) => {
+        const ra = r.attrs || {};
+        const rs = [rowCss(ra), ra.cantSplit ? 'break-inside:avoid' : ''].filter(Boolean).join(';');
+        return { head: (r.content || []).length && (r.content || []).every((c) => c.type === 'tableHeader'), html: `<tr${rs ? ` style="${rs}"` : ''}>${(r.content || []).map((c) => {
+          const ca = c.attrs || {};
+          const tag = c.type === 'tableHeader' ? 'th' : 'td';
+          const cs = [ca.backgroundColor ? `background-color:${esc(ca.backgroundColor)}` : '', cellCss(ca)].filter(Boolean).join(';');
+          return `<${tag}${ca.colspan > 1 ? ` colspan="${ca.colspan}"` : ''}${ca.rowspan > 1 ? ` rowspan="${ca.rowspan}"` : ''}${ca.colwidth ? ` colwidth="${ca.colwidth.join(',')}"` : ''}${ca.backgroundColor ? ` data-background="${esc(ca.backgroundColor)}"` : ''}${cs ? ` style="${cs}"` : ''}>${renderBlocks(c.content, ctx)}</${tag}>`;
+        }).join('')}</tr>` };
+      });
+      const body = `<tbody>${rows.map((x) => x.html).join('')}</tbody>`;
+      return `<table class="of-docs-table${look ? ` ${look.cls.join(' ')}` : ''}"${tstyle ? ` style="${tstyle}"` : ''}>${colgroup}${body}</table>`;
     }
     default: return n.content ? renderBlocks(n.content, ctx) : '';
   }
@@ -160,7 +170,7 @@ export function documentCss(model, { print = false } = {}) {
 @page{size:${box.width}mm ${box.height}mm;margin:${m.top}mm ${m.right}mm ${m.bottom}mm ${m.left}mm;${hf(model.header, 'top')}${hf(model.footer, 'bottom')}}
 ${model.titlePage ? '@page:first{@top-left{content:none}@top-center{content:none}@top-right{content:none}@bottom-left{content:none}@bottom-center{content:none}@bottom-right{content:none}}' : ''}
 html{background:${print ? '#fff' : '#f0f0f0'}}
-body{font-family:${font};font-size:${d.fontSize || 11}pt;line-height:${d.lineHeight || 1.15};color:#000;${print ? 'margin:0;' : `max-width:${box.width}mm;margin:24px auto;padding:${m.top}mm ${m.right}mm ${m.bottom}mm ${m.left}mm;box-sizing:border-box;box-shadow:0 2px 12px rgba(0,0,0,.15);`}background:${p.color || '#fff'};${p.columns > 1 ? `column-count:${p.columns};column-gap:12mm;` : ''}-webkit-print-color-adjust:exact;print-color-adjust:exact}
+body{font-family:${font};font-size:${d.fontSize || 11}pt;--of-lf:${lineFactor(d.font || 'Calibri')};line-height:calc(${d.lineHeight || 1.15} * var(--of-lf));color:#000;${print ? 'margin:0;' : `max-width:${box.width}mm;margin:24px auto;padding:${m.top}mm ${m.right}mm ${m.bottom}mm ${m.left}mm;box-sizing:border-box;box-shadow:0 2px 12px rgba(0,0,0,.15);`}background:${p.color || '#fff'};${p.columns > 1 ? `column-count:${p.columns};column-gap:12mm;` : ''}-webkit-print-color-adjust:exact;print-color-adjust:exact}
 p{margin:0 0 ${d.spaceAfter != null ? d.spaceAfter : 8}pt}
 h1,h2,h3,h4,h5,h6{margin:12pt 0 4pt;line-height:1.2;break-after:avoid}
 h1{font-size:16pt;color:#1f3864}h2{font-size:13pt;color:#2f5496}h3{font-size:12pt;color:#1f3763}h4{font-size:11pt;font-style:italic;color:#2f5496}h5{font-size:11pt;color:#2f5496}h6{font-size:11pt;color:#1f3763}
@@ -173,6 +183,7 @@ code{font-family:Consolas,"Courier New",monospace;font-size:.95em}
 table{border-collapse:collapse;width:100%;margin:6pt 0;break-inside:auto}
 td,th{border:1px solid #999;padding:3pt 6pt;vertical-align:top}th{background:#f2f2f2;text-align:left}
 td>p:last-child,th>p:last-child{margin-bottom:0}
+${wordTableCss('')}
 ul.of-tasks{list-style:none;padding-left:4pt}
 ol.of-list-outline{counter-reset:ofl;list-style:none}ol.of-list-outline>li{counter-increment:ofl}ol.of-list-outline>li::before{content:counters(ofl,".") ". "}
 .of-docs-pagebreak{break-after:page;height:0}

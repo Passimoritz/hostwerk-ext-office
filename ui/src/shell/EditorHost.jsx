@@ -13,8 +13,9 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft, Save, History, Link2, Download, Printer, MoreHorizontal, X, Info, Monitor, Sparkles, FolderOpen, LayoutTemplate,
-  AlertTriangle, RotateCcw, CheckCircle2, Cpu, FileWarning, GitCompare, AppWindow, Lock, CloudOff, Search, ChevronRight, Pencil, Upload,
+  AlertTriangle, RotateCcw, CheckCircle2, Cpu, FileWarning, GitCompare, AppWindow, Lock, CloudOff, Search, ChevronRight, Pencil, Upload, Maximize2, Minimize2,
 } from 'lucide-react';
+import { useWindowChrome, toggleFullscreen, isOwnWindow } from './chrome';
 import { get } from '@hostwerk/api';
 import { Btn, Modal, Empty, toast, confirmDialog } from '@hostwerk/ui';
 import { ErrorBoundary, useAiContext } from '@hostwerk/kit';
@@ -125,6 +126,7 @@ export default function EditorHost({ target, opts = {}, bare = false }) {
   const planRef = useRef(plan); planRef.current = plan;
   const chunkRef = useRef(chunk); chunkRef.current = chunk;
   const boxRef = useRef(null);
+  const chrome = useWindowChrome(); // screen mode in the desktop app: our top bar moves the window, keeps the controls free
   /** open → interactive (lib/perf.js): the chunk reports it (host.perf('interactive'), export reportsInteractive) or the first paint counts */
   const markInteractive = () => {
     if (perfDone.current) return;
@@ -628,7 +630,9 @@ export default function EditorHost({ target, opts = {}, bare = false }) {
   };
   const openWindow = async () => {
     if (dirtyRef.current) { const ok = await saveNow(); if (!ok) return; }
-    openHostwerkWindow(`/office-edit?${editRoute(EXT_ID, file).split('?')[1]}`);
+    const opened = openHostwerkWindow(`/office-edit?${editRoute(EXT_ID, file).split('?')[1]}`);
+    // the screen in the main window goes back to Files – the file is open in its own (movable, resizable) window now
+    if (opened && bare) { dirtyRef.current = false; setTimeout(() => doClose(), 60); }
   };
   const compareWith = async (a, b = 'current') => { try { await hostRef.current.compare(a, b); } catch (e) { toast.error(e); } };
   const fileFeatures = () => (virtual ? [] : featureItems(file, { inEditor: true, onCompare: (x) => compareWith(x) }));
@@ -644,7 +648,7 @@ export default function EditorHost({ target, opts = {}, bare = false }) {
     !virtual && '-',
     !virtual && { label: 'Open in the full editor', icon: Sparkles, onClick: run(openFull) },
     !virtual && { label: 'Open in the desktop app', icon: Monitor, onClick: run(async () => { if (dirtyRef.current) await saveNow(); await openInDesktop(file); }) },
-    !bare && !virtual && { label: 'Open in its own window', icon: AppWindow, onClick: run(openWindow) },
+    !virtual && !isOwnWindow() && { label: 'Open in its own window', icon: AppWindow, onClick: run(openWindow) },
     !virtual && '-',
     !virtual && { label: 'Info', icon: Info, onClick: () => setDialog({ type: 'info' }) },
     !virtual && { label: 'Save as template …', icon: LayoutTemplate, onClick: run(() => saveAsTemplate(file)) },
@@ -667,7 +671,7 @@ export default function EditorHost({ target, opts = {}, bare = false }) {
       ...fileFeatures().filter((x) => x !== '-').map((x) => ({ id: `s:f:${x.id}`, title: x.title, group: F, icon: x.icon, run: x.run })),
       !virtual && { id: 's:full', title: 'Open in the full editor', group: F, icon: Sparkles, run: openFull },
       !virtual && { id: 's:desktop', title: 'Open in the desktop app', group: F, icon: Monitor, run: () => openInDesktop(file) },
-      !bare && !virtual && { id: 's:window', title: 'Open in its own window', group: F, icon: AppWindow, run: openWindow },
+      !virtual && !isOwnWindow() && { id: 's:window', title: 'Open in its own window', group: F, icon: AppWindow, run: openWindow },
       !virtual && { id: 's:info', title: 'Info', group: F, icon: Info, run: () => setDialog({ type: 'info' }) },
       !virtual && { id: 's:template', title: 'Save as template …', group: F, icon: LayoutTemplate, run: () => saveAsTemplate(file) },
       { id: 's:reveal', title: 'Show in Explorer', group: F, icon: FolderOpen, run: () => revealEntry(file) },
@@ -709,7 +713,7 @@ export default function EditorHost({ target, opts = {}, bare = false }) {
   const backTo = useMemo(() => { const m = /^#?\/files\?(.*)$/.exec(String(opts.back || '')); return m ? parseQuery(m[1]) : null; }, [opts.back]);
   const folder = backTo ? String(backTo.path || '').split('/').filter(Boolean) : dirname(file.path).split('/').filter(Boolean);
   const top = (
-    <header className="of-shell-ebar" role="toolbar" aria-label={t('Document')}>
+    <header className={`of-shell-ebar ${bare ? 'is-drag' : ''} ${bare && chrome.on ? 'is-wco' : ''}`} style={bare && chrome.on ? { '--of-wco-right': `${chrome.right}px`, '--of-wco-h': `${chrome.height}px` } : undefined} role="toolbar" aria-label={t('Document')}>
       <button type="button" className="btn ghost icon sm of-shell-eback" title={t(opts.back ? 'Back to the folder' : 'Back')} aria-label={t(opts.back ? 'Back to the folder' : 'Back')} onClick={() => doClose()}><ArrowLeft size={16} /></button>
       <span className="of-shell-eicon"><FileIcon entry={{ name: file.name }} size={20} /></span>
       <div className="of-shell-etitle">
@@ -736,6 +740,7 @@ export default function EditorHost({ target, opts = {}, bare = false }) {
       {!virtual && settingsNow().sharing.enabled && <Btn className="sm ghost icon of-shell-wide" icon={Link2} title="Share link …" aria-label="Share link …" onClick={() => setDialog({ type: 'share' })} />}
       <button type="button" className="btn sm ghost icon of-shell-wide" title={t('Download as …')} aria-label={t('Download as …')} onClick={(e) => downloadMenu(e.currentTarget)}><Download size={16} /></button>
       <button type="button" className="btn sm ghost icon" title={t('More')} aria-label={t('More')} onClick={(e) => moreMenu(e.currentTarget)}><MoreHorizontal size={16} /></button>
+      {bare && chrome.canFull && <button type="button" className={`btn sm ghost icon ${chrome.full ? 'of-shell-efull-on' : ''}`} title={chrome.full ? t('Leave full screen (Esc)') : t('Full screen')} aria-label={chrome.full ? t('Leave full screen (Esc)') : t('Full screen')} aria-pressed={chrome.full} onClick={() => toggleFullscreen()}>{chrome.full ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button>}
       <button type="button" className="btn sm ghost icon" title={t('Close')} aria-label={t('Close')} onClick={() => doClose()}><X size={16} /></button>
     </header>
   );

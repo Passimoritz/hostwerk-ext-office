@@ -9,7 +9,7 @@ import { docsCommands } from './extras.jsx';
 import { templateModel } from './templates.js';
 import { readDocument, writeDocument, documentText } from './io/index.js';
 import { docToHtml } from './io/render-html.js';
-import { pageBox, MM_PX } from './io/pm.js';
+import { pageBox, MM_PX, lineFactor } from './io/pm.js';
 import { fontCss } from './Ribbon.jsx';
 import './style.css';
 
@@ -55,7 +55,7 @@ function Preview({ bytes, ext, name }) {
   const d = state.model.defaults || {};
   return (
     <div ref={ref} className="of-docs-preview" style={{ aspectRatio: `${box.width} / ${box.height}` }}>
-      <div className="of-docs-preview-page of-docs-paper" style={{ width: box.width * MM_PX, height: box.height * MM_PX, padding: `${m.top * MM_PX}px ${m.right * MM_PX}px ${m.bottom * MM_PX}px ${m.left * MM_PX}px`, '--of-font': fontCss(d.font || 'Calibri'), '--of-size': `${d.fontSize || 11}pt`, '--of-lh': d.lineHeight || 1.15, '--of-after': `${d.spaceAfter != null ? d.spaceAfter : 8}pt`, background: state.model.page.color || '#fff', transform: `scale(${scale})` }}>
+      <div className="of-docs-preview-page of-docs-paper" style={{ width: box.width * MM_PX, height: box.height * MM_PX, padding: `${m.top * MM_PX}px ${m.right * MM_PX}px ${m.bottom * MM_PX}px ${m.left * MM_PX}px`, '--of-font': fontCss(d.font || 'Calibri'), '--of-size': `${d.fontSize || 11}pt`, '--of-lh': d.lineHeight || 1.15, '--of-lf': lineFactor(d.font || 'Calibri'), '--of-after': `${d.spaceAfter != null ? d.spaceAfter : 8}pt`, background: state.model.page.color || '#fff', transform: `scale(${scale})` }}>
         <div className="of-docs-pm" dangerouslySetInnerHTML={{ __html: state.html }} />
       </div>
     </div>

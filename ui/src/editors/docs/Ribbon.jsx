@@ -17,9 +17,10 @@ import { t } from '@hostwerk/i18n';
 import { RB, Drop, MenuItem, ColorGrid, Group, HIGHLIGHTS } from './ui.jsx';
 import { TableGrid, EmojiGrid, dateFormats } from './dialogs.jsx';
 import { withKeys } from '../_shared/keys.js';
+import { builtinTableStyles, tableLook } from './io/tables.js';
 
 export const FONTS = ['Calibri', 'Aptos', 'Arial', 'Cambria', 'Candara', 'Century Gothic', 'Comic Sans MS', 'Consolas', 'Constantia', 'Corbel', 'Courier New', 'Franklin Gothic Medium', 'Garamond', 'Georgia', 'Helvetica', 'Impact', 'Liberation Sans', 'Liberation Serif', 'Lucida Sans', 'Palatino Linotype', 'Segoe UI', 'Tahoma', 'Times New Roman', 'Trebuchet MS', 'Verdana', 'system-ui'];
-export const FONT_STACK = { Calibri: 'Calibri, Carlito, "Segoe UI", sans-serif', Cambria: 'Cambria, Caladea, Georgia, serif', Arial: 'Arial, "Liberation Sans", Helvetica, sans-serif', 'Times New Roman': '"Times New Roman", "Liberation Serif", Times, serif', 'Courier New': '"Courier New", "Liberation Mono", monospace', Aptos: 'Aptos, Calibri, Carlito, sans-serif', Helvetica: 'Helvetica, Arial, sans-serif', Georgia: 'Georgia, serif', Consolas: 'Consolas, "Cascadia Mono", monospace', 'system-ui': 'system-ui, sans-serif' };
+export const FONT_STACK = { Calibri: 'Calibri, Carlito, "Segoe UI", sans-serif', Cambria: 'Cambria, Caladea, Georgia, serif', Arial: 'Arial, "Liberation Sans", Helvetica, sans-serif', 'Times New Roman': '"Times New Roman", "Liberation Serif", Times, serif', 'Courier New': '"Courier New", "Liberation Mono", monospace', Aptos: 'Aptos, "of-aptos", Carlito, sans-serif', 'Aptos Display': '"Aptos Display", "of-aptos", Carlito, sans-serif', 'Aptos Narrow': '"Aptos Narrow", "Calibri", Carlito, sans-serif', Helvetica: 'Helvetica, Arial, sans-serif', Georgia: 'Georgia, serif', Consolas: 'Consolas, "Cascadia Mono", monospace', 'system-ui': 'system-ui, sans-serif' };
 export const fontCss = (f) => FONT_STACK[f] || `"${f}", sans-serif`;
 const SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
 const STYLES = [
@@ -58,7 +59,7 @@ export function Ribbon({ editor, readOnly, tab, setTab, s, act, host = {} }) {
     ...(readOnly ? [] : [{ id: 'insert', label: 'Insert' }, { id: 'layout', label: 'Layout' }]),
     { id: 'review', label: 'Review' },
     { id: 'view', label: 'View' },
-    ...(!readOnly && inTable ? [{ id: 'table', label: 'Table', ctx: true }] : []),
+    ...(!readOnly && inTable ? [{ id: 'table', label: 'Table Design', ctx: true }, { id: 'tlayout', label: 'Table Layout', ctx: true }] : []),
     ...(!readOnly && img ? [{ id: 'picture', label: 'Picture', ctx: true }] : []),
   ];
   const cur = tabs.some((x) => x.id === tab) ? tab : 'home';
@@ -97,6 +98,7 @@ export function Ribbon({ editor, readOnly, tab, setTab, s, act, host = {} }) {
             <Drop icon={Baseline} title="Text colour" panelClass="of-pop-colors">{(close) => <ColorGrid close={close} onPick={(col) => (col ? c().setColor(col).run() : c().unsetColor().run())} />}</Drop>
             <Drop icon={Highlighter} title="Highlight" panelClass="of-pop-colors">{(close) => <ColorGrid close={close} colors={HIGHLIGHTS} noneLabel="No highlight" onPick={(col) => (col ? c().setHighlight({ color: col }).run() : c().unsetHighlight().run())} />}</Drop>
             <RB icon={RemoveFormatting} title="Clear formatting" keys="Ctrl+Space" onClick={() => c().unsetAllMarks().setParagraphFormat({ lineHeight: null, spaceBefore: null, spaceAfter: null, indent: null, firstLine: null }).run()} />
+            <RB icon={Type} title="Font … (effects, character spacing, scale, position, language)" onClick={() => act.word('font')} />
             <Drop icon={CaseSensitive} title="Change case">{(close) => (
               <>
                 {[['sentence', 'Sentence case.'], ['lower', 'lowercase'], ['upper', 'UPPERCASE'], ['title', 'Capitalize Each Word'], ['toggle', 'tOGGLE cASE']].map(([id, label]) => <MenuItem key={id} onClick={() => { act.changeCase(id); close(); }}>{label}</MenuItem>)}
@@ -137,6 +139,7 @@ export function Ribbon({ editor, readOnly, tab, setTab, s, act, host = {} }) {
               </>
             )}</Drop>
             <RB icon={Pilcrow} title="Show formatting marks" keys="Ctrl+Shift+8" active={s.marks} onClick={act.toggleMarks} />
+            <RB icon={SeparatorHorizontal} title="Paragraph … (indents, spacing, keep with next, borders, tabs)" onClick={act.paragraphDialog} />
           </div>
         </Group>
       )}
@@ -175,7 +178,8 @@ export function Ribbon({ editor, readOnly, tab, setTab, s, act, host = {} }) {
         )}</Drop>
       </Group>
       <Group label="Tables">
-        <Drop icon={Table} title="Table" wide label="Table" panelClass="of-pop-table">{(close) => <TableGrid onPick={(r, col) => { c().insertTable({ rows: r, cols: col, withHeaderRow: true }).run(); close(); }} onCustom={() => { close(); act.customTable(); }} />}</Drop>
+        <RB icon={Table} title="Convert the selected lines to a table (tabs or semicolons separate the columns)" onClick={act.textToTable} />
+        <Drop icon={Table} title="Table" wide label="Table" panelClass="of-pop-table">{(close) => <TableGrid onPick={(r, col) => { c().insertTable({ rows: r, cols: col, withHeaderRow: true }).setTableStyle('TableGrid').run(); close(); }} onCustom={() => { close(); act.customTable(); }} />}</Drop>
       </Group>
       <Group label="Illustrations">
         <Drop icon={Image} title="Picture" wide label="Picture">{(close) => (
@@ -329,8 +333,31 @@ export function Ribbon({ editor, readOnly, tab, setTab, s, act, host = {} }) {
     </>
   );
 
+  const ta = inTable ? (e.getAttributes('table') || {}) : {};
+  const lk = { firstRow: true, lastRow: false, firstColumn: true, lastColumn: false, noHBand: false, noVBand: true, ...(ta.look || {}) };
+  const tStyles = Object.values(builtinTableStyles());
+  const swatch = (st) => { const l = tableLook({ tstyle: st.spec, look: lk }); return <table className={`of-docs-tswatch ${l ? l.cls.join(' ') : ''}`} style={l ? l.vars : undefined}><tbody>{[0, 1, 2, 3].map((r) => <tr key={r}>{[0, 1, 2].map((k) => <td key={k} />)}</tr>)}</tbody></table>; };
+  const lookBox = ([k, l, inv]) => <label key={k} className="of-docs-chk small"><input type="checkbox" checked={inv ? !lk[k] : !!lk[k]} onChange={(ev) => act.tableLook({ [k]: inv ? !ev.target.checked : ev.target.checked })} /> {t(l)}</label>;
   const table = inTable && (
     <>
+      <Group label="Table style options">
+        <div className="of-docs-col">{[['firstRow', 'Header row'], ['lastRow', 'Total row'], ['noHBand', 'Banded rows', true]].map(lookBox)}</div>
+        <div className="of-docs-col">{[['firstColumn', 'First column'], ['lastColumn', 'Last column'], ['noVBand', 'Banded columns', true]].map(lookBox)}</div>
+      </Group>
+      <Group label="Table styles">
+        <Drop icon={LayoutGrid} title="Table styles (Word's gallery)" wide label={(tStyles.find((x) => x.id === ta.styleId) || {}).name || t('Styles')} panelClass="of-pop-tstyles">{(close) => (
+          <div className="of-docs-tstyles">{tStyles.map((st) => <button key={st.id} type="button" className={`of-docs-tstyle ${ta.styleId === st.id ? 'of-on' : ''}`} title={st.name} onMouseDown={(ev) => ev.preventDefault()} onClick={() => { act.tableStyle(st.id); close(); }}>{swatch(st)}</button>)}</div>
+        )}</Drop>
+        <Drop icon={PaintBucket} title="Shading" panelClass="of-pop-colors">{(close) => <ColorGrid close={close} noneLabel="No colour" onPick={(col) => c().setCellAttribute('backgroundColor', col).run()} />}</Drop>
+        <RB icon={SquareDashed} title="Borders and shading …" wide label="Borders" onClick={() => act.word('borders')} />
+      </Group>
+    </>
+  );
+  const tlayout = inTable && (
+    <>
+      <Group label="Table">
+        <RB icon={FileText} title="Table properties … (width, alignment, row height, cell margins, text direction)" wide label="Properties" onClick={() => act.word('tableProps')} />
+      </Group>
       <Group label="Rows & columns">
         <RB icon={BetweenHorizontalStart} title="Insert row above" onClick={() => c().addRowBefore().run()} />
         <RB icon={BetweenHorizontalEnd} title="Insert row below" onClick={() => c().addRowAfter().run()} />
@@ -347,12 +374,30 @@ export function Ribbon({ editor, readOnly, tab, setTab, s, act, host = {} }) {
       <Group label="Merge">
         <RB icon={TableCellsMerge} title="Merge cells" disabled={!e.can().mergeCells()} onClick={() => c().mergeCells().run()} />
         <RB icon={TableCellsSplit} title="Split cell" disabled={!e.can().splitCell()} onClick={() => c().splitCell().run()} />
+        <RB icon={SquareSplitVertical} title="Split table above this row" wide label="Split table" onClick={() => c().splitTable().run()} />
       </Group>
-      <Group label="Format">
-        <RB title="Header row" wide label="Header row" onClick={() => c().toggleHeaderRow().run()} />
-        <Drop icon={PaintBucket} title="Cell background" panelClass="of-pop-colors">{(close) => <ColorGrid close={close} noneLabel="No colour" onPick={(col) => c().setCellAttribute('backgroundColor', col).run()} />}</Drop>
-        <RB title="Distribute columns evenly" wide label="Even columns" onClick={act.evenColumns} />
+      <Group label="Cell size">
+        <Drop icon={Maximize} title="AutoFit" wide label="AutoFit">{(close) => (
+          <>
+            <MenuItem onClick={() => { act.autoFit('contents'); close(); }}>AutoFit contents</MenuItem>
+            <MenuItem onClick={() => { act.autoFit('window'); close(); }}>AutoFit window</MenuItem>
+            <MenuItem onClick={() => { act.autoFit('fixed'); close(); }}>Fixed column width</MenuItem>
+          </>
+        )}</Drop>
+        <RB title="Distribute columns evenly" wide label="Even columns" onClick={() => c().distributeColumns().run()} />
+        <RB title="Distribute rows evenly" wide label="Even rows" onClick={() => c().distributeRows(300).run()} />
         <RB title="Column width …" wide label="Width …" onClick={act.columnWidth} />
+      </Group>
+      <Group label="Alignment">
+        {[['top', 'Top'], ['center', 'Centre'], ['bottom', 'Bottom']].map(([v, l]) => <RB key={v} title={`Align ${l.toLowerCase()}`} wide label={l} active={(e.getAttributes('tableCell').vAlign || e.getAttributes('tableHeader').vAlign || 'top') === v} onClick={() => c().setCellsAttrs({ vAlign: v === 'top' ? null : v }).run()} />)}
+        <Drop title="Text direction" wide label="Direction">{(close) => [[null, 'Horizontal'], ['btLr', 'Bottom to top'], ['tbRl', 'Top to bottom']].map(([v, l]) => <MenuItem key={l} onClick={() => { c().setCellsAttrs({ textDir: v }).run(); close(); }}>{l}</MenuItem>)}</Drop>
+      </Group>
+      <Group label="Data">
+        <RB title="Repeat header rows on every page" wide label="Repeat header" active={e.isActive('tableHeader')} onClick={() => c().toggleHeaderRow().run()} />
+        <RB title="Allow the current row to break across pages" wide label="Row breaks" active={!e.getAttributes('tableRow').cantSplit} onClick={() => c().setRowsAttrs({ cantSplit: e.getAttributes('tableRow').cantSplit ? null : true }).run()} />
+        <RB title="Sort …" wide label="Sort" onClick={() => act.word('sort')} />
+        <RB icon={Sigma} title="Formula (=SUM(ABOVE) …)" wide label="Formula" onClick={act.tableFormula} />
+        <RB title="Convert the table to text (tab separated)" wide label="To text" onClick={act.tableToText} />
       </Group>
     </>
   );
@@ -413,6 +458,7 @@ export function Ribbon({ editor, readOnly, tab, setTab, s, act, host = {} }) {
         {cur === 'review' && review}
         {cur === 'view' && view}
         {cur === 'table' && table}
+        {cur === 'tlayout' && tlayout}
         {cur === 'picture' && picture}
       </div>
     </div>

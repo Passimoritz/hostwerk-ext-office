@@ -9,7 +9,8 @@ import { t, pl } from '@hostwerk/i18n';
 import { office } from '../lib/api';
 import { loadEditor, warmEditor, kindFor } from '../lib/loader';
 import { markOpen } from '../lib/perf';
-import { FORMATS, extOf } from '../lib/formats';
+import { FORMATS, extOf, DOC_OF } from '../lib/formats';
+import { askFeature, featureHostMounted } from './features';
 import { changed, settingsNow, loadStatus, hasConverterIn } from './store';
 import { basename, dirname, ensureExt, splitExt, validateName, fileKey, toQuery } from './util';
 import { downloadFrom } from './common';
@@ -89,10 +90,21 @@ async function blankBytes(kind, ext) {
  */
 export async function createFile({ kind, ext, name, dir = '', root = null, template = null }) {
   let bytes; let useExt = ext;
-  if (template && template.own) {
-    bytes = await office.templateBytes(template.id);
-    useExt = template.ext || ext;
-  } else {
+  // a blank file of an app with a default template (Settings → Templates, like Word's Normal.dotm) starts from it
+  const isOwn = !!(template && template.own);
+  const defId = !isOwn && (!template || template.id === 'blank') ? (((settingsNow().templates || {}).defaults || {})[kind] || '') : '';
+  let own = isOwn ? template.id : defId || null;
+  if (own) {
+    try {
+      // the server makes a DOCUMENT of the template (dotx → docx, ott → odt …)
+      const d = await office.templateDoc(own);
+      bytes = d.bytes; useExt = d.ext || (template && template.ext) || ext;
+    } catch (e) {
+      if (isOwn) throw e;
+      own = null; // the default template is gone – blank as before
+    }
+  }
+  if (!own) {
     let chunk = null;
     try { chunk = await loadEditor(kind); } catch { chunk = null; }
     if (chunk && typeof chunk.create === 'function') bytes = await chunk.create({ ext, template: (template && template.id) || 'blank', settings: settingsNow() });
@@ -107,7 +119,8 @@ export async function createFile({ kind, ext, name, dir = '', root = null, templ
  * backend never overwrites) and return its entry; null when the user cancels. tpl: { id, name, ext, kind }
  */
 export async function newFromOwnTemplate(tpl, { root = null, dir = '' } = {}) {
-  const ext = tpl.ext || extOf(tpl.name || '') || 'docx';
+  const ext0 = tpl.ext || extOf(tpl.name || '') || 'docx';
+  const ext = DOC_OF[ext0] || ext0;
   const kind = tpl.kind || (FORMATS[ext] || {}).kind || 'docs';
   const name = await promptDialog({ title: t('New from “{name}”', { name: tpl.name }), label: 'File name', value: splitExt(tpl.name || t('Document')).base, confirm: 'Create',
     validate: (v) => { const m = validateName(v); return m ? t(m) : null; } });
@@ -263,12 +276,16 @@ export async function toggleFavorite(entries, on) {
   changed();
   toast.success(on ? (entries.length === 1 ? 'Added to favourites' : t('{n} items added to favourites', { n: entries.length })) : 'Removed from favourites');
 }
+/** "Save as template …" – the dialog of templates.jsx (name, category, where, default); a plain prompt where no dialog host is mounted */
 export async function saveAsTemplate(entry) {
-  const r = await promptDialog({ title: 'Save as template', text: 'The template appears under “New” and in the template gallery.', label: 'Template name', value: splitExt(entry.name).base, confirm: 'Save template', validate: (v) => (v.trim() ? null : t('Please enter a name.')) });
-  if (!r) return;
-  await office.saveTemplate(entry, r.trim(), t('My templates'));
+  const e = { root: entry.root, path: entry.path, name: entry.name || basename(entry.path) };
+  if (featureHostMounted()) return askFeature('save-template', { entry: e });
+  const r = await promptDialog({ title: 'Save as template', text: 'The template appears under “New” and in the template gallery.', label: 'Template name', value: splitExt(e.name).base, confirm: 'Save template', validate: (v) => (v.trim() ? null : t('Please enter a name.')) });
+  if (!r) return null;
+  const res = await office.saveTemplate(e, r.trim(), '');
   changed({ templates: true });
   toast.success(t('Template “{name}” saved', { name: r.trim() }));
+  return res;
 }
 /** Copy a file from Hostwerk's file browser into the library root */
 export async function copyToLibrary(f) {

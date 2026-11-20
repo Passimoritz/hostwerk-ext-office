@@ -11,17 +11,19 @@ import JSZip from 'jszip';
 import { parseXml, kids, kid, all, text as xtext, serialize, local } from '../../_shared/xmltree.js';
 import { defaultModel, sizeName, twipToMm, normalizeInline, fixDoc, dataUrl, mimeOf, uid, imageSize, hfKey } from './pm.js';
 import { anchorOf } from './anchor.js';
+import { paraPropsFromPPr, runPropsFromRPr, RUN_PROP_TAGS } from './wordprops.js';
+import { specFromStyle, bordersFromEl, marginsFromEl, lookFromEl, builtinTableStyles } from './tables.js';
 
 const W = (el, name) => kid(el, `w:${name}`);
 const val = (el) => (el ? el.a['w:val'] : undefined);
 const onOff = (el) => !!el && !['0', 'false', 'off'].includes(String(val(el) == null ? 'true' : val(el)));
 const HL = { yellow: '#FFFF00', green: '#00FF00', cyan: '#00FFFF', magenta: '#FF00FF', blue: '#0000FF', red: '#FF0000', darkBlue: '#000080', darkCyan: '#008080', darkGreen: '#008000', darkMagenta: '#800080', darkRed: '#800000', darkYellow: '#808000', darkGray: '#808080', lightGray: '#C0C0C0', black: '#000000', white: '#FFFFFF' };
-const PPR_MODELED = new Set(['w:pStyle', 'w:numPr', 'w:jc', 'w:spacing', 'w:ind', 'w:pageBreakBefore', 'w:outlineLvl']);
-const RPR_MODELED = new Set(['w:rStyle', 'w:b', 'w:bCs', 'w:i', 'w:iCs', 'w:u', 'w:strike', 'w:dstrike', 'w:vertAlign', 'w:sz', 'w:szCs', 'w:rFonts', 'w:color', 'w:highlight', 'w:shd', 'w:rPrChange', 'w:ins', 'w:del']);
+const PPR_MODELED = new Set(['w:pStyle', 'w:numPr', 'w:jc', 'w:spacing', 'w:ind', 'w:pageBreakBefore', 'w:outlineLvl', 'w:keepNext', 'w:keepLines', 'w:widowControl', 'w:pBdr', 'w:shd', 'w:tabs']);
+const RPR_MODELED = new Set(['w:spacing', 'w:w', 'w:position', 'w:caps', 'w:smallCaps', 'w:vanish', 'w:lang', 'w:rStyle', 'w:b', 'w:bCs', 'w:i', 'w:iCs', 'w:u', 'w:strike', 'w:dstrike', 'w:vertAlign', 'w:sz', 'w:szCs', 'w:rFonts', 'w:color', 'w:highlight', 'w:shd', 'w:rPrChange', 'w:ins', 'w:del']);
 
 /** Word fields we show as live fields (the rest stay preserved with their result) */
 const FIELD_KINDS = { PAGE: 'page', NUMPAGES: 'pages', SECTIONPAGES: 'pages', DATE: 'date', TIME: 'time', CREATEDATE: 'date', SAVEDATE: 'date', PRINTDATE: 'date', AUTHOR: 'author', TITLE: 'title', FILENAME: 'filename', SUBJECT: 'subject', NUMWORDS: 'words' };
-export function fieldKind(instr) { const w = String(instr || '').trim().split(/\s+/)[0].toUpperCase(); return FIELD_KINDS[w] || null; }
+export function fieldKind(instr) { const s = String(instr || '').trim(); if (/^=\s*(SUM|AVERAGE|MIN|MAX|COUNT|PRODUCT)\s*\(/i.test(s)) return 'formula'; const w = s.split(/\s+/)[0].toUpperCase(); return FIELD_KINDS[w] || null; }
 const firstMarks = (nodes) => { const n = (nodes || []).find((x) => x.type === 'text' && x.marks && x.marks.length); return n ? n.marks.filter((m) => !['comment', 'insertion', 'deletion', 'sdt'].includes(m.type)) : undefined; };
 /** what kind of content control a w:sdtPr describes */
 export function sdtInfo(pr) {
@@ -92,6 +94,7 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
 
   // styles
   const styles = {}; const styleByName = {};
+  let docLang = null; // the document's language (runs in it carry no language of their own here)
   const stylesRel = relOfType('styles');
   const stylesXml = stylesRel ? await readText(zip, stylesRel.target) : null;
   if (stylesXml) {
@@ -99,12 +102,13 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
     const dd = W(sr, 'docDefaults');
     const drpr = dd && kid(kid(dd, 'w:rPrDefault'), 'w:rPr');
     const dppr = dd && kid(kid(dd, 'w:pPrDefault'), 'w:pPr');
+    if (drpr && W(drpr, 'lang')) docLang = W(drpr, 'lang').a['w:val'] || null;
     if (drpr) { const f = fontOf(W(drpr, 'rFonts')); if (f) model.defaults.font = f; const sz = W(drpr, 'sz'); if (sz) model.defaults.fontSize = Number(val(sz)) / 2; }
     if (dppr) { const sp = W(dppr, 'spacing'); if (sp) { if (sp.a['w:after'] != null) model.defaults.spaceAfter = Number(sp.a['w:after']) / 20; if (sp.a['w:line'] && (sp.a['w:lineRule'] || 'auto') === 'auto') model.defaults.lineHeight = Math.round((Number(sp.a['w:line']) / 240) * 100) / 100; } } else { model.defaults.spaceAfter = 0; model.defaults.lineHeight = 1; }
     for (const s of kids(sr, 'w:style')) {
       const id = s.a['w:styleId'];
       const name = (val(W(s, 'name')) || id || '').toLowerCase();
-      const st = { id, name, type: s.a['w:type'], basedOn: val(W(s, 'basedOn')), pPr: W(s, 'pPr'), rPr: W(s, 'rPr'), def: s.a['w:default'] === '1' };
+      const st = { id, name, type: s.a['w:type'], basedOn: val(W(s, 'basedOn')), pPr: W(s, 'pPr'), rPr: W(s, 'rPr'), def: s.a['w:default'] === '1', el: s };
       styles[id] = st; styleByName[name] = id;
       if (st.def && st.type === 'paragraph') {
         // "Normal" may carry the real default font/size/spacing
@@ -113,6 +117,18 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
       }
     }
   }
+  // table styles → display spec (borders, cell margins, header row / banding colours) – resolved along basedOn
+  const tspecs = {};
+  const tableSpec = (id) => {
+    if (!id) return null;
+    if (tspecs[id] !== undefined) return tspecs[id];
+    tspecs[id] = null;
+    const st = styles[id];
+    if (st && st.type === 'table') tspecs[id] = specFromStyle(st.el, { kid, kids }, st.basedOn ? tableSpec(st.basedOn) : null);
+    else { const b = builtinTableStyles()[id]; if (b) tspecs[id] = b.spec; }
+    return tspecs[id];
+  };
+  const defaultTableStyle = Object.values(styles).find((x) => x.type === 'table' && x.def);
   const styleChain = (id) => { const out = []; let s = styles[id]; let guard = 0; while (s && guard++ < 20) { out.unshift(s); s = styles[s.basedOn]; } return out; };
   const headingOfStyle = (id) => {
     for (const s of styleChain(id).reverse()) {
@@ -245,7 +261,8 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
     if (r.strike) m.push({ type: 'strike' });
     if (r.sup) m.push({ type: 'superscript' });
     if (r.sub) m.push({ type: 'subscript' });
-    if (r.font || r.size || r.color) m.push({ type: 'textStyle', attrs: { fontFamily: r.font || null, fontSize: r.size ? `${r.size}pt` : null, color: r.color || null } });
+    const xp = { ...(rs && styles[rs] ? styleChain(rs).reduce((o, st) => ({ ...o, ...runPropsFromRPr(st.rPr, { kid, kids }) }), {}) : {}), ...runPropsFromRPr(rPr, { kid, kids }) };
+    if (r.font || r.size || r.color || Object.keys(xp).length) m.push({ type: 'textStyle', attrs: { fontFamily: r.font || null, fontSize: r.size ? `${r.size}pt` : null, color: r.color || null, ...xp } });
     if (r.hl) m.push({ type: 'highlight', attrs: { color: r.hl } });
     const ch = W(rPr, 'rPrChange');
     if (ch) m.push({ type: 'formatChange', attrs: { id: ch.a['w:id'] || uid('f'), author: ch.a['w:author'] || '', date: ch.a['w:date'] || null, old: kid(ch, 'w:rPr') ? serialize(kid(ch, 'w:rPr')) : '<w:rPr/>' } });
@@ -278,7 +295,8 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
       const a = { ...m.attrs };
       if (a.fontFamily && a.fontFamily === model.defaults.font) a.fontFamily = null;
       if (a.fontSize && parseFloat(a.fontSize) === model.defaults.fontSize) a.fontSize = null;
-      return a.fontFamily || a.fontSize || a.color ? { type: 'textStyle', attrs: a } : null;
+      if (a.lang && a.lang === docLang) delete a.lang;
+      return Object.values(a).some((v) => v != null && v !== false) ? { type: 'textStyle', attrs: a } : null;
     }).filter(Boolean);
   };
 
@@ -510,12 +528,17 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
     if (pa.after != null) attrs.spaceAfter = pa.after;
     if (pa.indent) attrs.indent = pa.indent;
     if (pa.firstLine) attrs.firstLine = pa.firstLine;
+    // keep with next, keep lines, widow control, borders/shading, tabs, right indent, exact line spacing, drop cap
+    const xp = { ...(level ? {} : styleChain(sid).reduce((o, st) => ({ ...o, ...(st.pPr ? paraPropsFromPPr(st.pPr, { kid, kids }) : {}) }), {})), ...paraPropsFromPPr(pPr, { kid, kids }) };
+    delete xp.outline; if (!level && pPr && W(pPr, 'outlineLvl') && Number(val(W(pPr, 'outlineLvl'))) >= 6) xp.outline = Number(val(W(pPr, 'outlineLvl')));
+    for (const [k, v] of Object.entries(xp)) if (v != null) attrs[k] = v;
     if (role === 'title' || role === 'subtitle' || role === 'listparagraph') attrs.pstyle = role;
     if (sid && !level && !['title', 'subtitle', 'listparagraph', 'normal', 'quote', 'code', 'toc'].includes(role)) attrs.styleId = sid;
     const keep = [];
     let section = null;
     for (const x of pPr ? kids(pPr, '*') : []) {
       if (PPR_MODELED.has(x.n)) continue;
+      if (x.n === 'w:framePr' && attrs.dropCap) continue;
       if (x.n === 'w:sectPr') { section = x; continue; }
       if (x.n === 'w:pPrChange') { const op = kid(x, 'w:pPr'); attrs.pchange = { id: x.a['w:id'] || uid('p'), author: x.a['w:author'] || '', date: x.a['w:date'] || null, old: op ? serialize(op) : '<w:pPr/>' }; continue; }
       if (x.n === 'w:rPr') {
@@ -590,17 +613,30 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
   async function tableNode(tbl) {
     const tblPr = W(tbl, 'tblPr');
     const caption = tblPr && val(W(tblPr, 'tblCaption'));
-    const grid = kids(W(tbl, 'tblGrid'), 'w:gridCol').map((g) => Math.round(Number(g.a['w:w'] || 0) / 15));
+    // grid widths in px (Word stores its last layout there); a grid without widths → the first row's cell widths
+    const grid = kids(W(tbl, 'tblGrid'), 'w:gridCol').map((g) => Math.round((Number(g.a['w:w'] || 0) / 15) * 100) / 100);
     const rows = [];
     const vOrigin = {}; // column → cell node of the merge start
+    const firstTcW = [];
     for (const tr of kids(tbl, 'w:tr')) {
       const trPr = W(tr, 'trPr');
-      const header = !!(trPr && W(trPr, 'tblHeader'));
+      const header = !!(trPr && W(trPr, 'tblHeader') && onOff(W(trPr, 'tblHeader')));
       const row = { type: 'tableRow', content: [] };
+      const ra = {};
       const rIns = trPr && W(trPr, 'ins'); const rDel = trPr && W(trPr, 'del');
-      if (rIns || rDel) { const rv = rIns || rDel; row.attrs = { change: { type: rIns ? 'ins' : 'del', id: rv.a['w:id'] || uid('r'), author: rv.a['w:author'] || '', date: rv.a['w:date'] || null } }; }
+      if (rIns || rDel) { const rv = rIns || rDel; ra.change = { type: rIns ? 'ins' : 'del', id: rv.a['w:id'] || uid('r'), author: rv.a['w:author'] || '', date: rv.a['w:date'] || null }; }
+      if (trPr) {
+        const h = W(trPr, 'trHeight');
+        if (h && Number(h.a['w:val']) > 0) { ra.height = Number(h.a['w:val']); if (h.a['w:hRule'] === 'exact') ra.heightRule = 'exact'; }
+        if (W(trPr, 'cantSplit') && onOff(W(trPr, 'cantSplit'))) ra.cantSplit = true;
+        const rest = kids(trPr, '*').filter((x) => !['w:trHeight', 'w:cantSplit', 'w:tblHeader', 'w:ins', 'w:del'].includes(x.n)).map((x) => [x.n, serialize(x)]);
+        if (rest.length) ra.ox = rest;
+      }
+      if (Object.keys(ra).length) row.attrs = ra;
       let col = 0;
       const cellsOf = (el) => kids(el, '*').flatMap((x) => (x.n === 'w:tc' ? [x] : x.n === 'w:sdt' ? kids(W(x, 'sdtContent'), 'w:tc') : x.n === 'w:customXml' ? kids(x, 'w:tc') : []));
+      const gb = trPr && W(trPr, 'gridBefore');
+      if (gb) col += Number(val(gb)) || 0;
       for (const tc of cellsOf(tr)) {
         const tcPr = W(tc, 'tcPr');
         const span = Number(val(tcPr && W(tcPr, 'gridSpan')) || 1);
@@ -608,9 +644,22 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
         if (vm && val(vm) !== 'restart') { const o = vOrigin[col]; if (o) o.attrs.rowspan += 1; col += span; continue; }
         const shd = tcPr && W(tcPr, 'shd');
         const fill = shd && shd.a['w:fill'] && shd.a['w:fill'] !== 'auto' ? `#${shd.a['w:fill']}` : null;
+        const tcW = tcPr && W(tcPr, 'tcW');
+        if (!rows.length && tcW && (tcW.a['w:type'] || 'dxa') === 'dxa') for (let k = 0; k < span; k++) firstTcW[col + k] = Number(tcW.a['w:w']) / span;
         const widths = grid.slice(col, col + span).filter(Boolean);
         const content = await blocksOf(tc);
-        const cell = { type: header ? 'tableHeader' : 'tableCell', attrs: { colspan: span, rowspan: 1, colwidth: widths.length === span ? widths : null, backgroundColor: fill }, content: content.length ? content : [{ type: 'paragraph' }] };
+        const attrs = { colspan: span, rowspan: 1, colwidth: widths.length === span ? widths : null, backgroundColor: fill };
+        if (tcPr) {
+          const va = val(W(tcPr, 'vAlign')); if (va && va !== 'top') attrs.vAlign = va === 'both' ? 'center' : va;
+          const bd = bordersFromEl(W(tcPr, 'tcBorders'), kids); if (bd) attrs.borders = bd;
+          const mg = marginsFromEl(W(tcPr, 'tcMar'), kids); if (mg) attrs.margins = mg;
+          const td = val(W(tcPr, 'textDirection')); if (td && td !== 'lrTb' && td !== 'tb') attrs.textDir = td === 'tbRlV' ? 'tbRl' : td === 'btLrV' ? 'btLr' : td;
+          if (W(tcPr, 'noWrap') && onOff(W(tcPr, 'noWrap'))) attrs.noWrap = true;
+          const rest = kids(tcPr, '*').filter((x) => !['w:tcW', 'w:gridSpan', 'w:vMerge', 'w:hMerge', 'w:shd', 'w:vAlign', 'w:tcBorders', 'w:tcMar', 'w:textDirection', 'w:noWrap'].includes(x.n)).map((x) => [x.n, serialize(x)]);
+          if (tcW) rest.unshift(['w:tcW', serialize(tcW)]);
+          if (rest.length) attrs.ox = rest;
+        }
+        const cell = { type: header ? 'tableHeader' : 'tableCell', attrs, content: content.length ? content : [{ type: 'paragraph' }] };
         if (vm) vOrigin[col] = cell; else delete vOrigin[col];
         row.content.push(cell);
         col += span;
@@ -619,7 +668,25 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
     }
     if (!rows.length) return [];
     if (caption && /^of-callout:/.test(caption) && rows.length === 1 && rows[0].content.length === 1) return [{ type: 'callout', attrs: { kind: caption.split(':')[1] || 'info' }, content: rows[0].content[0].content }];
-    return [{ type: 'table', attrs: { ox: tblPr ? { tblPr: serialize(tblPr) } : null }, content: rows }];
+    if (!grid.some(Boolean) && firstTcW.length) {
+      let c = 0;
+      for (const cell of rows[0].content) { const sp = cell.attrs.colspan || 1; const ws = firstTcW.slice(c, c + sp).map((w) => Math.round(((w || 0) / 15) * 100) / 100); if (ws.length === sp && ws.every(Boolean)) cell.attrs.colwidth = ws; c += sp; }
+    }
+    const ta = { ox: tblPr ? { tblPr: serialize(tblPr) } : null };
+    if (tblPr) {
+      const lay = W(tblPr, 'tblLayout'); if (lay && lay.a['w:type'] === 'fixed') ta.layout = 'fixed';
+      const tw = W(tblPr, 'tblW');
+      if (tw) { const type = tw.a['w:type'] || 'dxa'; const w = String(tw.a['w:w'] || '0'); if (type === 'pct' || (type === 'dxa' && Number(w) > 0)) ta.width = { type, w: w.endsWith('%') ? Math.round(parseFloat(w) * 50) : Number(w) || 0 }; }
+      const ind = W(tblPr, 'tblInd'); if (ind && (ind.a['w:type'] || 'dxa') === 'dxa' && Number(ind.a['w:w'])) ta.indent = Number(ind.a['w:w']);
+      const jc = val(W(tblPr, 'jc')); if (jc === 'center' || jc === 'right' || jc === 'end') ta.align = jc === 'end' ? 'right' : jc;
+      const bd = bordersFromEl(W(tblPr, 'tblBorders'), kids); if (bd) ta.borders = bd;
+      const cm = marginsFromEl(W(tblPr, 'tblCellMar'), kids); if (cm) ta.cellMargins = cm;
+      const look = lookFromEl(W(tblPr, 'tblLook')); if (look) ta.look = look;
+      if (val(W(tblPr, 'tblStyle'))) ta.styleId = val(W(tblPr, 'tblStyle'));
+    }
+    // Word's look: the style's borders/margins/colours (the default table style when none is named – no borders)
+    ta.tstyle = tableSpec(ta.styleId || (defaultTableStyle && defaultTableStyle.id)) || { cond: {} };
+    return [{ type: 'table', attrs: ta, content: rows }];
   }
 
   /** block container (body, cell, sdtContent …) → blocks, with lists grouped and TOC fields collapsed */

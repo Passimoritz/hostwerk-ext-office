@@ -37,18 +37,21 @@ import { SymbolDialog, LinkDialog, ParagraphDialog, WordCountDialog, MacrosSheet
 import { EquationEditor, FieldDialog, DiagramDialog, AiDialog, HeaderFooterEditor, SectionDialog, Compare, registerCompareTarget, fieldValue } from './dialogs2.jsx';
 import { SlashMenu, Bubble, ContextMenu, PagesLayer, Thumbnails, docsCommands } from './extras.jsx';
 import { allPaletteCommands } from './palette.js';
-import { FontSize, ParagraphFormat, RunKeep, WordKeys } from './extensions/format.js';
+import { FontSize, ParagraphFormat, RunKeep, WordKeys, ParagraphEx, HeadingEx } from './extensions/format.js';
 import { PageBreak, Footnote, Toc, Callout as CalloutNode, Preserved, ImageEx, Comment } from './extensions/nodes.js';
 import { ContentControl, SdtMark, ControlBlock, Field, SectionBreak, Diagram, EquationEx, RevisionAttrs, formatDate } from './extensions/rich.js';
 import { Insertion, Deletion, FormatChange, TrackChanges, changeRanges } from './extensions/track.js';
 import { Search, FormattingMarks } from './extensions/view.js';
 import { Pagination, geometry, pageKey } from './extensions/paginate.js';
+import { TableFormat, TableTools, OfTableView, formulaValue } from './extensions/table.js';
+import { WordFormat } from './extensions/wordfmt.js';
+import { WordDialog } from './word/host.jsx';
 import { Slash, slashKey } from './extensions/slash.js';
 import { BlockHandles } from './extensions/handles.js';
 import { readDocument, writeDocument, EXPORT_FORMATS, MIME } from './io/index.js';
 import { standaloneHtml } from './io/render-html.js';
 import { mdToHtml } from './io/md.js';
-import { PAGE_SIZES, MM_PX, PT_PX, pageBox, uid, sizeName, walk, inlineText, TEXTBLOCKS } from './io/pm.js';
+import { lineFactor, PAGE_SIZES, MM_PX, PT_PX, pageBox, uid, sizeName, walk, inlineText, TEXTBLOCKS } from './io/pm.js';
 import { vbaModules } from './io/vba.js';
 import { renderLatex, compareLib } from './lazy.js';
 import { office } from '../../lib/api.js';
@@ -75,13 +78,13 @@ function buildExtensions({ readOnly, ds = {}, lang = 'de', actRef, collab = null
   return [
     // section breaks only between top-level blocks (never inside a table cell or a list)
     Document.extend({ content: '(block | sectionBlock)+' }),
-    StarterKit.configure({ document: false, strike: false, heading: { levels: [1, 2, 3, 4, 5, 6] }, history: collab ? false : { depth: 500 } }),
+    StarterKit.configure({ document: false, strike: false, paragraph: false, heading: false, history: collab ? false : { depth: 500 } }), ParagraphEx, HeadingEx.configure({ levels: [1, 2, 3, 4, 5, 6] }),
     Strike.extend({ addKeyboardShortcuts: () => ({}) }),
     Underline, TextStyle, Color, FontFamily, FontSize,
     Highlight.configure({ multicolor: true }),
     TextAlign.extend({ addKeyboardShortcuts: () => ({}) }).configure({ types: ['heading', 'paragraph'] }),
     LinkExt.extend({ inclusive: false }).configure({ openOnClick: false, autolink: ds.autoLinks !== false, linkOnPaste: true, HTMLAttributes: { target: null, rel: null, class: 'of-docs-link' } }),
-    Table.configure({ resizable: !readOnly, lastColumnResizable: false, allowTableNodeSelection: true }), TableRow, TableCell, TableHeader,
+    Table.configure({ resizable: true, View: OfTableView, lastColumnResizable: false, allowTableNodeSelection: true }), TableRow, TableCell, TableHeader, TableFormat, TableTools, WordFormat,
     TaskList, TaskItem.configure({ nested: true }),
     SubscriptExt.extend({ addKeyboardShortcuts: () => ({}) }), SuperscriptExt.extend({ addKeyboardShortcuts: () => ({}) }),
     Placeholder.configure({ placeholder: readOnly ? '' : t('Type “/” for commands – or just start writing') }),
@@ -417,6 +420,7 @@ function EditorBody({ file, ext, initial, readOnly, settings, host, collab, join
       const a = node.attrs;
       try {
         if (a.kind === 'hostwerk' || a.kind === 'cell') { if (!host.fields || typeof host.fields.value !== 'function') return null; const v = await host.fields.value(a.source, a.params); return { value: String((v && (v.text != null ? v.text : v.value)) ?? ''), updatedAt: (v && v.updatedAt) || new Date().toISOString() }; }
+        if (a.kind === 'formula') { const v = formulaValue(ed.state.doc, list.find((x) => x.node === node).pos, a.instr); return v == null ? null : { value: v }; }
         if (['date', 'time', 'title', 'author', 'filename', 'words', 'pages'].includes(a.kind)) { const fmt = /\\@ "([^"]+)"/.exec(a.instr || ''); return { value: a.kind === 'date' && /SAVEDATE|CREATEDATE|PRINTDATE/i.test(a.instr || '') ? a.value : fieldValue(a.kind, { ...ctxv, format: fmt ? fmt[1].replace(/'/g, '') : 'dd.MM.yyyy' }) }; }
       } catch { return null; }
       return null;
@@ -626,7 +630,57 @@ function EditorBody({ file, ext, initial, readOnly, settings, host, collab, join
       ed.chain().focus().updateAttributes('orderedList', { listStyle: ls === 'decimal' ? null : ls }).run();
     },
     toggleMarks: () => { const v = !marks; setMarks(v); editorRef.current.commands.setFormattingMarks(v); },
-    paragraphDialog: () => setDialog({ kind: 'paragraph' }),
+    paragraphDialog: () => setDialog({ kind: 'word', name: 'paragraph' }),
+    word: (name) => setDialog({ kind: 'word', name }),
+    tableStyle: (id) => editorRef.current.chain().focus().setTableStyle(id).run(),
+    tableLook: (patch) => editorRef.current.chain().focus().setTableLook(patch).run(),
+    autoFit: (mode) => {
+      const ed = editorRef.current;
+      // contents / fixed: the widths the browser has laid out now become the grid
+      const $p = ed.state.selection.$from; let tpos = null;
+      for (let d = $p.depth; d > 0; d--) if ($p.node(d).type.name === 'table') { tpos = $p.before(d); break; }
+      const el = tpos != null ? ed.view.nodeDOM(tpos) : null; const table = el && (el.querySelector ? el.querySelector('table') : null);
+      let widths = null;
+      if (table && mode !== 'window') {
+        const k = ed.view.dom.offsetWidth ? ed.view.dom.getBoundingClientRect().width / ed.view.dom.offsetWidth : 1;
+        const first = table.rows[0]; const cols = [];
+        if (first) for (const cell of first.cells) { const span = cell.colSpan || 1; const w = cell.getBoundingClientRect().width / k / span; for (let i = 0; i < span; i++) cols.push(Math.round(w * 100) / 100); }
+        const cellCol = new Map(); const node = ed.state.doc.nodeAt(tpos); let off = 0;
+        node.forEach((row, ro) => { let c = 0; row.forEach((cell, co) => { cellCol.set(ro + 1 + co, c); c += cell.attrs.colspan || 1; }); off = ro; });
+        void off; widths = { cols, cellCol };
+      }
+      ed.chain().focus().autoFit(mode, widths).run();
+    },
+    textToTable: () => {
+      const ed = editorRef.current; const { from, to } = ed.state.selection;
+      const NL = String.fromCharCode(10); const TAB = String.fromCharCode(9);
+      const lines = ed.state.doc.textBetween(from, to, NL, ' ').split(NL).filter((l) => l.trim());
+      if (!lines.length) { toast(t('Select the lines to convert first – columns separated by tabs or semicolons.')); return; }
+      const sep = lines.some((l) => l.includes(TAB)) ? TAB : lines.some((l) => l.includes(';')) ? ';' : ',';
+      const rows = lines.map((l) => l.split(sep).map((x) => x.trim()));
+      const n = Math.max(...rows.map((r) => r.length));
+      const cell = (txt, head) => ({ type: head ? 'tableHeader' : 'tableCell', content: [{ type: 'paragraph', content: txt ? [{ type: 'text', text: txt }] : undefined }] });
+      const tbl = { type: 'table', attrs: { styleId: 'TableGrid', tstyle: null }, content: rows.map((r, i) => ({ type: 'tableRow', content: Array.from({ length: n }, (_, k) => cell(r[k] || '', false)) })) };
+      ed.chain().focus().insertContentAt({ from: ed.state.selection.$from.before(1), to: ed.state.selection.$to.after(1) }, tbl).run();
+      ed.chain().focus().setTableStyle('TableGrid').run();
+    },
+    tableToText: () => {
+      const ed = editorRef.current; const $p = ed.state.selection.$from;
+      for (let d = $p.depth; d > 0; d--) {
+        const n = $p.node(d);
+        if (n.type.name !== 'table') continue;
+        const paras = []; n.forEach((row) => { const parts = []; row.forEach((cl) => parts.push(cl.textContent)); const txt = parts.join(String.fromCharCode(9)); paras.push({ type: 'paragraph', content: txt ? [{ type: 'text', text: txt }] : undefined }); });
+        ed.chain().focus().insertContentAt({ from: $p.before(d), to: $p.after(d) }, paras).run();
+        return;
+      }
+    },
+    tableFormula: async () => {
+      const v = await promptDialog({ title: 'Formula', label: 'Formula (=SUM(ABOVE), =SUM(LEFT), =AVERAGE(ABOVE) …)', value: '=SUM(ABOVE)', confirm: 'Insert' });
+      if (!v) return;
+      const ed = editorRef.current;
+      ed.chain().focus().insertContent({ type: 'field', attrs: { kind: 'formula', instr: v.trim(), value: '' } }).run();
+      refreshFields({ silent: false });
+    },
     find: (mode) => setFind(mode),
     print: doPrint,
     pageBreak: () => editorRef.current.chain().focus().setPageBreak().run(),
@@ -862,7 +916,7 @@ function EditorBody({ file, ext, initial, readOnly, settings, host, collab, join
   const print = layout === 'print';
   const d = model.defaults || {};
   const paperVars = {
-    '--of-font': fontCss(d.font || ds.font || 'Calibri'), '--of-size': `${d.fontSize || 11}pt`, '--of-lh': d.lineHeight || 1.15, '--of-after': `${d.spaceAfter != null ? d.spaceAfter : 8}pt`,
+    '--of-font': fontCss(d.font || ds.font || 'Calibri'), '--of-size': `${d.fontSize || 11}pt`, '--of-lh': d.lineHeight || 1.15, '--of-lf': lineFactor(d.font || ds.font || 'Calibri'), '--of-after': `${d.spaceAfter != null ? d.spaceAfter : 8}pt`,
     '--of-paper': page.color || '#ffffff',
   };
   const lastPage = pages && pages.length ? pages[pages.length - 1] : null;
@@ -886,7 +940,7 @@ function EditorBody({ file, ext, initial, readOnly, settings, host, collab, join
     setCtx({ x: e.clientX, y: e.clientY });
   };
   return (
-    <div ref={rootRef} className={`of-docs ${focus ? 'of-focus' : ''} ${painter ? 'of-painting' : ''} ${readOnly ? 'of-ro' : ''}`} style={paperVars}>
+    <div ref={rootRef} className={`of-docs ${marks ? 'of-marks-on' : ''} ${focus ? 'of-focus' : ''} ${painter ? 'of-painting' : ''} ${readOnly ? 'of-ro' : ''}`} style={paperVars}>
       {!focus && <Ribbon editor={editor} readOnly={readOnly} tab={tab} setTab={setTab} act={act} host={host}
         s={{ painter, marks, page, spell, lang, track, changes: changes.length, comments: !!side && side === 'comments' && sideTab === 'comments', layout, ruler, nav, zoom, hasMacros: (initial.model.fidelity || []).includes('macros'), contentWidth: contentW, defaultFont: d.font, defaultSize: d.fontSize, mini, ai: aiReady, collab: !!collab, joining, canCollab: !!(host.collab && host.collab.connect) && !readOnly && !(file && file.converted), thumbs: side === 'thumbs' }} />}
       {find && <FindBar editor={editor} mode={find} setMode={setFind} readOnly={readOnly} onClose={() => { setFind(null); editor.commands.focus(); }} />}
@@ -952,6 +1006,7 @@ function EditorBody({ file, ext, initial, readOnly, settings, host, collab, join
         if (dialog.pos == null) { setPage(v.page); updateModel({ titlePage: v.titlePage }); } else { const n = editor.state.doc.nodeAt(dialog.pos); if (n) editor.view.dispatch(editor.state.tr.setNodeMarkup(dialog.pos, undefined, { ...n.attrs, ...v })); }
         setDialog(null);
       }} />}
+      {dialog && dialog.kind === 'word' && <WordDialog name={dialog.name} editor={editor} onClose={() => setDialog(null)} />}
       {dialog && dialog.kind === 'paragraph' && <ParagraphDialog attrs={{ ...editor.getAttributes('paragraph'), ...editor.getAttributes('heading') }} onClose={() => setDialog(null)} onSave={(a) => { editor.chain().focus().setParagraphFormat(a).run(); setDialog(null); }} />}
       {dialog && dialog.kind === 'count' && <WordCountDialog stats={st} pages={pageCount} goal={goal} onGoal={(g) => { setGoalRaw(g); lsSet(goalKey, g ? String(g) : null); }} selection={(() => { const { from, to } = editor.state.selection; if (from === to) return null; const s = editor.state.doc.textBetween(from, to, '\n', ' '); return { words: (s.match(/[\p{L}\p{N}][\p{L}\p{N}'’\-_.@]*/gu) || []).length, chars: s.length }; })()} onClose={() => setDialog(null)} />}
       {dialog && dialog.kind === 'equation' && <EquationEditor latex={dialog.latex} display={dialog.display} onClose={() => setDialog(null)} onSave={(latex, display, mathml) => {

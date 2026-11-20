@@ -144,8 +144,21 @@
 .of-shell-screen-empty { padding: var(--sp-8); }
 
 /* ---------- file browser preview ---------- */
-.of-shell-fpreview { display: flex; flex-direction: column; gap: var(--sp-2); min-width: 0; }
-.of-shell-fpreview-bar { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+/* Hostwerk's .fb-preview centres small things on a checkerboard – Office fills it: header + the document, scrolling inside */
+.fb-preview:has(.of-shell-fpreview) { display: flex; flex-direction: column; align-items: stretch; justify-content: stretch; place-items: stretch; padding: 0; overflow: hidden; background: var(--bg); }
+.fb-preview:has(.of-shell-fpreview) > * { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.of-shell-fpreview { flex: 1; min-height: 0; min-width: 0; height: 100%; display: flex; flex-direction: column; }
+.of-shell-fpreview-bar { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--line); background: var(--surface); border-top: 3px solid var(--of-k, var(--accent)); }
+.of-shell-fpreview-bar > .grow { min-width: 160px; }
+.of-shell-fpreview-acts { justify-content: flex-end; }
+.of-shell-pv { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; background: var(--surface-2); overflow: hidden; }
+.of-shell-pv > * { flex: 1; min-height: 0; }
+.of-shell-pv-load, .of-shell-pv-msg { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--sp-2); padding: var(--sp-6); text-align: center; }
+.of-shell-pv-scroll { overflow: auto; padding: var(--sp-4); }
+/* the editors read-only in the pane: the document only – no ribbon, no "read only" sentence */
+.of-shell-pv .of-docs-ribbon, .of-shell-pv .of-sheet-ribbon { display: none !important; }
+.of-shell-pv .of-slides-robar > span { display: none; }
+.of-shell-pv .of-slides-robar { justify-content: flex-end; }
 
 /* ---------- settings ---------- */
 .of-shell-settings { gap: var(--sp-3); }
@@ -505,3 +518,25 @@
 .of-shell-rcpt { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 .of-shell-rcpt > select { flex: 0 0 210px; width: 210px; }
 .of-shell-rcpt > .grow { flex: 1 1 200px; min-width: 0; }
+
+/* ---------- screen mode in Hostwerk's desktop window (1.3): the top bar is the window's title bar ---------- */
+/* electron/main.js: frameless window (titleBarStyle hidden + titleBarOverlay 40 px) – Hostwerk's own .titlebar is hidden on screens */
+.of-shell-ebar.is-drag, .of-shell-wbar.is-drag { -webkit-app-region: drag; user-select: none; }
+.of-shell-ebar.is-drag :is(button, input, a, select, textarea, [role="button"], [tabindex], .badge, .of-shell-peers, .of-shell-estatus, .of-shell-crumbs),
+.of-shell-wbar.is-drag :is(button, a, input) { -webkit-app-region: no-drag; }
+.of-shell-ebar.is-wco, .of-shell-wbar.is-wco { padding-right: calc(var(--of-wco-right, 150px) + var(--sp-2)); min-height: max(52px, var(--of-wco-h, 40px)); }
+.of-shell-efull-on { color: var(--accent); }
+.of-shell-wbar { display: flex; align-items: center; gap: var(--sp-2); min-height: 40px; padding: 0 var(--sp-3); border-bottom: 1px solid var(--line); background: var(--surface); }
+.of-shell-wbar.is-wco { min-height: var(--of-wco-h, 40px); }
+@media (display-mode: fullscreen) { .of-shell-ebar.is-wco { padding-right: var(--sp-3); } }
+/* Hostwerk 3.2.x (no files.icon): the coloured type icon as a mark behind the name */
+.of-shell-tmark { display: inline-flex; align-items: center; width: 14px; height: 14px; }
+.fb-mark:has(> .of-shell-tmark) { opacity: 1; }
+/* own/imported templates (1.3): default badge, read-only lock, gallery groups */
+.of-shell-tpl-paper { position: relative; }
+.of-shell-tpl-badge { position: absolute; left: 6px; top: 6px; display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px; border-radius: var(--r-pill); background: var(--accent); color: #fff; font-size: var(--fs-2xs, 10px); font-weight: 600; box-shadow: 0 1px 3px #0003; }
+.of-shell-tpl-ro { position: absolute; right: 6px; top: 6px; display: inline-flex; padding: 3px; border-radius: var(--r-pill); background: #0009; color: #fff; }
+.of-shell-tplgal { gap: var(--sp-4); }
+.of-shell-tplgal .of-shell-sec-title { text-transform: none; letter-spacing: 0; }
+/* read-only presentations (preview pane, "open read-only"): no "New slide" under the slide list */
+.of-slides-root.ro .of-slides-addslide { display: none; }

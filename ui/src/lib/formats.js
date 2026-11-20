@@ -180,3 +180,18 @@ export const TEMPLATES = [
   { id: 'photo', kind: 'slides', name: 'Photo album', category: 'Personal' },
   { id: 'blank', kind: 'pdf', name: 'Blank PDF', category: 'Basics' },
 ];
+
+/*
+ * Templates (1.3, same maps as server/templates.js): "Save as template" writes the template form of a format, a new
+ * document from a template gets the document form (macro templates keep their macros: dotm → docm).
+ */
+export const TEMPLATE_OF = {
+  docx: 'dotx', docm: 'dotm', dotx: 'dotx', dotm: 'dotm', xlsx: 'xltx', xlsm: 'xltm', xltx: 'xltx', xltm: 'xltm',
+  pptx: 'potx', pptm: 'potm', ppsx: 'potx', ppsm: 'potm', potx: 'potx', potm: 'potm',
+  odt: 'ott', ott: 'ott', ods: 'ots', ots: 'ots', odp: 'otp', otp: 'otp', odg: 'otg', otg: 'otg',
+};
+export const DOC_OF = { dotx: 'docx', dotm: 'docm', dot: 'doc', xltx: 'xlsx', xltm: 'xlsm', xlt: 'xls', potx: 'pptx', potm: 'pptm', pot: 'ppt', ott: 'odt', ots: 'ods', otp: 'odp', otg: 'odg' };
+/** is this a template file (dotx, xltx, potx, ott …)? */
+export const isTemplateName = (name) => Object.prototype.hasOwnProperty.call(DOC_OF, extOf(name));
+/** the template format "Save as template" writes for this file, or null */
+export const templateExtFor = (name) => TEMPLATE_OF[extOf(name)] || null;

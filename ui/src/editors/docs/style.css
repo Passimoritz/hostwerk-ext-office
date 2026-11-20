@@ -1,3 +1,8 @@
+/* Aptos (Word 365's default) lives in Office's own font cache – browsers do not see it. Calibri, 5.8 % larger, sets the
+   same line breaks as Word's Aptos (measured), so pages break where Word breaks them. */
+@font-face { font-family: "of-aptos"; src: local("Calibri"), local("Carlito"); size-adjust: 105.8%; }
+@font-face { font-family: "of-aptos"; font-weight: 700; src: local("Calibri Bold"), local("Calibri-Bold"), local("Carlito Bold"); size-adjust: 105.8%; }
+@font-face { font-family: "of-aptos"; font-style: italic; src: local("Calibri Italic"), local("Calibri-Italic"), local("Carlito Italic"); size-adjust: 105.8%; }
 /* Docs editor chunk – everything prefixed .of-docs-, built from Hostwerk tokens.
    hostwerk-allow: colors, scale – the paper of a document stays white with black text in both themes (like Word),
    revision/highlight colours are document colours, not UI colours; paper content, the ruler and the style previews
@@ -78,7 +83,7 @@
 .of-docs-after { margin-top: var(--sp-3); }
 
 /* ---------- the paper (editor, previews) ---------- */
-.of-docs-paper { color: #000; font-family: var(--of-font, Calibri, Carlito, sans-serif); font-size: var(--of-size, 11pt); line-height: var(--of-lh, 1.15); }
+.of-docs-paper { color: #000; font-family: var(--of-font, Calibri, Carlito, sans-serif); font-size: var(--of-size, 11pt); line-height: calc(var(--of-lh, 1.15) * var(--of-lf, 1)); }
 .of-docs-pm { outline: none; caret-color: #000; word-wrap: break-word; white-space: pre-wrap; tab-size: 36pt; }
 .of-print .of-docs-pm { display: flex; flex-direction: column; min-height: 200px; }
 .of-print .of-docs-pm > * { flex: none; }
@@ -122,6 +127,11 @@
 .of-docs-pm .column-resize-handle { position: absolute; right: -2px; top: 0; bottom: -2px; width: 4px; background: #4a86e8; pointer-events: none; z-index: 3; }
 .of-docs-pm.resize-cursor, .of-docs .resize-cursor { cursor: col-resize; }
 .of-docs-pm .tableWrapper { overflow-x: auto; }
+/* Word tables (docx / table styles): width, borders, margins and the table style's look come from the table view */
+.of-print .of-docs-pm .tableWrapper.of-wtw, .of-docs-pm .tableWrapper.of-wtw { overflow: visible; }
+.of-web .of-docs-pm .tableWrapper.of-wtw { overflow-x: auto; }
+.of-docs-pm .of-wtw > table:not(.of-wt) { overflow: visible; }
+/* .of-wt rules: io/tables.js wordTableCss() (shared with the HTML/PDF export) */
 
 /* our nodes */
 .of-docs-pagebreak { position: relative; height: 0; margin: 0; user-select: none; }
@@ -324,11 +334,17 @@
 /* pagination: lines / rows that move to the next page */
 .of-pgsp-line { display: block; pointer-events: none; user-select: none; }
 .of-pgsp-row { display: block; position: relative; pointer-events: none; user-select: none; }
-.of-pgsp-paper, .of-pgsp-gap { position: absolute; z-index: 4; }
+.of-pgsp-cline { display: block; position: relative; pointer-events: none; user-select: none; }
+.of-pg-nat .of-docs-pgsp { display: none !important; }
+.of-docs-pm td:has(> .of-pgsp-row), .of-docs-pm th:has(> .of-pgsp-row) { vertical-align: top !important; }
+.of-pgsp-band { position: absolute; left: 0; top: 0; width: 100%; height: 0; z-index: 4; pointer-events: none; }
+.of-pgsp-paper, .of-pgsp-gap { position: absolute; left: 0; right: 0; z-index: 4; }
 .of-pgsp-paper { background: var(--of-paper, #fff); }
 .of-pgsp-gap { background: var(--of-canvas); }
-.of-pgsp-head { position: absolute; left: 0; right: 0; bottom: 0; overflow: hidden; z-index: 5; font-weight: 600; }
+.of-pgsp-cutline { border-top: 1px solid #a6a6a6; }
+.of-pgsp-head { position: absolute; left: 2px; right: 2px; overflow: hidden; z-index: 5; background: var(--of-paper, #fff); }
 .of-pgsp-head p { margin: 0; }
+.of-pgsp-head table { margin: 0 !important; }
 
 /* content controls, fields, sections, block controls, diagrams, formulas */
 .of-docs-cc { display: inline-flex; align-items: baseline; gap: 2px; padding: 0 3px; margin: 0 1px; border-radius: 3px; background: rgba(24, 90, 189, .08); box-shadow: inset 0 -1px 0 rgba(24, 90, 189, .45); cursor: pointer; white-space: nowrap; transition: background .12s; }
@@ -469,3 +485,25 @@
 .of-kept-float .of-kept-box { min-width: 0; }
 .of-kept-float img { display: block; width: 100%; height: auto; }
 @media (prefers-reduced-motion: no-preference) { .of-kept-float > .of-kept-floatbox { transition: box-shadow .12s; } }
+
+/* Word paragraph / character formats (extensions/wordfmt.js) */
+.of-docs-pm .of-dropcap::first-letter { float: left; font-size: 3.4em; line-height: .82; margin: .06em .08em 0 0; padding-top: .04em; }
+.of-docs-pm .of-dropcap[data-dropcap="2"]::first-letter { font-size: 2.3em; }
+.of-docs-pm .of-dropcap[data-dropcap="4"]::first-letter { font-size: 4.5em; }
+.of-docs-pm .of-dropcap[data-dropcap="5"]::first-letter { font-size: 5.6em; }
+.of-docs-pm .of-tab { white-space: pre; }
+.of-docs-pm .of-tab-dot { background: radial-gradient(circle, currentColor .7px, transparent 1px) 0 calc(100% - .28em) / 4px 4px repeat-x; }
+.of-docs-pm .of-tab-middleDot { background: radial-gradient(circle, currentColor .7px, transparent 1px) 0 55% / 4px 4px repeat-x; }
+.of-docs-pm .of-tab-hyphen { background: repeating-linear-gradient(to right, currentColor 0 3px, transparent 3px 6px) 0 60% / 100% 1px no-repeat; }
+.of-docs-pm .of-tab-underscore, .of-docs-pm .of-tab-heavy { box-shadow: inset 0 -1px 0 currentColor; }
+.of-docs-pm [data-hidden] { display: none; }
+.of-marks-on .of-docs-pm [data-hidden] { display: inline; text-decoration: underline dotted #7a7a7a; }
+/* table tools: style gallery, style options */
+.of-docs-col { display: flex; flex-direction: column; gap: 2px; }
+.of-docs-chk { display: flex; align-items: center; gap: 6px; white-space: nowrap; cursor: pointer; }
+.of-pop-tstyles { width: min(560px, 90vw); }
+.of-docs-tstyles { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; max-height: 360px; overflow: auto; padding: 2px; }
+.of-docs-tstyle { padding: 3px; border: 1px solid var(--line); border-radius: var(--r-sm); background: #fff; cursor: pointer; }
+.of-docs-tstyle:hover, .of-docs-tstyle.of-on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.of-docs-tstyles table.of-docs-tswatch { width: 100% !important; min-width: 56px; border-collapse: collapse; table-layout: fixed; --of-paper: #fff; }
+.of-docs-tswatch td { height: 7px; padding: 0 !important; }

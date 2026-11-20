@@ -6,7 +6,7 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import {
   Settings2, FileText, Sheet, Presentation, FileType, Cpu, Plug, Share2, Library, ArrowLeft, CheckCircle2, XCircle, Download, RotateCcw, Trash2, FlaskConical, Sparkles, Cloud, LogOut, RefreshCw, MonitorCheck,
-  FileSpreadsheet, Calculator, PenLine, FolderOpen, Search, Folders, FilePlus2, MonitorPlay, Save, Link2, History, Type,
+  LayoutTemplate, FileSpreadsheet, Calculator, PenLine, FolderOpen, Search, Folders, FilePlus2, MonitorPlay, Save, Link2, History, Type,
 } from 'lucide-react';
 import { get, post } from '@hostwerk/api';
 import { SettingsLayout, SettingRow, Switch, Seg, Field, PathInput, SaveBar, Callout, Btn, Loading, Empty, toast, confirmDialog, useRemembered, InfoTip } from '@hostwerk/ui';
@@ -18,11 +18,13 @@ import { parseQuery, fmtBytes } from './util';
 import { useEngine, engineReady, engineBusy, installEngine, updateEngine, removeEngine, EngineProgress, EngineDialogHost, useIntegrations, FullEditorSetup, loadIntegrations, FullEditorDialogHost } from './engine';
 import { LIB_ROOT, filesRoute } from './ops';
 import { DefaultAppCard } from './osCard';
+import { TemplatesPane } from './templates';
 import { openLink, fmtDateTime, Keep } from './common';
 
 const GROUPS = [
   { id: 'general', label: 'General', icon: Settings2 },
   { id: 'library', label: 'Folder & storage', icon: Library },
+  { id: 'templates', label: 'Templates', icon: LayoutTemplate },
   { id: 'docs', label: 'Documents', icon: FileText },
   { id: 'sheets', label: 'Spreadsheets', icon: Sheet },
   { id: 'slides', label: 'Presentations', icon: Presentation },
@@ -130,6 +132,7 @@ export default function OfficeSettings({ embedded = false, query = '' }) {
       <Num p="general.versionDays" title="Keep versions" unit="days" />
     </div></div>
   </>;
+  else if (group === 'templates') pane = <TemplatesPane v={v} set={set} />;
   else if (group === 'docs') pane = <>
     <div className="card"><div className="card-head"><FilePlus2 size={16} className="of-shell-chead" aria-hidden="true" /><h3>New documents</h3></div><div className="card-body">
       <Font p="docs.font" title="Font" />

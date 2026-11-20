@@ -38,14 +38,24 @@ export const office = {
   meta: (path, patch) => put('/office/meta', { ...(path && typeof path === 'object' ? loc(path) : { path }), ...patch }), // { favorite, tags, color, note }
   tags: () => get('/office/tags'),
   /** favourite / shared / lock marks of the office files in a folder of Hostwerk's Files → { names: { name: {…} } } */
-  marks: ({ root, path }) => get(`/office/marks?${q({ root, path })}`),
+  marks: ({ root, path, types }) => get(`/office/marks?${q({ root, path, types: types ? 1 : undefined })}`),
   /** "Open with" / default app (SDK 3.15) */
   os: () => get('/office/os'),
   versions: (f) => get(`/office/versions?${q(loc(f))}`),
   restoreVersion: (f, id) => post('/office/versions/restore', { ...loc(f), id }),
   labelVersion: (f, id, label) => put('/office/versions/label', { ...loc(f), id, label }),
   templates: () => get('/office/templates'),
-  saveTemplate: (f, name, category) => post('/office/templates', { ...loc(f), name, category }),
+  /** "Save as template" (real dotx/xltx/potx/ott … – the server switches the package type); to: 'folder' | 'next' | 'both' → { template, entries } */
+  saveTemplate: (f, name, category, to) => post('/office/templates', { ...loc(f), name, category, ...(to ? { to } : {}) }),
+  renameTemplate: (id, name) => post(`/office/templates/${encodeURIComponent(id)}/rename`, { name }),
+  /** default template of its app (new blank documents start from it) – on: false removes it */
+  defaultTemplate: (id, on = true) => post(`/office/templates/${encodeURIComponent(id)}/default`, { on }),
+  /** usual template folders on this computer → { folders: [{ path, label, count, added }] } */
+  templateFolders: () => get('/office/templates/suggest'),
+  /** a template FILE (double-click in Files) → a new document next to it (template folders: the library root) → Entry */
+  fromTemplate: (f, name) => post('/office/fromtemplate', { ...loc(f), ...(name ? { name } : {}) }),
+  /** new document from a listed template → Entry (dir/root: where; default the library root) */
+  newFromTemplate: (id, { root, dir, name } = {}) => post(`/office/templates/${encodeURIComponent(id)}/new`, { ...(root ? { root } : {}), ...(dir != null ? { dir } : {}), ...(name ? { name } : {}) }),
   removeTemplate: (id) => del(`/office/templates/${encodeURIComponent(id)}`),
   shares: () => get('/office/shares'),
   share: (path, opts) => post('/office/shares', { ...(path && typeof path === 'object' ? loc(path) : { path }), ...opts }), // { expires, password, allowDownload }
@@ -101,6 +111,10 @@ export const office = {
     return new Uint8Array(await r.arrayBuffer());
   },
   async versionBytes(f, id) { const r = await check(await fetch(url('/versions/raw', { ...loc(f), id }), { credentials: 'same-origin' })); return new Uint8Array(await r.arrayBuffer()); },
+  /** bytes of a NEW document made from a listed template → { bytes, ext } (dotx → docx …) */
+  async templateDoc(id) { const r = await check(await fetch(url(`/templates/${encodeURIComponent(id)}/doc`), { credentials: 'same-origin' })); return { bytes: new Uint8Array(await r.arrayBuffer()), ext: r.headers.get('x-ext') || '' }; },
+  templateThumbUrl: (id, v) => url(`/templates/${encodeURIComponent(id)}/thumb`, { v }),
+  async putTemplateThumb(id, blob) { const r = await check(await fetch(url(`/templates/${encodeURIComponent(id)}/thumb`), { method: 'PUT', credentials: 'same-origin', headers: { 'content-type': blob.type || 'image/webp' }, body: blob })); return r.json().catch(() => ({ ok: true })); },
   async templateBytes(id) { const r = await check(await fetch(url(`/templates/${encodeURIComponent(id)}/raw`), { credentials: 'same-origin' })); return new Uint8Array(await r.arrayBuffer()); },
   downloadUrl: (f) => url('/raw', { ...loc(f), download: 1 }),
   zipUrl: (paths) => url('/zip', { paths: JSON.stringify(paths) }),
