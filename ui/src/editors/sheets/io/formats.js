@@ -34,6 +34,16 @@ export async function openBytes(bytes, ext, opts = {}) {
     }
   }
   if (CSV.includes(ext)) return csvToBook(bytes, { loc, settings, ext, ...(opts.csv || {}) });
+  // ODS/XLS/XLSB: SheetJS CE reads no cell styles – with the Office engine the file goes through xlsx (styles, charts,
+  // pictures kept); the result is saved back through the engine too (saveBytes). Slow or failing engine → SheetJS.
+  if (opts.convert && ['ods', 'ots', 'fods', 'xls', 'xlt', 'xlsb'].includes(ext)) {
+    try {
+      const x = await Promise.race([opts.convert(bytes, ext, 'xlsx'), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), opts.convertTimeout || 15000))]);
+      const b = await readXlsx(x, { loc, settings, ext: 'xlsx' });
+      b.viaEngine = ext;
+      return b;
+    } catch { /* fall back to the built-in reader */ }
+  }
   return readSheetJS(bytes, { loc, settings, ext });
 }
 

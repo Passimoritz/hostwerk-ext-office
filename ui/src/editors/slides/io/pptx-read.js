@@ -9,6 +9,8 @@ import { parseXml, serialize, text as textOf } from '../../_shared/xmltree.js';
 import { resolveHex, lumMod as lumModHex, tint as tintHex, shade as shadeHex, DEFAULT_COLORS } from '../themes.js';
 import { uid, DEFAULT_INSETS } from '../model.js';
 import { resolvePrst, SHAPES } from '../render/geometry.js';
+import { pathsOfCustGeom } from '../render/custom.js';
+import { animationsOf as readAnimations } from './pptx-anim.js';
 import { bytesToDataUrl, mimeOfPath } from './util.js';
 
 /* ---------------------------------------------------------------- signatures (unchanged → write back raw) */
@@ -36,7 +38,7 @@ function sigObj(e, pb) {
 /** signature of an element's content (position/size/rotation excluded; group children relative to the group) */
 export const elementSig = (e) => sigOf(sigObj(e, null));
 /** signature of a slide's animations with targets as original shape ids */
-export const animSig = (anims, spidOf) => sigOf((anims || []).map((a) => [spidOf[a.el] || null, a.effect, a.dir || null, a.trigger || 'click', a.duration ?? null, a.delay ?? 0]));
+export const animSig = (anims, spidOf) => sigOf((anims || []).map((a) => [spidOf[a.el] || null, a.cls || 'entr', a.effect, a.dir || null, a.trigger || 'click', a.duration ?? null, a.delay ?? 0, a.path || null, a.scale || null, a.angle || null, a.opacity ?? null, a.raw ? a.raw.length : null]));
 const usedNs = (raw, rootNs) => {
   const out = {};
   if (!rootNs) return out;
@@ -151,6 +153,8 @@ function lineOf(lnNode, ctx, styleLine) {
   const dash = K(lnNode, 'prstDash');
   const head = K(lnNode, 'headEnd'); const tail = K(lnNode, 'tailEnd');
   const l = { color, width: lnNode.a.w ? num(lnNode.a.w) : (styleLine && styleLine.width) || 9525, dash: dash ? DASHES[dash.a.val] || 'solid' : 'solid' };
+  if (lnNode.a.cap === 'rnd') l.cap = 'round'; else if (lnNode.a.cap === 'sq') l.cap = 'square';
+  if (K(lnNode, 'round')) l.join = 'round';
   if (head && ENDS[head.a.type]) l.head = ENDS[head.a.type];
   if (tail && ENDS[tail.a.type]) l.tail = ENDS[tail.a.type];
   return l;
@@ -248,6 +252,12 @@ function parasOf(txBody, ctx) {
       else if (t === 'fld') {
         const type = x.a.type || '';
         const field = type === 'slidenum' ? 'slidenum' : /^datetime/.test(type) ? 'datetime' : undefined;
+        if (/^hostwerk\.live\?/.test(type)) {
+          const q = new URLSearchParams(type.slice(14));
+          let params; try { params = q.get('params') ? JSON.parse(q.get('params')) : undefined; } catch { params = undefined; }
+          para.runs.push({ text: textOf(K(x, 't')), ...runPropsOf(K(x, 'rPr'), ctx), live: { id: q.get('id') || '', ...(params ? { params } : {}), ...(q.get('label') ? { label: q.get('label') } : {}) } });
+          continue;
+        }
         if (!field) ctx.flag('fields');
         para.runs.push({ text: textOf(K(x, 't')), ...runPropsOf(K(x, 'rPr'), ctx), ...(field ? { field } : {}) });
       } else if (t === 'm' || t === 'oMathPara' || t === 'oMath') ctx.flag('math');
@@ -503,7 +513,11 @@ export async function readPptx(bytes, { ext } = {}) {
       }
       return prst;
     }
-    if (K(spPr, 'custGeom')) { e.geom = 'rect'; flag('geometry'); return 'cust'; }
+    if (K(spPr, 'custGeom')) {
+      const paths = pathsOfCustGeom(K(spPr, 'custGeom'));
+      if (paths) { e.geom = 'custom'; e.paths = paths; return 'cust'; }
+      e.geom = 'rect'; flag('geometry'); return 'cust';
+    }
     e.geom = 'rect';
     return 'rect';
   };
@@ -546,6 +560,7 @@ export async function readPptx(bytes, { ext } = {}) {
       const locks = K(K(nv, t === 'sp' ? 'cNvSpPr' : 'cNvCxnSpPr'), 'spLocks'); if (locks && bool(locks.a.noMove)) e.locked = true;
       const styleLine = style && K(style, 'lnRef') && num(K(style, 'lnRef').a.idx) ? (() => { const r = K(style, 'lnRef'); const c = colorOf(r, ctx); const st = lnStyles[num(r.a.idx) - 1]; return { color: c || 'accent1', width: st && st.a.w ? num(st.a.w) : 12700, dash: 'solid' }; })() : undefined;
       const prst = geomOf(spPr, e);
+      if (e.paths) e.paths = e.paths.map((p) => ({ ...p, w: p.w > 1 ? p.w : xf.w || 1, h: p.h > 1 ? p.h : xf.h || 1 }));
       if (t === 'cxnSp' || prst === 'line' || /Connector/.test(prst)) {
         e.type = 'line';
         e.geom = /bent/.test(prst) ? 'elbow' : /curved/.test(prst) ? 'curve' : 'line';
@@ -853,11 +868,19 @@ export async function readPptx(bytes, { ext } = {}) {
       for (const r of Object.values(sctx.rels)) {
         if (!/comments$/i.test(r.type) || !has(r.target)) continue;
         const cx = await xml(r.target);
+        const byKey = {};
         for (const c of KS(cx, 'cm')) {
-          const txt = K(c, 'txBody') ? FIND(K(c, 'txBody'), 't').map(textOf).join(' ') : textOf(K(c, 'text'));
+          const txt = K(c, 'txBody') ? KS(K(c, 'txBody'), 'p').map((p) => FIND(p, 't').map(textOf).join('')).join('\n') : textOf(K(c, 'text'));
           const cid = uid('c');
-          slide.comments.push({ id: cid, author: authors[c.a.authorId] || c.a.authorId || '', text: txt, time: c.a.dt || c.a.created || '' });
-          for (const rp of KS(K(c, 'replyLst'), 'reply')) slide.comments.push({ id: uid('c'), parent: cid, author: authors[rp.a.authorId] || rp.a.authorId || '', text: FIND(K(rp, 'txBody'), 't').map(textOf).join(' '), time: rp.a.created || '' });
+          const cm = { id: cid, author: authors[c.a.authorId] || c.a.authorId || '', text: txt, time: c.a.dt || c.a.created || '' };
+          const pos = K(c, 'pos');
+          if (pos && pos.a.x != null) cm.pos = { x: Math.round(num(pos.a.x) * 1587.5), y: Math.round(num(pos.a.y) * 1587.5) };
+          if (c.a.status === 'resolved' || c.a.status === 'closed') cm.done = true;
+          const thr = FIND(c, 'parentCm')[0];
+          if (thr && byKey[`${thr.a.authorId}/${thr.a.idx}`]) cm.parent = byKey[`${thr.a.authorId}/${thr.a.idx}`];
+          if (c.a.idx != null) byKey[`${c.a.authorId}/${c.a.idx}`] = cid;
+          slide.comments.push(cm);
+          for (const rp of KS(K(c, 'replyLst'), 'reply')) slide.comments.push({ id: uid('c'), parent: cid, author: authors[rp.a.authorId] || rp.a.authorId || '', text: KS(K(rp, 'txBody'), 'p').map((p) => FIND(p, 't').map(textOf).join('')).join('\n'), time: rp.a.created || '' });
         }
         if (!slide.commentsPart) slide.commentsPart = { path: r.target, type: r.type };
       }
@@ -893,6 +916,7 @@ export async function readPptx(bytes, { ext } = {}) {
     const dur = tr.a['p14:dur'] ? num(tr.a['p14:dur']) : tr.a.dur ? num(tr.a.dur) : spd;
     const out = { type: 'none', dir: 'l', duration: dur, advanceAfter: tr.a.advTm ? num(tr.a.advTm) : null };
     const c = KS(tr).find((x) => !['sndAc', 'extLst'].includes(ln(x.n)));
+    if (c && ln(c.n) === 'morph') { out.type = 'morph'; out.option = c.a.option === 'byWord' ? 'word' : c.a.option === 'byChar' ? 'char' : 'object'; return out; }
     if (c) {
       const t = ln(c.n);
       const MAP = { fade: 'fade', push: 'push', wipe: 'wipe', zoom: 'zoom', cover: 'cover', split: 'split', pull: 'cover', cut: 'none', dissolve: 'fade', randomBar: 'wipe', strips: 'wipe', blinds: 'wipe', checker: 'fade', circle: 'zoom', diamond: 'zoom', plus: 'zoom', wedge: 'wipe', wheel: 'wipe', newsflash: 'zoom', random: 'fade' };
@@ -906,27 +930,7 @@ export async function readPptx(bytes, { ext } = {}) {
     return out;
   }
   function animationsOf(timing, idMap) {
-    const out = [];
-    const SUBDIR = { 4: 'b', 1: 't', 8: 'l', 2: 'r', 3: 't', 6: 'b', 9: 'l', 12: 'b' };
-    const EFFECT = { 1: 'appear', 10: 'fade', 2: 'fly', 53: 'zoom', 22: 'wipe', 23: 'zoom', 21: 'wipe', 31: 'zoom', 42: 'fly', 47: 'fly' };
-    const seq = FIND(timing, 'cTn').find((c) => c.a.nodeType === 'mainSeq');
-    if (FIND(timing, 'cTn').some((c) => c.a.nodeType === 'interactiveSeq')) flag('animations');
-    if (!seq) return out;
-    for (const c of FIND(seq, 'cTn')) {
-      if (!c.a.presetClass) continue;
-      const effect = EFFECT[num(c.a.presetID)];
-      if (c.a.presetClass !== 'entr' || !effect) { flag('animations'); continue; }
-      const tgt = FIND(c, 'spTgt')[0];
-      const el = tgt && idMap[tgt.a.spid];
-      if (!el) continue;
-      const beh = FIND(c, 'cTn').find((x) => x !== c && x.a.dur && x.a.dur !== '1' && x.a.dur !== 'indefinite');
-      const cond = P(c, 'stCondLst/cond');
-      const trigger = c.a.nodeType === 'withEffect' ? 'with' : c.a.nodeType === 'afterEffect' ? 'after' : 'click';
-      const a = { id: uid('a'), el, effect, trigger, duration: beh ? num(beh.a.dur, 500) : effect === 'appear' ? 0 : 500, delay: cond && cond.a.delay && cond.a.delay !== 'indefinite' ? num(cond.a.delay) : 0 };
-      if (effect === 'fly') a.dir = SUBDIR[num(c.a.presetSubtype)] || 'b';
-      if (!out.some((x) => x.el === el && x.effect === effect && x.trigger === trigger && FIND(timing, 'spTgt').length < 2)) out.push(a);
-    }
-    return out;
+    return readAnimations(timing, idMap, uid, flag);
   }
 
   /* ---- sections */
@@ -936,6 +940,9 @@ export async function readPptx(bytes, { ext } = {}) {
     const first = FIND(sec, 'sldId').map((x) => numToSlide[x.a.id]).find(Boolean);
     if (first) sections.push({ id: uid('sec'), name: sec.a.name || '', start: first });
   }
+
+  const guides = FIND(K(pres, 'extLst'), 'sldGuideLst')[0];
+  const guideList = KS(guides, 'guide').map((g, i) => ({ id: `gd${i + 1}`, axis: g.a.orient === 'horz' ? 'y' : 'x', pos: Math.round(num(g.a.pos) * 1587.5) }));
 
   /* ---- show settings & meta */
   const pp = await xml('ppt/presProps.xml');
@@ -948,6 +955,7 @@ export async function readPptx(bytes, { ext } = {}) {
     show: { loop: !!(showPr && bool(showPr.a.loop)), autoAdvance: 0, useTimings: !(showPr && showPr.a.useTimings === '0') },
     meta: { title: metaText('title'), author: metaText('creator'), created: metaText('created') || new Date().toISOString(), modified: metaText('modified') || new Date().toISOString() },
   };
+  if (guideList.length) doc.guides = guideList;
   doc.sourceId = sourceId;
   // fidelity: what is lost when saving back to pptx with `original`; preserved: kept as it is but not editable here
   return { doc, fidelity: [...lost], preserved: [...flags] };

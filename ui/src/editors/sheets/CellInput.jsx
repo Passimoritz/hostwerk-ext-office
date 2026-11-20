@@ -1,27 +1,35 @@
-/* Text input for cells and the formula bar; colours references while a formula is typed (mirror behind a transparent textarea). */
-import { useLayoutEffect, useRef } from 'react';
+/* Text input for cells and the formula bar; formulas get syntax colours (functions, texts, numbers, errors, names) and
+   coloured references while typed (mirror behind a transparent textarea). */
+import { useLayoutEffect, useMemo, useRef } from 'react';
+import { tokenize } from './formula/parser.js';
+
+const CLS = { func: 'of-fx-fn', str: 'of-fx-str', num: 'of-fx-num', err: 'of-fx-err', bool: 'of-fx-num', name: 'of-fx-name', sref: 'of-fx-name', lp: 'of-fx-paren', rp: 'of-fx-paren' };
 
 export function CellInput({ value, onChange, onKeyDown, inputRef, style, className = '', marks, ariaLabel, readOnly, onFocus, onBlur, onSelect, onCompositionStart, onPaste, onCopy, onCut, spellCheck = false }) {
   const mirror = useRef(null);
   const own = useRef(null);
   const ta = inputRef || own;
-  const colored = !!(marks && marks.length && typeof value === 'string' && value.startsWith('='));
+  const isF = typeof value === 'string' && value.startsWith('=') && value.length > 1 && value.length < 4000;
+  const colored = isF;
   const sync = () => { if (mirror.current && ta.current) { mirror.current.scrollTop = ta.current.scrollTop; mirror.current.scrollLeft = ta.current.scrollLeft; } };
   useLayoutEffect(sync);
-  let parts = null;
-  if (colored) {
-    parts = [];
-    let p = 0;
-    const sorted = marks.slice().sort((a, b) => a.pos - b.pos);
-    for (const m of sorted) {
-      const s = m.pos + 1; // marks are positions in the text after '='
-      if (s < p) continue;
-      if (s > p) parts.push(<span key={`t${p}`}>{value.slice(p, s)}</span>);
-      parts.push(<span key={`m${s}`} style={{ color: m.color }}>{value.slice(s, s + m.len)}</span>);
-      p = s + m.len;
+  const parts = useMemo(() => {
+    if (!colored) return null;
+    const byPos = new Map((marks || []).map((m) => [m.pos, m]));
+    let toks;
+    try { toks = tokenize(value.slice(1), { decimal: /;/.test(value) ? ',' : '.' }); } catch { toks = [{ t: 'bad', text: value.slice(1), pos: 0 }]; }
+    const out = [<span key="eq">=</span>];
+    let depth = 0;
+    for (const tk of toks) {
+      const m = tk.t === 'ref' ? byPos.get(tk.pos) : null;
+      if (tk.t === 'rp') depth = Math.max(0, depth - 1);
+      const cls = tk.t === 'ref' ? null : CLS[tk.t];
+      out.push(<span key={tk.pos} className={cls || undefined} style={m ? { color: m.color, fontWeight: 600 } : tk.t === 'lp' || tk.t === 'rp' ? { color: ['#4b5563', '#2f6fe4', '#d9480f', '#2b8a3e'][depth % 4] } : undefined}>{tk.text}</span>);
+      if (tk.t === 'lp') depth++;
     }
-    parts.push(<span key="end">{value.slice(p)}{'​'}</span>);
-  }
+    out.push(<span key="end">{'​'}</span>);
+    return out;
+  }, [value, marks, colored]);
   return (
     <div className={`of-sheet-input ${className}`} style={style}>
       {colored && <div ref={mirror} className="of-sheet-input-mirror" aria-hidden="true">{parts}</div>}

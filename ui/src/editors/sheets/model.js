@@ -15,7 +15,7 @@ import { cmpSort, criteria } from './formula/functions.js';
 import { parseInput } from './format/parse.js';
 import { formatValue, isDateFormat } from './format/numfmt.js';
 import { fillSeries } from './fill.js';
-import { partsFromSerial, serialFromParts } from './format/dates.js';
+import { partsFromSerial, serialFromParts, setDate1904 } from './format/dates.js';
 
 let UID = 1;
 export const uid = (p = 'x') => `${p}${Date.now().toString(36)}${(UID++).toString(36)}`;
@@ -54,17 +54,19 @@ export function newSheet(name) {
     outlineRows: new Map(), outlineCols: new Map(),
     defW: 64, defH: 20,
     merges: [], freeze: { rows: 0, cols: 0 }, gridlines: true, headings: true, zoom: null,
-    cf: [], dv: [], filter: null, charts: [], images: [], print: { area: null, orientation: 'portrait', fit: 'width', gridlines: false, headings: false },
+    cf: [], dv: [], filter: null, charts: [], images: [], tables: [], pivots: [], sparklines: [], shapes: [], slicers: [], view: null, print: { area: null, orientation: 'portrait', fit: 'width', gridlines: false, headings: false },
     spill: new Map(), spillAnchors: new Map(), spillBlocked: new Map(),
     sel: null, _xml: null, version: 0,
   };
 }
+const jc = (x) => JSON.parse(JSON.stringify(x));
 const cloneSheetProps = (s) => ({
   name: s.name, color: s.color, hidden: s.hidden, colW: new Map(s.colW), rowH: new Map(s.rowH), hiddenCols: new Set(s.hiddenCols), hiddenRows: new Set(s.hiddenRows),
   filterHidden: new Set(s.filterHidden), outlineRows: new Map(s.outlineRows), outlineCols: new Map(s.outlineCols), defW: s.defW, defH: s.defH,
   merges: s.merges.map((m) => ({ ...m })), freeze: { ...s.freeze }, gridlines: s.gridlines, headings: s.headings,
   cf: JSON.parse(JSON.stringify(s.cf)), dv: JSON.parse(JSON.stringify(s.dv)), filter: s.filter ? JSON.parse(JSON.stringify(s.filter)) : null,
   charts: JSON.parse(JSON.stringify(s.charts)), images: s.images.map((i) => ({ ...i, anchor: { ...i.anchor } })), print: { ...s.print },
+  tables: jc(s.tables || []), pivots: jc(s.pivots || []), sparklines: jc(s.sparklines || []), shapes: jc(s.shapes || []), view: s.view ? jc(s.view) : null,
 });
 
 /* iterate cells of ranges (only existing cells when the range is huge) */
@@ -92,6 +94,7 @@ export class Book {
     this.names = new Map(); // UPPER(name)|scopeId → { name, ref, scope: sheet|null, comment, hidden }
     this.styles = new StyleTable();
     this.date1904 = false;
+    this.iterate = { on: false, count: 100, delta: 0.001 }; // iterative calculation (Excel: calcPr iterate)
     this.autoCalc = settings.autoCalc !== false;
     this.active = 0;
     this.props = {};
@@ -113,6 +116,38 @@ export class Book {
   applyDefaults() {
     const s = this.settings || {};
     for (const sh of this.sheets) { if (s.gridlines === false && !sh._xml) sh.gridlines = false; }
+  }
+  /** 1904 date system (serial 0 = 1904-01-01) – dates.js follows the book that was set last */
+  get date1904() { return this._d1904; }
+  set date1904(v) { this._d1904 = !!v; setDate1904(this._d1904); }
+  /** sheets of a 3D reference Sheet1:Sheet3 (in tab order, either direction) */
+  sheetsBetween(a, b) {
+    const i = this.sheets.indexOf(this.sheetByName(a)); const j = this.sheets.indexOf(this.sheetByName(b));
+    if (i < 0 || j < 0) return [];
+    return this.sheets.slice(Math.min(i, j), Math.max(i, j) + 1);
+  }
+  /** all tables (ListObjects) with their sheet */
+  allTables() { const out = []; for (const sh of this.sheets) for (const t of sh.tables || []) out.push({ t, sheet: sh }); return out; }
+  /** column names of a table: header cells (when it has a header row) or the stored names */
+  tableColumns(sheet, t) {
+    const g = t.range; const out = [];
+    for (let c = g.c1; c <= g.c2; c++) {
+      const j = c - g.c1;
+      let n = t.header ? this.value(sheet, g.r1, c) : null;
+      n = n == null || n === '' ? (t.columns && t.columns[j]) || `Column${j + 1}` : typeof n === 'number' ? this.text(sheet, g.r1, c) : String(n);
+      out.push(n);
+    }
+    return out;
+  }
+  /** table by name, or the table containing (sheet, r, c) when name is empty → { name, range, header, totals, columns, sheet } */
+  tableDef(name, sheet, r, c) {
+    let hit = null;
+    if (name) { const lo = String(name).toLowerCase(); hit = this.allTables().find((x) => String(x.t.name).toLowerCase() === lo); } else if (sheet) {
+      const t = (sheet.tables || []).find((x) => r >= x.range.r1 && r <= x.range.r2 && c >= x.range.c1 && c <= x.range.c2);
+      if (t) hit = { t, sheet };
+    }
+    if (!hit) return null;
+    return { ...hit.t, header: hit.t.header !== false, totals: !!hit.t.totals, sheet: hit.sheet, columns: this.tableColumns(hit.sheet, { ...hit.t, header: hit.t.header !== false }) };
   }
   on(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
   emit(info) { this.version++; for (const l of this.listeners) l(info); }
@@ -399,6 +434,8 @@ export class Book {
         const tch = () => { if (!touched) { this.touch(sh); touched = true; } };
         sh.cf.forEach((rule) => { for (const key of ['f1', 'f2', 'formula']) if (typeof rule[key] === 'string' && rule[key]) { const f = fn(rule[key], sh); if (f !== rule[key]) { tch(); rule[key] = f; } } });
         sh.dv.forEach((rule) => { for (const key of ['f1', 'f2']) if (typeof rule[key] === 'string' && rule[key] && !/^".*"$/.test(rule[key])) { const f = fn(rule[key], sh); if (f !== rule[key]) { tch(); rule[key] = f; } } });
+        (sh.sparklines || []).forEach((sg) => sg.items.forEach((it) => { if (it.ref) { const f = fn(it.ref, sh); if (f !== it.ref) { tch(); it.ref = f; sg._dirty = true; } } }));
+        (sh.pivots || []).forEach((pv) => { if (pv.source) { const f = fn(pv.source, sh); if (f !== pv.source) { tch(); pv.source = f; pv._dirty = true; } } });
         sh.charts.forEach((ch) => {
           if (ch.range) { const f = fn(ch.range, sh); if (f !== ch.range) { tch(); ch.range = f; ch._dirty = true; } }
           (ch.series || []).forEach((s) => { for (const key of ['nameRef', 'catRef', 'valRef']) if (s[key]) { const f = fn(s[key], sh); if (f !== s[key]) { tch(); s[key] = f; ch._dirty = true; } } });
@@ -451,7 +488,10 @@ export class Book {
       sheet.cf = sheet.cf.map((rule) => ({ ...rule, ranges: rule.ranges.map(adjG).filter(Boolean) })).filter((rule) => rule.ranges.length);
       sheet.dv = sheet.dv.map((rule) => ({ ...rule, ranges: rule.ranges.map(adjG).filter(Boolean) })).filter((rule) => rule.ranges.length);
       if (sheet.filter) { const g = adjG(sheet.filter.range); if (!g) sheet.filter = null; else { if (!row && sheet.filter.cols) { const nc2 = {}; for (const [ci, v] of Object.entries(sheet.filter.cols)) { const i = +ci; if (del && i >= at && i < at + del) continue; nc2[i >= at ? i + count : i] = v; } sheet.filter.cols = nc2; } sheet.filter.range = g; } }
-      for (const a of [...sheet.charts.map((x) => x.anchor), ...sheet.images.map((x) => x.anchor)]) { if (!a) continue; const p = row ? 'r' : 'c'; if (a[p] >= at) a[p] = Math.max(at, a[p] + count); }
+      for (const a of [...sheet.charts.map((x) => x.anchor), ...sheet.images.map((x) => x.anchor), ...(sheet.shapes || []).map((x) => x.anchor)]) { if (!a) continue; const p = row ? 'r' : 'c'; if (a[p] >= at) a[p] = Math.max(at, a[p] + count); }
+      sheet.tables = (sheet.tables || []).map((tb) => { const g = adjG(tb.range); return g ? { ...tb, range: g, _dirty: true } : null; }).filter(Boolean);
+      sheet.pivots = (sheet.pivots || []).map((pv) => { const g = pv.range && adjG(pv.range); return g ? { ...pv, range: g, at: { r: g.r1, c: g.c1 }, _moved: true } : pv; });
+      sheet.sparklines = (sheet.sparklines || []).map((sg) => ({ ...sg, items: sg.items.map((it) => { const g = adjG({ r1: it.r, c1: it.c, r2: it.r, c2: it.c }); return g ? { ...it, r: g.r1, c: g.c1 } : null; }).filter(Boolean) })).filter((sg) => sg.items.length);
       if (sheet.print.area) { const g = parseRange(sheet.print.area); const n = g && adjG(g); sheet.print.area = n ? rangeText({ ...n }, false) : null; }
       if (sheet.freeze && ((row && sheet.freeze.rows > at) || (!row && sheet.freeze.cols > at))) { if (row) sheet.freeze.rows = Math.max(at, sheet.freeze.rows + count); else sheet.freeze.cols = Math.max(at, sheet.freeze.cols + count); }
       const spec = { target: sheet.name, axis, at, count };
@@ -686,6 +726,27 @@ export class Book {
 
   /* ---------- fill (handle, Ctrl+D/R) ---------- */
   /** src: the selected block; dst: the full extended block (contains src). dir from src to the new cells. */
+  /** what the last cell of a fill drag would show (the fill handle's preview), without changing anything */
+  fillPreview(sheet, src, dst, toDisplay) {
+    const down = dst.r2 > src.r2; const up = dst.r1 < src.r1; const right = dst.c2 > src.c2; const left = dst.c1 < src.c1;
+    const vertical = down || up;
+    if (!vertical && !right && !left) return null;
+    const line = vertical ? src.c1 : src.r1;
+    const n = vertical ? src.r2 - src.r1 + 1 : src.c2 - src.c1 + 1;
+    const cells = []; const items = [];
+    for (let i = 0; i < n; i++) { const r = vertical ? src.r1 + i : line; const c = vertical ? line : src.c1 + i; const cell = sheet.cells.get(K(r, c)); cells.push({ cell, r, c }); items.push({ v: cell ? cell.v : null, date: !!(cell && cell.s && cell.s.nf && isDateFormat(cell.s.nf)) }); }
+    const reverse = up || left;
+    const count = vertical ? (down ? dst.r2 - src.r2 : src.r1 - dst.r1) : right ? dst.c2 - src.c2 : src.c1 - dst.c1;
+    if (count <= 0) return null;
+    const k = count - 1;
+    const r = vertical ? (down ? src.r2 + count : src.r1 - count) : line; const c = vertical ? line : right ? src.c2 + count : src.c1 - count;
+    const s = cells[reverse ? n - 1 - (k % n) : k % n];
+    if (s.cell && s.cell.f) return `=${toDisplay ? toDisplay(shiftFormula(s.cell.f, r - s.r, c - s.c)) : shiftFormula(s.cell.f, r - s.r, c - s.c)}`;
+    const values = fillSeries(reverse ? items.slice().reverse() : items, count, { partsFromSerial, serialFromParts });
+    const v = values ? values[k] : s.cell ? s.cell.v : null;
+    if (v == null) return null;
+    return formatValue(v, (s.cell && s.cell.s && s.cell.s.nf) || 'General', this.loc).text;
+  }
   fill(sheet, src, dst, { copy = false } = {}) {
     const down = dst.r2 > src.r2; const up = dst.r1 < src.r1; const right = dst.c2 > src.c2; const left = dst.c1 < src.c1;
     const vertical = down || up;

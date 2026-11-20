@@ -18,6 +18,7 @@ import { errOf, isErr } from '../formula/errors.js';
 import { BUILTIN_FORMATS } from '../format/numfmt.js';
 import { readChartsFromXlsx, writeChartsIntoXlsx, patchOriginalCharts } from './xlsxCharts.js';
 import { resolveChartData } from '../chartData.js';
+import { richRuns, richXml, runsText, readIconSet, iconSetXml, readSparklines, sheetExtLst, readDrawingExtras, writeDrawingObjects, readTables, writeTables, maxTableId, tableSig, readPivots, writePivots, readSlicerInfo, readSidecar, writeSidecar, readCalcPr, calcPrAttrs, picSig } from './xlsxPlus.js';
 import { esc, escText, unesc, unx, attrs, elements, first, attrOf, topChildren, textOf, parseRels, relsPathOf, resolvePath, relTarget, REL, addRel, nextRid, removeRels, ctOverride, ctDefault, ctRemove } from './xml.js';
 
 const K = (r, c) => r * MAXC + c;
@@ -158,7 +159,8 @@ function styleFromXf(st, i, defFont, book) {
 }
 
 /* ---------------- reading ---------------- */
-async function str(zip, p) { const f = zip.file(p); return f ? f.async('string') : null; }
+const UTF8 = new TextDecoder('utf-8');
+async function str(zip, p) { const f = zip.file(p); if (!f) return null; const u = await f.async('uint8array'); return UTF8.decode(u); } // native UTF-8 decoding: much faster than JSZip's string path for big sheets
 
 export async function readXlsx(bytes, { loc, settings = {}, ext = 'xlsx' } = {}) {
   const zip = await JSZip.loadAsync(bytes);
@@ -194,8 +196,8 @@ export async function readXlsx(bytes, { loc, settings = {}, ext = 'xlsx' } = {})
   // shared strings
   const sstRel = wbRels.find((r) => r.type === REL.sst);
   const sstXml = sstRel && (await str(zip, sstRel.path));
-  const sst = []; const sstRaw = [];
-  if (sstXml) for (const e of elements(sstXml, 'si')) { sst.push(textOf(e.inner)); sstRaw.push(sstXml.slice(e.start, e.end)); }
+  const sst = []; const sstRaw = []; const sstRich = [];
+  if (sstXml) for (const e of elements(sstXml, 'si')) { sst.push(textOf(e.inner)); sstRaw.push(sstXml.slice(e.start, e.end)); sstRich.push(e.inner.includes('<r>') ? richRuns(e.inner) : null); }
   // metadata (dynamic arrays)
   const metaRel = wbRels.find((r) => r.type === REL.metadata);
   const metaXml = metaRel && (await str(zip, metaRel.path));
@@ -216,7 +218,7 @@ export async function readXlsx(bytes, { loc, settings = {}, ext = 'xlsx' } = {})
     const xml = await str(zip, rel.path);
     const srels = parseRels(await str(zip, relsPathOf(rel.path)), rel.path);
     const meta = { path: rel.path, rid, sheetId: a.sheetId, rels: srels, notesSig: '', tables: [], hasMeta: !!metaXml };
-    await readSheet(zip, xml || '', sh, { book, st, xfStyle, sst, srels, meta, fid, theme, defFont, charts: charts.get(a.name) || [] });
+    await readSheet(zip, xml || '', sh, { book, st, xfStyle, sst, sstRich, srels, meta, fid, theme, defFont, charts: charts.get(a.name) || [] });
     info.set(sh.id, meta);
     book.sheets.push(sh);
     sheetsList.push({ sheet: sh });
@@ -234,19 +236,26 @@ export async function readXlsx(bytes, { loc, settings = {}, ext = 'xlsx' } = {})
   book.active = Math.min(book.sheets.length - 1, Math.max(0, +(bv.activeTab || 0)));
   const calcPr = attrOf(first(wbXml, 'calcPr'));
   if (calcPr.calcMode === 'manual') book.fileManualCalc = true;
+  book.iterate = readCalcPr(calcPr);
+  await readPivots(zip, book, info, wbRels, wbXml).catch(() => {});
+  for (const sh of book.sheets) sh._origPivots = sh.pivots.map((p) => ({ path: p.path, rid: p.rid, cachePath: p.cachePath, cacheId: p.cacheId }));
+  await readSlicerInfo(zip, book).catch(() => {});
+  const side = await readSidecar(zip).catch(() => null);
+  if (side) { book.sidecar = side; for (const sh of book.sheets) { const d = side.data.sheets && side.data.sheets[sh.name]; if (d) { if (d.view) sh.view = d.view; if (d.live) sh.live = d.live; if (d.db) sh.db = d.db; if (d.form) sh.form = d.form; } } }
   // fidelity notes (everything listed is kept unchanged when saving)
   const files = Object.keys(zip.files);
   const has = (re) => files.some((f) => re.test(f));
   if (has(/vbaProject\.bin$/i)) fid.push('Macros (VBA) – kept, not run');
-  if (has(/pivotTables\//)) fid.push('Pivot tables – shown with their stored values, kept; refresh them in Excel');
-  if (has(/slicers?\//)) fid.push('Slicers – kept');
+  if (book.sheets.some((sh) => sh.pivots.some((p) => p.readOnly))) fid.push('Some pivot tables use grouping or calculated fields – shown with their stored values, kept; refresh them in Excel');
+  if (has(/slicers?\//)) fid.push('Slicers – shown, kept; filter with them in Excel');
   if (has(/externalLinks\//)) fid.push('Links to other workbooks – kept, show their stored values');
   if (has(/threadedComments\//)) fid.push('Threaded comments – kept; edits here change the classic notes');
   if (has(/ctrlProps\/|activeX\//)) fid.push('Form controls / ActiveX – kept, not shown');
   if (has(/model\/item\.data|connections\.xml|queryTables\//)) fid.push('Data model / queries – kept, not refreshed');
-  if (/sparklineGroup/.test(ctXml) || false) fid.push('Sparklines – kept, not shown');
+
   const origCharts = new Map(book.sheets.map((sh) => [sh.id, sh.charts.slice()]));
-  book.pkg = { origCharts, bytes, ext, wbPath, wbXml, wbRels, ctXml, st, sstRaw, sst, info, metaXml, theme, sheetsList, origSheetIds: new Set(book.sheets.map((s) => s.id)) };
+  book.pkg = { origCharts, bytes, ext, wbPath, wbXml, wbRels, ctXml, st, sstRaw, sst, sstRich, info, metaXml, theme, sheetsList, origSheetIds: new Set(book.sheets.map((s) => s.id)) };
+  book.pkg.sidecarJson = JSON.stringify(sidecarData(book));
   book.fidelity = [...new Set(fid)];
   book.calc.rebuild();
   // keep the file's cached values where we can't compute (unknown functions) – our values replace them otherwise
@@ -254,12 +263,40 @@ export async function readXlsx(bytes, { loc, settings = {}, ext = 'xlsx' } = {})
   restoreCachedForUnknown(book);
   return book;
 }
+/** what the Hostwerk sidecar part holds (views, live data, database bindings, forms per sheet) */
+export function sidecarData(book) {
+  const data = { v: 1, sheets: {} };
+  for (const sh of book.sheets) { const d = {}; if (sh.view && sh.view.type && sh.view.type !== 'grid') d.view = sh.view; if (sh.live) d.live = sh.live; if (sh.db) d.db = sh.db; if (sh.form) d.form = sh.form; if (Object.keys(d).length) data.sheets[sh.name] = d; }
+  return data;
+}
 function restoreCachedForUnknown(book) {
   for (const sh of book.sheets) for (const cell of sh.cells.values()) if (cell.f && cell._cached !== undefined && isErr(cell.v) && cell.v.code === '#NAME?' && !(isErr(cell._cached) && cell._cached.code === '#NAME?')) cell.v = cell._cached;
 }
 
-async function readSheet(zip, xml, sh, ctx) {
+/** the sheet XML without the (huge) sheetData – element lookups scan this; sheetData is read separately */
+function splitSheetData(xml) {
+  const a = xml.search(/<(\w+:)?sheetData[\s/>]/);
+  if (a < 0) return { rest: xml, data: null };
+  const selfClose = /^<(\w+:)?sheetData[^>]*\/>/.exec(xml.slice(a, a + 200));
+  if (selfClose) return { rest: xml, data: '' };
+  const open = xml.indexOf('>', a) + 1;
+  const m = /<\/(\w+:)?sheetData>/g; m.lastIndex = open;
+  const close = m.exec(xml);
+  if (!close) return { rest: xml, data: null };
+  return { rest: `${xml.slice(0, a)}<sheetData/>${xml.slice(close.index + close[0].length)}`, data: xml.slice(open, close.index) };
+}
+/** give the event loop a turn (MessageChannel: not clamped like setTimeout, also in background tabs) */
+const yieldNow = () => new Promise((res) => { if (typeof MessageChannel === 'undefined') { setTimeout(res, 0); return; } const ch = new MessageChannel(); ch.port1.onmessage = () => { ch.port1.close(); res(); }; ch.port2.postMessage(0); });
+/** value of attribute `name` in an attribute string (fast path for the cell loop) */
+function attr1(a, name) {
+  const i = a.indexOf(` ${name}="`);
+  if (i < 0) return null;
+  const j = i + name.length + 3;
+  return a.slice(j, a.indexOf('"', j));
+}
+async function readSheet(zip, fullXml, sh, ctx) {
   const { book, st, xfStyle, sst, srels, meta, fid, theme } = ctx;
+  const { rest: xml, data: sheetData } = splitSheetData(fullXml);
   const pr = first(xml, 'sheetPr');
   if (pr) { const tc = first(pr.inner, 'tabColor'); if (tc) sh.color = colorOf(attrs(tc.a), theme); }
   const view = first(xml, 'sheetView');
@@ -315,14 +352,17 @@ async function readSheet(zip, xml, sh, ctx) {
     }
   }
   // sheet data
-  const sd = first(xml, 'sheetData');
   const shared = new Map();
-  if (sd) {
-    const data = sd.inner;
+  if (sheetData) {
+    const data = sheetData;
     const rowRe = /<row\b([^>]*?)(\/>|>([\s\S]*?)<\/row>)/g;
     const cellRe = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g;
     let rm; let rowIdx = -1;
-    while ((rm = rowRe.exec(data))) {
+    // big sheets are parsed in slices (sync loop per slice, a macrotask between them: no long task, the spinner keeps moving)
+    const slice = data.length > 4e6 ? 6000 : Infinity;
+    const step = () => {
+    let n = 0;
+    while (n++ < slice && (rm = rowRe.exec(data))) {
       const ra = attrs(rm[1]);
       rowIdx = ra.r ? +ra.r - 1 : rowIdx + 1;
       const r = rowIdx;
@@ -337,25 +377,26 @@ async function readSheet(zip, xml, sh, ctx) {
       cellRe.lastIndex = 0;
       let cm; let colIdx = -1;
       while ((cm = cellRe.exec(body))) {
-        const ca = attrs(cm[1]);
+        const ca = cm[1];
         let c;
-        if (ca.r) { const m = /^([A-Z]+)(\d+)$/.exec(ca.r); c = colIndex(m[1]); } else c = colIdx + 1;
+        const ref = attr1(ca, 'r');
+        if (ref) { c = 0; for (let q = 0; q < ref.length; q++) { const ch = ref.charCodeAt(q); if (ch < 65) break; c = c * 26 + (ch - 64); } c -= 1; } else c = colIdx + 1;
         colIdx = c;
         const inner = cm[2] || '';
         const cell = {};
-        const sIdx = ca.s ? +ca.s : 0;
-        const style = xfStyle[sIdx];
+        const sa = attr1(ca, 's');
+        const style = xfStyle[sa ? +sa : 0];
         if (style) cell.s = style;
-        const vEl = /<v>([\s\S]*?)<\/v>/.exec(inner);
-        const raw = vEl ? unesc(vEl[1]) : null;
-        const t = ca.t || 'n';
+        const vi = inner.indexOf('<v>');
+        const raw = vi < 0 ? (inner.indexOf('<v/>') >= 0 ? '' : null) : unesc(inner.slice(vi + 3, inner.indexOf('</v>', vi)));
+        const t = attr1(ca, 't') || 'n';
         let v = null;
-        if (t === 's') { const i = +raw; v = sst[i] ?? ''; cell._si = i; } else if (t === 'inlineStr') { const is = /<is>([\s\S]*?)<\/is>/.exec(inner); v = is ? textOf(is[1]) : ''; } else if (t === 'str') v = raw == null ? '' : unx(raw);
+        if (t === 's') { const i = +raw; v = sst[i] ?? ''; cell._si = i; if (ctx.sstRich && ctx.sstRich[i]) cell.rich = ctx.sstRich[i]; } else if (t === 'inlineStr') { const is = /<is>([\s\S]*?)<\/is>/.exec(inner); v = is ? textOf(is[1]) : ''; } else if (t === 'str') v = raw == null ? '' : unx(raw);
         else if (t === 'b') v = raw === '1' || raw === 'true';
         else if (t === 'e') v = raw ? errOf(raw) : null;
         else if (t === 'd') { const d = raw ? new Date(raw) : null; v = d && !Number.isNaN(+d) ? (Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes(), d.getSeconds()) - Date.UTC(1899, 11, 30)) / 86400000 : null; } else v = raw == null || raw === '' ? null : Number(raw);
         cell.v = v;
-        const fEl = /<f\b([^>]*?)(?:\/>|>([\s\S]*?)<\/f>)/.exec(inner);
+        const fEl = inner.indexOf('<f') >= 0 ? /<f\b([^>]*?)(?:\/>|>([\s\S]*?)<\/f>)/.exec(inner) : null;
         if (fEl) {
           const fa = attrs(fEl[1]);
           const ftext = fEl[2] != null ? unx(unesc(fEl[2])) : '';
@@ -372,6 +413,9 @@ async function readSheet(zip, xml, sh, ctx) {
         sh.cells.set(K(r, c), cell);
       }
     }
+    return !!rm;
+    };
+    while (step()) { const li = rowRe.lastIndex; await yieldNow(); rowRe.lastIndex = li; if (ctx.onProgress) ctx.onProgress(li / data.length); }
   }
   // cells covered by legacy array formulas / spills keep only the anchor (their values come from the spill)
   if (sh._arr) for (const g of sh._arr) for (let r = g.r1; r <= g.r2; r++) for (let c = g.c1; c <= g.c2; c++) { if (r === g.r1 && c === g.c1) continue; const k = K(r, c); const x = sh.cells.get(k); if (x && !x.f) { if (x.s) sh.cells.set(k, { v: null, s: x.s }); else sh.cells.delete(k); } }
@@ -412,7 +456,8 @@ async function readSheet(zip, xml, sh, ctx) {
           Object.assign(rule, { type: 'bar', color: colorEl(db.inner, 'color', theme) || '#638EC6', stops: elements(db.inner, 'cfvo').map((x) => { const q = attrs(x.a); return { type: q.type, val: q.val }; }) });
           break;
         }
-        default: Object.assign(rule, { type: 'raw', kind: ra.type }); if (ra.type === 'iconSet') fid.push('Icon sets in conditional formatting – kept, not shown'); break;
+        case 'iconSet': { const is = readIconSet(re.inner); if (is) Object.assign(rule, { type: 'icons', ...is }); else Object.assign(rule, { type: 'raw', kind: ra.type }); break; }
+        default: Object.assign(rule, { type: 'raw', kind: ra.type }); break;
       }
       rule._raw = cfe.inner.slice(re.start, re.end);
       rule._rawSig = JSON.stringify(sigOf(rule));
@@ -473,9 +518,14 @@ async function readSheet(zip, xml, sh, ctx) {
     const dx = await str(zip, dRel.path);
     if (dx) {
       const drels = parseRels(await str(zip, relsPathOf(dRel.path)), dRel.path);
+      const extra = readDrawingExtras(dx, dRel.path, (from, to, size) => anchorFrom(sh, from, to, size), theme);
+      sh.shapes = extra.shapes; sh.slicers = extra.slicers;
+      meta.drawingIds = new Set([...extra.shapes.map((x) => x._orig.cid), ...extra.pics.map((x) => x.id)]);
+      if (/<(\w+:)?grpSp\b|<(\w+:)?cxnSp\b/.test(dx)) fid.push('Grouped shapes and connectors – kept, not shown');
       for (const an of [...elements(dx, 'twoCellAnchor', true), ...elements(dx, 'oneCellAnchor', true)]) {
         const pic = first(an.inner, 'pic', true);
-        if (!pic) { if (!/<(\w+:)?graphicFrame/.test(an.inner)) { if (/<(\w+:)?sp\b|<(\w+:)?grpSp\b|<(\w+:)?cxnSp\b/.test(an.inner)) fid.push('Shapes and text boxes – kept, not shown'); } continue; }
+        if (!pic) continue;
+        const cid = (/cNvPr\b[^>]*\bid="(\d+)"/.exec(pic.inner) || [])[1];
         const blip = /r:embed="([^"]+)"/.exec(pic.inner);
         const rel = blip && drels.find((x) => x.id === blip[1]);
         if (!rel || !rel.path || !zip.file(rel.path)) continue;
@@ -485,7 +535,9 @@ async function readSheet(zip, xml, sh, ctx) {
         const from = pt('from'); const to = pt('to');
         const ext = first(an.inner, 'ext');
         const size = to ? null : ext ? { w: Math.round(+attrs(ext.a).cx / 9525), h: Math.round(+attrs(ext.a).cy / 9525) } : { w: 200, h: 150 };
-        sh.images.push({ id: uid('i'), src: `data:${mime};base64,${b64}`, anchor: anchorFrom(sh, from, to, size), _orig: true });
+        const im = { id: uid('i'), src: `data:${mime};base64,${b64}`, anchor: anchorFrom(sh, from, to, size), _orig: cid ? { drawingPath: dRel.path, cid } : true };
+        im._sig = picSig(im);
+        sh.images.push(im);
       }
     }
   }
@@ -498,16 +550,13 @@ async function readSheet(zip, xml, sh, ctx) {
     if (ch._unsupported) fid.push('Some chart types (radar, stock, surface, bubble) – kept, shown simplified');
     sh.charts.push(ch);
   }
-  // tables (ListObjects) – kept, refs patched on save
-  for (const r of srels.filter((x) => x.type === REL.table)) {
-    const tx = await str(zip, r.path);
-    if (!tx) continue;
-    const ta = attrs(/<table\b[^>]*>/.exec(tx)[0]);
-    const g = parseRange(ta.ref);
-    if (g) meta.tables.push({ path: r.path, g, name: ta.displayName || ta.name, header: ta.headerRowCount !== '0' });
-    sh.tables = sh.tables || [];
-    if (g) sh.tables.push({ path: r.path, name: ta.displayName || ta.name, range: g });
-  }
+  // tables (ListObjects) – editable, original parts patched on save
+  sh.tables = await readTables(zip, srels, REL.table);
+  for (const t of sh.tables) t._sig = tableSig(t, book.tableColumns(sh, t));
+  sh._origTables = sh.tables.map((t) => ({ path: t.path, rid: t.rid }));
+  // sparklines (x14)
+  sh.sparklines = readSparklines(xml, theme);
+  meta.sparkRaw = sh.sparklines.map((g) => g._raw);
   if (srels.some((x) => x.type === REL.pivot)) sh.hasPivot = true;
 }
 function anchorFrom(sh, from, to, size) {
@@ -684,9 +733,16 @@ export async function writeXlsx(book, { ext = 'xlsx', getValues } = {}) {
   const sstIdx = new Map();
   sstRaw.forEach((x, i) => { if (!/<r>/.test(x) && !sstIdx.has(sstText[i])) sstIdx.set(sstText[i], i); });
   let sstCount = 0;
+  const richIdx = new Map();
   const sIndex = (cell) => {
     sstCount++;
-    if (cell._si != null && sstText[cell._si] === cell.v) return cell._si;
+    if (cell.rich && runsText(cell.rich) === cell.v) {
+      if (cell._si != null && sstText[cell._si] === cell.v && pkg && pkg.sstRich && pkg.sstRich[cell._si] === cell.rich) return cell._si;
+      const x = richXml(cell.rich); let i = richIdx.get(x);
+      if (i == null) { i = sstRaw.length; sstRaw.push(x); richIdx.set(x, i); }
+      return i;
+    }
+    if (cell._si != null && sstText[cell._si] === cell.v && !(pkg && pkg.sstRich && pkg.sstRich[cell._si])) return cell._si;
     let i = sstIdx.get(cell.v);
     if (i == null) { i = sstRaw.length; sstRaw.push(`<si><t${/^\s|\s$|\n/.test(cell.v) ? ' xml:space="preserve"' : ''}>${escText(cell.v)}</t></si>`); sstIdx.set(cell.v, i); }
     return i;
@@ -720,6 +776,8 @@ export async function writeXlsx(book, { ext = 'xlsx', getValues } = {}) {
   // deleted sheets
   if (pkg) for (const [id, m] of pkg.info) if (!book.sheets.some((s) => s.id === id)) { zip.remove(m.path); ct = ctRemove(ct, m.path); wbRelsXml = removeRels(wbRelsXml, (a) => a.Id === m.rid); }
   const allCharts = [];
+  const tstate = { maxTableId: await maxTableId(zip) };
+  const wstate = { future: [...book.names.values()].some((d) => toOoxml(d.ref).includes('_xlfn.')) };
   for (let si = 0; si < book.sheets.length; si++) {
     const sh = book.sheets[si];
     let m = pkg && pkg.info.get(sh.id);
@@ -731,7 +789,7 @@ export async function writeXlsx(book, { ext = 'xlsx', getValues } = {}) {
       zip.file(path, BLANK_SHEET);
       m = { path, rid, sheetId: String(++maxSheetId), rels: [], notesSig: '', tables: [], fresh: true };
     }
-    const res = await writeSheet(zip, sh, si, m, { book, sw, sIndex, metaIdx, ct });
+    const res = await writeSheet(zip, sh, si, m, { book, sw, sIndex, metaIdx, ct, tstate, wstate });
     ct = res.ct;
     sheetEntries.push({ sh, m });
     allCharts.push({ sh, m });
@@ -750,10 +808,27 @@ export async function writeXlsx(book, { ext = 'xlsx', getValues } = {}) {
     if (sh.filter) { const g = sh.filter.range; dn.push(`<definedName name="_xlnm._FilterDatabase" localSheetId="${i}" hidden="1">${escText(`${q}!$${colName(g.c1)}$${g.r1 + 1}:$${colName(g.c2)}$${g.r2 + 1}`)}</definedName>`); }
   });
   const wbParts = { sheets: sheetsXml, definedNames: dn.length ? `<definedNames>${dn.join('')}</definedNames>` : null };
+  // pivot tables (new / edited / refreshed / deleted)
+  {
+    const pr = await writePivots(zip, book, sheetEntries, { ct, wbRelsXml, wbXml, wbPath });
+    ct = pr.ct; wbRelsXml = pr.wbRelsXml;
+    if (pr.pivotCaches !== undefined) wbParts.pivotCaches = pr.pivotCaches;
+  }
+  // Hostwerk sidecar (views, live data, database bindings, forms)
+  {
+    const data = sidecarData(book);
+    const before = pkg && pkg.sidecarJson;
+    const now = JSON.stringify(data);
+    if (now !== before && (Object.keys(data.sheets).length || (book.sidecar && book.sidecar.path))) {
+      const r = await writeSidecar(zip, data, { ct, wbRelsXml, wbPath, path: book.sidecar && book.sidecar.path });
+      ct = r.ct; wbRelsXml = r.wbRelsXml; if (r.path) book.sidecar = { path: r.path, data };
+    }
+  }
   const calc = first(wbXml, 'calcPr');
   let calcTag = calc ? wbXml.slice(calc.start, calc.start + wbXml.slice(calc.start).indexOf('>') + 1) : '<calcPr calcId="191029"/>';
   if (calc && calc.inner) calcTag = wbXml.slice(calc.start, calc.end);
   calcTag = calcTag.replace(/\s(calcMode|fullCalcOnLoad)="[^"]*"/g, '').replace(/<((?:\w+:)?calcPr)\b/, `<$1${book.autoCalc ? '' : ' calcMode="manual"'} fullCalcOnLoad="1"`);
+  calcTag = calcPrAttrs(calcTag, book.iterate);
   wbParts.calcPr = calcTag;
   const bv = first(wbXml, 'bookViews');
   if (bv) {
@@ -766,6 +841,7 @@ export async function writeXlsx(book, { ext = 'xlsx', getValues } = {}) {
   }
   wbXml = assemble(wbXml, wbParts, ['fileVersion', 'fileSharing', 'workbookPr', 'AlternateContent', 'revisionPtr', 'absPath', 'workbookProtection', 'bookViews', 'sheets', 'functionGroups', 'externalReferences', 'definedNames', 'calcPr', 'oleSize', 'customWorkbookViews', 'pivotCaches', 'smartTagPr', 'smartTagTypes', 'webPublishing', 'fileRecoveryPr', 'webPublishObjects', 'extLst']);
   if (book.date1904 && !/date1904/.test(wbXml)) wbXml = wbXml.replace(/<workbookPr\b/, '<workbookPr date1904="1"');
+  if (!book.date1904 && /date1904="(1|true)"/.test(wbXml)) wbXml = wbXml.replace(/\sdate1904="[^"]*"/, '');
   zip.file(wbPath, wbXml);
   // shared strings
   const sstRel = parseRels(wbRelsXml, wbPath).find((r) => r.type === REL.sst);
@@ -796,7 +872,9 @@ export async function writeXlsx(book, { ext = 'xlsx', getValues } = {}) {
   }
   if (orig.length) await patchOriginalCharts(zip, orig);
   if (list.length) await writeChartsIntoXlsx(zip, list);
-  return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+  // big workbooks: faster compression (level 6 costs seconds for 1M cells, the file is only ~10 % smaller)
+  let big = 0; for (const sh of book.sheets) big += sh.cells.size;
+  return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', compressionOptions: { level: big > 200000 ? 1 : 6 } });
 }
 function xldaprIndex(meta) {
   const types = elements(first(meta, 'metadataTypes')?.inner || '', 'metadataType').map((e) => attrs(e.a).name);
@@ -815,8 +893,9 @@ function xlAnchor(sh, a) {
   return { from: { c: a.c, r: a.r, dx: a.dx, dy: a.dy }, to: { c, r, dx: Math.round(x), dy: Math.round(y) } };
 }
 
-async function writeSheet(zip, sh, si, m, { book, sw, sIndex, metaIdx, ct }) {
+async function writeSheet(zip, sh, si, m, { book, sw, sIndex, metaIdx, ct, tstate, wstate }) {
   let xml = (await str(zip, m.path)) || BLANK_SHEET;
+  xml = splitSheetData(xml).rest; // sheetData is always written new – the rest is small
   const relsPath = relsPathOf(m.path);
   let rels = await str(zip, relsPath);
   const parts = {};
@@ -899,7 +978,7 @@ async function writeSheet(zip, sh, si, m, { book, sw, sIndex, metaIdx, ct }) {
       const ol = sh.outlineRows.get(r);
       const rx = sh._rowXf && sh._rowXf.get(r);
       let x = `<row r="${r + 1}"${rx ? ` s="${rx}" customFormat="1"` : ''}${h != null ? ` ht="${px2pt(h)}" customHeight="1"` : ''}${hidden ? ' hidden="1"' : ''}${ol ? ` outlineLevel="${ol}"` : ''}>`;
-      for (const [c, cell] of cells) x += cellXml(sh, r, c, cell, { sw, sIndex, metaIdx });
+      for (const [c, cell] of cells) x += cellXml(sh, r, c, cell, { sw, sIndex, metaIdx, book, wstate });
       out.push(`${x}</row>`);
     }
     parts.sheetData = out.length ? `<sheetData>${out.join('')}</sheetData>` : '<sheetData/>';
@@ -974,34 +1053,27 @@ async function writeSheet(zip, sh, si, m, { book, sw, sIndex, metaIdx, ct }) {
     rels = res.rels; ct = res.ct;
     if (res.legacy !== undefined) parts.legacyDrawing = res.legacy;
   }
-  // tables: patch refs and header names
-  for (const t of m.tables || []) {
-    const st = (sh.tables || []).find((x) => x.path === t.path);
-    const tx = await str(zip, t.path);
-    if (!tx) continue;
-    if (!st) continue;
-    const g = st.range;
-    let nx = tx.replace(/(<table\b[^>]*?\sref=")[^"]*"/, `$1${rangeA1(g)}"`).replace(/(<autoFilter\b[^>]*?\sref=")[^"]*"/, `$1${rangeA1(g)}"`);
-    if (t.header) {
-      const n = g.c2 - g.c1 + 1;
-      const tcs = elements(nx, 'tableColumn');
-      const names = [];
-      for (let j = 0; j < n; j++) { const v = book.value(sh, g.r1, g.c1 + j); names.push(v == null || v === '' ? `Column${j + 1}` : String(typeof v === 'number' ? book.text(sh, g.r1, g.c1 + j) : v)); }
-      if (tcs.length === n) { let off = 0; tcs.forEach((e, j) => { const old = nx.slice(e.start + off, e.end + off); const nw = old.replace(/\sname="[^"]*"/, ` name="${esc(names[j])}"`); nx = nx.slice(0, e.start + off) + nw + nx.slice(e.end + off); off += nw.length - old.length; }); } else {
-        const cols = names.map((nm, j) => `<tableColumn id="${j + 1}" name="${esc(nm)}"/>`).join('');
-        nx = nx.replace(/<tableColumns\b[\s\S]*?<\/tableColumns>/, `<tableColumns count="${n}">${cols}</tableColumns>`);
-      }
-    }
-    if (nx !== tx) zip.file(t.path, nx);
+  // tables (new ones get a part, edited ones are patched, unchanged ones stay byte-identical)
+  {
+    const tr = await writeTables(zip, book, sh, m.path, rels, ct, tstate);
+    rels = tr.rels; ct = tr.ct;
+    if (tr.tableParts !== undefined) parts.tableParts = tr.tableParts;
+  }
+  // sparklines (x14 extension)
+  {
+    const ext = sheetExtLst(xml, sh.sparklines || [], m.sparkRaw || []);
+    if (ext !== undefined) parts.extLst = ext;
   }
   xml = assemble(xml, parts, SHEET_ORDER);
   if (!/xmlns:r=/.test(xml.slice(0, 600))) xml = xml.replace(/<worksheet\b/, `<worksheet xmlns:r="${NS_R}"`);
   zip.file(m.path, xml);
   if (rels && /<Relationship\b/.test(rels)) zip.file(relsPath, rels); else if (zip.file(relsPath)) zip.remove(relsPath);
+  // pictures and shapes in the drawing
+  ct = await writeDrawingObjects(zip, sh, m.path, ct, { ids: m.drawingIds });
   return { ct };
 }
 
-function cellXml(sh, r, c, cell, { sw, sIndex, metaIdx }) {
+function cellXml(sh, r, c, cell, { sw, sIndex, metaIdx, book, wstate }) {
   const ref = addr(r, c);
   const s = sw.xf(cell.s);
   const sa = s ? ` s="${s}"` : '';
@@ -1009,7 +1081,10 @@ function cellXml(sh, r, c, cell, { sw, sIndex, metaIdx }) {
   if (cell.f) {
     const sp = sh.spillAnchors.get(r * MAXC + c);
     const arrRef = sp ? rangeA1({ r1: r, c1: c, r2: r + sp.rows - 1, c2: c + sp.cols - 1 }) : null;
-    const f = `<f${arrRef ? ` t="array" ref="${arrRef}"` : ''}>${escText(toOoxml(cell.f))}</f>`;
+    const tb = cell.f.includes('[') && book ? book.tableDef(null, sh, r, c) : null;
+    const fx = toOoxml(cell.f, tb ? { table: tb.name } : undefined);
+    if (wstate && !wstate.future && fx.includes('_xlfn.')) wstate.future = true;
+    const f = `<f${arrRef ? ` t="array" ref="${arrRef}"` : ''}>${escText(fx)}</f>`;
     const cm = arrRef && metaIdx ? ` cm="${metaIdx}"` : '';
     if (isErr(v)) return v.code === '#CIRC!' ? `<c r="${ref}"${sa}${cm}>${f}<v>0</v></c>` : `<c r="${ref}"${sa} t="e"${cm}>${f}<v>${esc(v.code)}</v></c>`;
     if (typeof v === 'string') return `<c r="${ref}"${sa} t="str"${cm}>${f}<v>${escText(v)}</v></c>`;
@@ -1059,6 +1134,7 @@ function cfRuleXml(rule, prio, sw) {
       const stops = rule.stops && rule.stops.length === 2 ? rule.stops : [{ type: 'min' }, { type: 'max' }];
       return `<cfRule type="dataBar"${p}><dataBar>${stops.map((s) => `<cfvo type="${s.type}"${s.val != null ? ` val="${esc(s.val)}"` : ''}/>`).join('')}<color rgb="${rgb(rule.color || '#638EC6')}"/></dataBar></cfRule>`;
     }
+    case 'icons': return iconSetXml(rule, prio);
     default: return rule._raw || null;
   }
 }

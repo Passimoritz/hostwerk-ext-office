@@ -18,6 +18,7 @@ import { ActionRow, InfoCard, PdfPages, fmtSize, fmtDate, baseName, useBlobUrl }
 import { binaryStrings, iworkText } from './extract.js';
 import { FORMATS } from '../../lib/formats.js';
 import { Keep } from '../_shared/keep.jsx';
+import { FileTypeIcon } from '../../lib/fileIcons.jsx';
 
 const isZip = (b) => b[0] === 0x50 && b[1] === 0x4b;
 function descend(el, name, out = []) { for (const x of (el && el.c) || []) { if (typeof x === 'string') continue; if (local(x.n) === name) out.push(x); descend(x, name, out); } return out; }
@@ -79,7 +80,7 @@ export function ConvertView({ file, bytes, host }) {
   return (
     <div className="of-view-pad stack">
       <div className="of-view-toolbar of-view-bare">
-        <h2 className="of-view-title"><Icon size={18} /> <Keep>{file.name}</Keep></h2>
+        <h2 className="of-view-title"><FileTypeIcon name={file.name} size={20} /> <Keep>{file.name}</Keep></h2>
         <span className="small muted">{t(fmt.label || 'File')} · {fmtSize(bytes.length)}</span>
         <span className="grow" />
         {exact ? <Btn className="sm" onClick={() => setExact(null)}>Built-in view</Btn> : <Btn className="sm primary" icon={Sparkles} onClick={open}>Open fully</Btn>}
@@ -135,7 +136,7 @@ export function IworkView({ file, bytes, host }) {
   return (
     <div className="of-view-pad stack">
       <div className="of-view-toolbar of-view-bare">
-        <h2 className="of-view-title">{(() => { const I = ICON[file.ext] || FileText; return <I size={18} />; })()} <Keep>{file.name}</Keep></h2>
+        <h2 className="of-view-title"><FileTypeIcon name={file.name} size={20} /> <Keep>{file.name}</Keep></h2>
         <span className="small muted">{t((FORMATS[file.ext] || {}).label || 'Apple iWork file')} · {fmtSize(bytes.length)}</span>
         <span className="grow" />
         <Btn className="sm primary" icon={Sparkles} onClick={edit}>{t('Edit as {ext}', { ext: target.toUpperCase() })}</Btn>

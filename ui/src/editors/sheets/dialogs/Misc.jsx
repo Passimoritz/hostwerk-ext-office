@@ -192,6 +192,10 @@ export function ChartDialog({ chart, onApply, onDelete, onClose }) {
           {!['pie', 'doughnut'].includes(c.type) && <Field label={t('Horizontal axis title')}><input className="input sm" value={c.xTitle || ''} onChange={(e) => set({ xTitle: e.target.value })} /></Field>}
           {!['pie', 'doughnut'].includes(c.type) && <Field label={t('Vertical axis title')}><input className="input sm" value={c.yTitle || ''} onChange={(e) => set({ yTitle: e.target.value })} /></Field>}
         </div>
+        {!['pie', 'doughnut', 'scatter'].includes(c.type) && <div className="row">
+          <label className="row small"><input type="checkbox" checked={!!c.labels} onChange={(e) => set({ labels: e.target.checked })} /> {t('Data labels')}</label>
+          {c.type !== 'area' && <label className="row small"><input type="checkbox" checked={!!c.trend || !!(c.series || []).some((s) => s.trendline)} onChange={(e) => set({ trend: e.target.checked, series: c.series ? c.series.map((s) => ({ ...s, trendline: e.target.checked ? s.trendline || 'linear' : undefined })) : c.series })} /> {t('Linear trendline')}</label>}
+        </div>}
         {usesRange ? (
           <div className="row">
             <Field label={t('Data range')}><input className="input sm mono" value={c.range || ''} onChange={(e) => set({ range: e.target.value })} /></Field>

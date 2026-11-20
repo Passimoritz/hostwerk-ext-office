@@ -8,6 +8,9 @@ import JSZip from 'jszip';
 import { parseXml, kid, kids, tag, esc, escAttr, XML_HEAD, serialize } from '../../_shared/xmltree.js';
 import { parseColorRef, resolveHex } from '../themes.js';
 import { SHAPES } from '../render/geometry.js';
+import { custGeomXml } from '../render/custom.js';
+import { chartWorkbook, chartRefs } from './xlsx-mini.js';
+import { timingXml } from './pptx-anim.js';
 import { walk } from '../model.js';
 import { elementSig, animSig, sigOf } from './pptx-read.js';
 import { dataUrlToBytes, EXT_OF_MIME, hashStr, extOfPath } from './util.js';
@@ -75,9 +78,10 @@ function lineXml(l, ctx, tagName = 'a:ln') {
   if (l === undefined) return '';
   if (!l) return `<${tagName}><a:noFill/></${tagName}>`;
   const inner = [solid(l.color || 'tx1', ctx.theme), `<a:prstDash val="${DASH[l.dash] || 'solid'}"/>`];
+  if (l.join === 'round') inner.push('<a:round/>');
   if (l.head && END[l.head]) inner.push(`<a:headEnd type="${END[l.head]}"/>`);
   if (l.tail && END[l.tail]) inner.push(`<a:tailEnd type="${END[l.tail]}"/>`);
-  return tag(tagName, { w: I(l.width || 12700) }, inner);
+  return tag(tagName, { w: I(l.width || 12700), cap: l.cap === 'round' ? 'rnd' : l.cap === 'square' ? 'sq' : undefined }, inner);
 }
 function shadowXml(s, ctx) {
   if (!s) return '';
@@ -139,6 +143,11 @@ const BREAK_RE = new RegExp('[\\n\\x0B\\u2028]');
 function runsXml(runs, ctx) {
   const out = [];
   for (const r of runs || []) {
+    if (r.live && r.live.id) {
+      const q = new URLSearchParams({ id: r.live.id, ...(r.live.params ? { params: JSON.stringify(r.live.params) } : {}), ...(r.live.label ? { label: r.live.label } : {}) }).toString();
+      out.push(`<a:fld id="${guid()}" type="${escAttr(`hostwerk.live?${q}`)}">${rPr(r, ctx)}<a:t>${esc(r.text || '')}</a:t></a:fld>`);
+      continue;
+    }
     if (r.field) {
       const type = r.field === 'slidenum' ? 'slidenum' : r.field === 'datetime' ? 'datetime1' : null;
       if (type) { out.push(`<a:fld id="${guid()}" type="${type}">${rPr(r, ctx)}<a:t>${esc(r.field === 'slidenum' ? (ctx.slideNo || r.text || '‹#›') : r.text || '')}</a:t></a:fld>`); continue; }
@@ -299,7 +308,7 @@ function elXml(e, ctx) {
 function shapeXml(e, ctx, id) {
   const ph = e.ph ? tag('p:ph', phAttrs(e.ph, ctx.layoutPh(e.ph), ctx.layoutKind)) : '';
   const nv = `<p:nvSpPr>${cNvPr(e, ctx, id)}${e.textbox && !e.ph ? '<p:cNvSpPr txBox="1"/>' : e.ph ? '<p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>' : '<p:cNvSpPr/>'}<p:nvPr>${ph}</p:nvPr></p:nvSpPr>`;
-  const sp = `<p:spPr>${xfrm(e)}${geomXml(e.geom || 'rect', e.adj)}${fillXml(e.fill === undefined ? null : e.fill, ctx)}${lineXml(e.line === undefined ? null : e.line, ctx)}${shadowXml(e.shadow, ctx)}</p:spPr>`;
+  const sp = `<p:spPr>${xfrm(e)}${e.geom === 'custom' && e.paths && e.paths.length ? custGeomXml(e.paths) : geomXml(e.geom || 'rect', e.adj)}${fillXml(e.fill === undefined ? null : e.fill, ctx)}${lineXml(e.line === undefined ? null : e.line, ctx)}${shadowXml(e.shadow, ctx)}</p:spPr>`;
   return `<p:sp>${nv}${sp}${txBodyXml(e.text, ctx)}</p:sp>`;
 }
 
@@ -336,15 +345,19 @@ function tableXml(e, ctx, id) {
 
 /* ---------------------------------------------------------------- charts */
 function chartFrameXml(e, ctx, id) {
-  const n = ++ctx.chartNo.n;
-  const path = `ppt/charts/chart${n}.xml`;
-  ctx.files[path] = XML_HEAD + chartPartXml(e.chart || {}, ctx);
+  // free part names: a patched package still holds the charts of unchanged (raw) chart frames
+  const path = ctx.pkg ? ctx.pkg.free((k) => `ppt/charts/chart${k}.xml`) : `ppt/charts/chart${++ctx.chartNo.n}.xml`;
+  // the embedded workbook – PowerPoint's "Edit data" opens it in Excel
+  const wb = ctx.pkg ? ctx.pkg.free((k) => `ppt/embeddings/Microsoft_Excel_Worksheet${k}.xlsx`) : null;
+  if (wb) { ctx.files[wb] = chartWorkbook(e.chart || {}); if (ctx.pkg.defaults && !ctx.pkg.defaults.xlsx) ctx.pkg.defaults.xlsx = `${CT}spreadsheetml.sheet`; }
+  ctx.files[path] = XML_HEAD + chartPartXml(e.chart || {}, ctx, !!wb);
   ctx.types[`/${path}`] = CTYPES.chart;
-  const rid = ctx.part.rel('chart', `../charts/chart${n}.xml`);
+  if (wb) ctx.files[relsPathOf(path)] = relsXml([{ id: 'rId1', type: `${RT}package`, target: `../embeddings/${basename(wb)}` }]);
+  const rid = ctx.part.rel('chart', relTarget(ctx.part.path, path));
   return `<p:graphicFrame><p:nvGraphicFramePr>${cNvPr(e, ctx, id)}<p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>${xfrm(e, 'p:xfrm')}<a:graphic><a:graphicData uri="${NS_C}"><c:chart xmlns:c="${NS_C}" r:id="${rid}"/></a:graphicData></a:graphic></p:graphicFrame>`;
 }
 const txt = (s) => `<c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>${esc(s)}</a:t></a:r></a:p></c:rich>`;
-function chartPartXml(ch, ctx) {
+function chartPartXml(ch, ctx, withData = false) {
   const kind = ch.kind || 'col';
   const cats = ch.categories || [];
   const strLit = (arr) => `<c:strLit><c:ptCount val="${arr.length}"/>${arr.map((v, i) => `<c:pt idx="${i}"><c:v>${esc(v)}</c:v></c:pt>`).join('')}</c:strLit>`;
@@ -355,8 +368,14 @@ function chartPartXml(ch, ctx) {
     const color = s.color || `accent${(i % 6) + 1}`;
     const sp = kind === 'line' ? `<c:spPr><a:ln w="28575" cap="rnd">${solid(color, ctx.theme)}<a:round/></a:ln></c:spPr>` : `<c:spPr>${solid(color, ctx.theme)}</c:spPr>`;
     const dpt = pie ? cats.map((_, k) => `<c:dPt><c:idx val="${k}"/><c:bubble3D val="0"/><c:spPr>${solid(`accent${(k % 6) + 1}`, ctx.theme)}<a:ln w="19050">${solid('bg1', ctx.theme)}</a:ln></c:spPr></c:dPt>`).join('') : '';
-    const head = `<c:idx val="${i}"/><c:order val="${i}"/><c:tx><c:v>${esc(s.name || `Series ${i + 1}`)}</c:v></c:tx>${sp}`;
-    const data = `<c:cat>${strLit(cats.map(String))}</c:cat><c:val>${numLit(s.values || [])}</c:val>`;
+    const ref = chartRefs(i, cats.length);
+    const nm = s.name || `Series ${i + 1}`;
+    const tx = withData ? `<c:tx><c:strRef><c:f>${ref.name}</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>${esc(nm)}</c:v></c:pt></c:strCache></c:strRef></c:tx>` : `<c:tx><c:v>${esc(nm)}</c:v></c:tx>`;
+    const head = `<c:idx val="${i}"/><c:order val="${i}"/>${tx}${sp}`;
+    const cache = (lit, tagN) => lit.replace(new RegExp(`^<c:${tagN}Lit>`), `<c:${tagN}Cache>`).replace(new RegExp(`</c:${tagN}Lit>$`), `</c:${tagN}Cache>`);
+    const data = withData
+      ? `<c:cat><c:strRef><c:f>${ref.cat}</c:f>${cache(strLit(cats.map(String)), 'str')}</c:strRef></c:cat><c:val><c:numRef><c:f>${ref.val}</c:f>${cache(numLit(s.values || []), 'num')}</c:numRef></c:val>`
+      : `<c:cat>${strLit(cats.map(String))}</c:cat><c:val>${numLit(s.values || [])}</c:val>`;
     if (kind === 'line') return `<c:ser>${head}<c:marker><c:symbol val="circle"/><c:size val="5"/></c:marker>${dl}${data}<c:smooth val="0"/></c:ser>`;
     if (pie) return `<c:ser>${head}${dpt}${dl}${data}</c:ser>`;
     if (kind === 'area') return `<c:ser>${head}${dl}${data}</c:ser>`;
@@ -373,7 +392,7 @@ function chartPartXml(ch, ctx) {
   const axes = pie ? '' : `<c:catAx><c:axId val="50010001"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="${kind === 'bar' ? 'l' : 'b'}"/><c:numFmt formatCode="General" sourceLinked="0"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="50010002"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/><c:noMultiLvlLbl val="0"/></c:catAx><c:valAx><c:axId val="50010002"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="${kind === 'bar' ? 'b' : 'l'}"/><c:majorGridlines><c:spPr><a:ln w="9525">${solid('tx1+85', ctx.theme)}</a:ln></c:spPr></c:majorGridlines><c:numFmt formatCode="General" sourceLinked="0"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="50010001"/><c:crosses val="autoZero"/><c:crossBetween val="between"/></c:valAx>`;
   const title = ch.title ? `<c:title><c:tx>${txt(ch.title)}</c:tx><c:overlay val="0"/></c:title><c:autoTitleDeleted val="0"/>` : '<c:autoTitleDeleted val="1"/>';
   const legend = ch.legend !== false ? `<c:legend><c:legendPos val="${pie ? 'r' : 'b'}"/><c:overlay val="0"/></c:legend>` : '';
-  return `<c:chartSpace xmlns:c="${NS_C}" xmlns:a="${NS_A}" xmlns:r="${NS_R}"><c:roundedCorners val="0"/><c:chart>${title}<c:plotArea><c:layout/>${plot}${axes}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1200">${solid('tx1+25', ctx.theme)}</a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr></c:chartSpace>`;
+  return `<c:chartSpace xmlns:c="${NS_C}" xmlns:a="${NS_A}" xmlns:r="${NS_R}"><c:roundedCorners val="0"/><c:chart>${title}<c:plotArea><c:layout/>${plot}${axes}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart><c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1200">${solid('tx1+25', ctx.theme)}</a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr>${withData ? '<c:externalData r:id="rId1"><c:autoUpdate val="0"/></c:externalData>' : ''}</c:chartSpace>`;
 }
 
 /* ---------------------------------------------------------------- transitions & timing */
@@ -381,64 +400,15 @@ const SPD = (ms) => (ms <= 500 ? 'fast' : ms <= 750 ? 'med' : 'slow');
 function transitionXml(t) {
   if (!t || (!t.type || t.type === 'none') && !t.advanceAfter) return '';
   const dir = ['l', 'r', 'u', 'd'].includes(t.dir) ? t.dir : undefined;
-  const child = { fade: '<p:fade/>', push: tag('p:push', { dir }), wipe: tag('p:wipe', { dir }), cover: tag('p:cover', { dir }), zoom: '<p:zoom/>', split: '<p:split orient="horz" dir="out"/>' }[t.type] || '';
+  const child = { fade: '<p:fade/>', push: tag('p:push', { dir }), wipe: tag('p:wipe', { dir }), cover: tag('p:cover', { dir }), zoom: '<p:zoom/>', split: '<p:split orient="horz" dir="out"/>', morph: '<p:fade/>' }[t.type] || '';
   const adv = t.advanceAfter ? I(t.advanceAfter) : undefined;
   const dur = I(t.duration || 500);
+  if (t.type === 'morph') {
+    // Morph (PowerPoint 2019/365) – older versions fade
+    return `<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main" Requires="p159">${tag('p:transition', { spd: 'slow', 'p14:dur': dur, advTm: adv, 'xmlns:p14': NS_P14 }, `<p159:morph option="${t.option === 'word' ? 'byWord' : t.option === 'char' ? 'byChar' : 'byObject'}"/>`)}</mc:Choice><mc:Fallback>${tag('p:transition', { spd: 'slow', advTm: adv }, '<p:fade/>')}</mc:Fallback></mc:AlternateContent>`;
+  }
   return `<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice xmlns:p14="${NS_P14}" Requires="p14">${tag('p:transition', { spd: SPD(dur), 'p14:dur': dur, advTm: adv }, child || null)}</mc:Choice><mc:Fallback>${tag('p:transition', { spd: SPD(dur), advTm: adv }, child || null)}</mc:Fallback></mc:AlternateContent>`;
 }
-const PRESET = { appear: 1, fly: 2, fade: 10, wipe: 22, zoom: 53 };
-const FLY_SUB = { b: 4, d: 4, t: 1, u: 1, l: 8, r: 2 };
-function timingXml(anims, spids, textIds) {
-  const list = (anims || []).filter((a) => spids[a.el] && PRESET[a.effect]);
-  if (!list.length) return '';
-  let id = 3;
-  const N = () => id++;
-  // click groups → after-chains → parallel effects
-  const groups = [];
-  list.forEach((a, i) => {
-    const trig = i === 0 && a.trigger !== 'click' ? a.trigger : a.trigger || 'click';
-    if (trig === 'click' || !groups.length) groups.push({ start: i === 0 && trig !== 'click' ? 'auto' : 'click', chains: [[a]] });
-    else if (trig === 'after') groups[groups.length - 1].chains.push([a]);
-    else groups[groups.length - 1].chains[groups[groups.length - 1].chains.length - 1].push(a);
-  });
-  const effect = (a, nodeType) => {
-    const sp = spids[a.el];
-    const dur = I(a.duration || 500);
-    const tgt = `<p:tgtEl><p:spTgt spid="${sp}"/></p:tgtEl>`;
-    const set = `<p:set><p:cBhvr><p:cTn id="${N()}" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn>${tgt}<p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>`;
-    let beh = '';
-    let sub = 0;
-    if (a.effect === 'fade') beh = `<p:animEffect transition="in" filter="fade"><p:cBhvr><p:cTn id="${N()}" dur="${dur}"/>${tgt}</p:cBhvr></p:animEffect>`;
-    else if (a.effect === 'wipe') { sub = 4; beh = `<p:animEffect transition="in" filter="wipe(down)"><p:cBhvr><p:cTn id="${N()}" dur="${dur}"/>${tgt}</p:cBhvr></p:animEffect>`; }
-    else if (a.effect === 'fly') {
-      sub = FLY_SUB[a.dir] || 4;
-      const horiz = sub === 8 || sub === 2;
-      const from = { 4: '1+#ppt_h/2', 1: '0-#ppt_h/2', 8: '0-#ppt_w/2', 2: '1+#ppt_w/2' }[sub];
-      const anim = (attr, v0, v1) => `<p:anim calcmode="lin" valueType="num"><p:cBhvr additive="base"><p:cTn id="${N()}" dur="${dur}" fill="hold"/>${tgt}<p:attrNameLst><p:attrName>${attr}</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0"><p:val><p:strVal val="${v0}"/></p:val></p:tav><p:tav tm="100000"><p:val><p:strVal val="${v1}"/></p:val></p:tav></p:tavLst></p:anim>`;
-      beh = horiz ? anim('ppt_x', from, '#ppt_x') + anim('ppt_y', '#ppt_y', '#ppt_y') : anim('ppt_x', '#ppt_x', '#ppt_x') + anim('ppt_y', from, '#ppt_y');
-    } else if (a.effect === 'zoom') {
-      sub = 16;
-      const anim = (attr, v0, v1) => `<p:anim calcmode="lin" valueType="num"><p:cBhvr><p:cTn id="${N()}" dur="${dur}" fill="hold"/>${tgt}<p:attrNameLst><p:attrName>${attr}</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0"><p:val><p:fltVal val="0"/></p:val></p:tav><p:tav tm="100000"><p:val><p:strVal val="${v1}"/></p:val></p:tav></p:tavLst></p:anim>`;
-      beh = anim('ppt_w', 0, '#ppt_w') + anim('ppt_h', 0, '#ppt_h') + `<p:animEffect transition="in" filter="fade"><p:cBhvr><p:cTn id="${N()}" dur="${dur}"/>${tgt}</p:cBhvr></p:animEffect>`;
-    }
-    const cid = N();
-    return `<p:par><p:cTn id="${cid}" presetID="${PRESET[a.effect]}" presetClass="entr" presetSubtype="${sub}" fill="hold" grpId="0" nodeType="${nodeType}"><p:stCondLst><p:cond delay="${I(a.delay || 0)}"/></p:stCondLst><p:childTnLst>${set}${beh}</p:childTnLst></p:cTn></p:par>`;
-  };
-  const gx = groups.map((g) => {
-    let offset = 0;
-    const chains = g.chains.map((ch, ci) => {
-      const nodes = ch.map((a, k) => effect(a, ci === 0 && k === 0 ? (g.start === 'click' ? 'clickEffect' : ch[0].trigger === 'after' ? 'afterEffect' : 'withEffect') : k === 0 ? 'afterEffect' : 'withEffect')).join('');
-      const x = `<p:par><p:cTn id="${N()}" fill="hold"><p:stCondLst><p:cond delay="${offset}"/></p:stCondLst><p:childTnLst>${nodes}</p:childTnLst></p:cTn></p:par>`;
-      offset += Math.max(...ch.map((a) => I(a.delay || 0) + I(a.duration || 500)));
-      return x;
-    }).join('');
-    const cond = g.start === 'click' ? '<p:cond delay="indefinite"/>' : '<p:cond delay="indefinite"/><p:cond evt="onBegin" delay="0"><p:tn val="2"/></p:cond>';
-    return `<p:par><p:cTn id="${N()}" fill="hold"><p:stCondLst>${cond}</p:stCondLst><p:childTnLst>${chains}</p:childTnLst></p:cTn></p:par>`;
-  }).join('');
-  const bld = [...new Set(list.filter((a) => textIds.has(a.el)).map((a) => spids[a.el]))].map((s) => `<p:bldP spid="${s}" grpId="0"/>`).join('');
-  return `<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst><p:seq concurrent="1" nextAc="seek"><p:cTn id="2" dur="indefinite" nodeType="mainSeq"><p:childTnLst>${gx}</p:childTnLst></p:cTn><p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst><p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst></p:seq></p:childTnLst></p:cTn></p:par></p:tnLst>${bld ? `<p:bldLst>${bld}</p:bldLst>` : ''}</p:timing>`;
-}
-
 /* ---------------------------------------------------------------- boilerplate parts */
 // 1×1 grey PNG as video poster when none is given
 const POSTER_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
@@ -563,13 +533,23 @@ function authorsOf(pkg) {
 }
 function writeComments(pkg, part, comments) {
   const A = authorsOf(pkg);
-  const items = comments.map((c, i) => {
+  // threads: a reply (parent = id of a top comment) follows its thread; PowerPoint 2013+ links it with p15:threadingInfo
+  const tops = comments.filter((c) => !c.parent || !comments.some((x) => x.id === c.parent));
+  const ordered = [];
+  for (const c of tops) { ordered.push(c); for (const r of comments) if (r.parent === c.id && r !== c) ordered.push(r); }
+  const key = {};
+  const items = ordered.map((c, i) => {
     const name = c.author || 'Author';
     let au = A.list.find((x) => x.name === name);
     if (!au) { au = { id: A.list.reduce((m, x) => Math.max(m, x.id + 1), 0), name, initials: name.split(/\s+/).map((w) => w[0] || '').join('').slice(0, 3).toUpperCase(), lastIdx: 0, clrIdx: A.list.length % 8 }; A.list.push(au); }
     au.lastIdx += 1;
     A.dirty = true;
-    return `<p:cm authorId="${au.id}" dt="${iso(c.time || Date.now()).replace('Z', '.000')}" idx="${au.lastIdx}"><p:pos x="${10 + i * 10}" y="${10 + i * 10}"/><p:text>${esc(c.text || '')}</p:text></p:cm>`;
+    key[c.id] = { authorId: au.id, idx: au.lastIdx };
+    const par = c.parent && key[c.parent];
+    const top = par ? ordered.find((x) => x.id === c.parent) : c;
+    const pos = (top && top.pos) || { x: (10 + i * 10) * 1587.5, y: (10 + i * 10) * 1587.5 };
+    const thread = par ? `<p:extLst><p:ext uri="{C676402C-5697-4E1C-873F-D02D1690AC5C}"><p15:threadingInfo xmlns:p15="http://schemas.microsoft.com/office/powerpoint/2012/main" timeZoneBias="0"><p15:parentCm authorId="${par.authorId}" idx="${par.idx}"/></p15:threadingInfo></p:ext></p:extLst>` : '';
+    return `<p:cm authorId="${au.id}" dt="${iso(c.time || Date.now()).replace('Z', '.000')}" idx="${au.lastIdx}"><p:pos x="${I(pos.x / 1587.5)}" y="${I(pos.y / 1587.5)}"/><p:text>${esc(c.text || '')}</p:text>${thread}</p:cm>`;
   });
   const p = pkg.free((n) => `ppt/comments/comment${n}.xml`);
   pkg.files[p] = `${XML_HEAD}<p:cmLst ${Object.entries(NSDECL).map(([k, v]) => `${k}="${v}"`).join(' ')}>${items.join('')}</p:cmLst>`;
@@ -688,6 +668,12 @@ function writeSlide(pkg, doc, slide, n, o) {
   pkg.files[relsPathOf(path)] = relsXml(part.rels);
 }
 
+const GUIDES_URI = '{EFAFB233-063F-42B5-8137-9DF3F51BA10A}';
+function guidesXml(doc) {
+  const g = doc.guides || [];
+  if (!g.length) return '';
+  return `<p:ext uri="${GUIDES_URI}"><p15:sldGuideLst xmlns:p15="http://schemas.microsoft.com/office/powerpoint/2012/main">${g.map((x, i) => `<p15:guide id="${i + 1}"${x.axis === 'y' ? ' orient="horz"' : ''} pos="${I(x.pos / 1587.5)}"><p15:clr><a:srgbClr val="A4A3A4"/></p15:clr></p15:guide>`).join('')}</p15:sldGuideLst></p:ext>`;
+}
 function sectionsXml(doc, ids) {
   const groups = [];
   const secs = (doc.sections || []).map((s) => ({ ...s, i: doc.slides.findIndex((x) => x.id === s.start) })).filter((s) => s.i >= 0).sort((a, b) => a.i - b.i);
@@ -793,7 +779,7 @@ function writeFull(doc, ext = 'pptx') {
   for (const [t, target] of [['presProps', 'presProps.xml'], ['viewProps', 'viewProps.xml'], ['theme', relTarget('ppt/presentation.xml', themePath)], ['tableStyles', 'tableStyles.xml']]) presRels.push({ id: `rId${presRels.length + 1}`, type: RT + t, target });
   finishAuthors(pkg, presRels);
   presRels.forEach((r, i) => { if (/x$/.test(r.id)) r.id = `rId${presRels.length + 1 + i}`; });
-  const sec = sectionsXml(doc, sldIds);
+  const sec = sectionsXml(doc, sldIds) + guidesXml(doc);
   pkg.files['ppt/presentation.xml'] = `${XML_HEAD}${tag('p:presentation', { ...NSDECL, saveSubsetFonts: 1 }, [
     '<p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst>',
     notesRid ? `<p:notesMasterIdLst><p:notesMasterId r:id="${notesRid}"/></p:notesMasterIdLst>` : '',
@@ -918,8 +904,8 @@ async function writePatched(doc, original, ext) {
   const sz = kid(pres, 'p:sldSz');
   if (sz) { sz.a.cx = String(I(doc.size.w)); sz.a.cy = String(I(doc.size.h)); delete sz.a.type; }
   const ext0 = kid(pres, 'p:extLst');
-  if (ext0) ext0.c = ext0.c.filter((x) => typeof x === 'string' || x.a.uri !== '{521415D9-36F7-43E2-AB2F-B90AF26B5E84}');
-  const sec = sectionsXml(doc, ids);
+  if (ext0) ext0.c = ext0.c.filter((x) => typeof x === 'string' || (x.a.uri !== '{521415D9-36F7-43E2-AB2F-B90AF26B5E84}' && x.a.uri !== GUIDES_URI));
+  const sec = sectionsXml(doc, ids) + guidesXml(doc);
   let presXml = XML_HEAD + serialize(pres);
   if (sec) presXml = ext0 ? presXml.replace(/<\/p:extLst>(?![\s\S]*<\/p:extLst>)/, `${sec}</p:extLst>`) : presXml.replace(/<\/p:presentation>\s*$/, `<p:extLst>${sec}</p:extLst></p:presentation>`);
   pkg.files[presPath] = presXml;

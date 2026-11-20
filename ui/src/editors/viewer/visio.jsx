@@ -6,8 +6,10 @@ import { Shapes, ZoomIn, ZoomOut, Maximize, Sparkles } from 'lucide-react';
 import { Btn, Loading, Callout, Tabs } from '@hostwerk/ui';
 import { t } from '@hostwerk/i18n';
 import { readVsdx } from './vsdx.js';
+import { metafileToDataUrl } from './emf.js';
 import { ActionRow, PdfPages } from './common.jsx';
 import { Keep, Raw } from '../_shared/keep.jsx';
+import { FileTypeIcon } from '../../lib/fileIcons.jsx';
 
 const MEDIA = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', bmp: 'image/bmp', emf: 'image/emf', wmf: 'image/wmf', svg: 'image/svg+xml', tif: 'image/tiff', tiff: 'image/tiff' };
 
@@ -19,6 +21,7 @@ export async function loadVisio(bytes) {
     if (/\.(xml|rels)$/i.test(path)) files[path] = await f.async('string');
     else if (/^visio\/media\//i.test(path)) {
       const ext = path.split('.').pop().toLowerCase();
+      if (ext === 'emf' || ext === 'wmf') { const svg = metafileToDataUrl(await f.async('uint8array')); if (svg) { files.media[path] = svg; continue; } }
       const b = await f.async('base64');
       files.media[path] = `data:${MEDIA[ext] || 'application/octet-stream'};base64,${b}`;
     }
@@ -48,7 +51,7 @@ export default function VisioView({ file, bytes, host }) {
   return (
     <div className="of-view-visio">
       <div className="of-view-toolbar">
-        <h2 className="of-view-title"><Shapes size={18} /> <Keep>{file.name}</Keep></h2>
+        <h2 className="of-view-title"><FileTypeIcon name={file.name} size={20} /> <Keep>{file.name}</Keep></h2>
         <span className="grow" />
         {!exact && <>
           <button type="button" className="btn sm ghost icon" title="Zoom out" aria-label="Zoom out" onClick={() => setZoom(Math.max(0.25, (scale || 1) / 1.25))}><ZoomOut size={16} /></button>

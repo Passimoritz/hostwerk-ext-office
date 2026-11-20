@@ -9,6 +9,7 @@ import { lengthToEmu } from '../units.js';
 import { themeById, themeData, buildLayouts, THEMES, parseHex } from '../themes.js';
 import { uid, bbox, DEFAULT_INSETS } from '../model.js';
 import { ODF_TO_GEOM, resolvePrst, SHAPES } from '../render/geometry.js';
+import { pathsOfOdf } from '../render/custom.js';
 import { bytesToDataUrl, mimeOfPath, isZip } from './util.js';
 import { imageSize, odfSignature, animSig } from './odp-write.js';
 
@@ -151,6 +152,13 @@ function fillOf(g, db, files, kind) {
     ang = ((90 - (ang || 0)) % 360 + 360) % 360;
     const s = hexOf(a['draw:start-color']) || '#FFFFFF'; const e = hexOf(a['draw:end-color']) || '#000000';
     const style = a['draw:style'] || 'linear';
+    const cs = (gr.c || []).filter((k) => k && k.n === 'loext:color-stop');
+    if (cs.length >= 2) {
+      let ms = cs.map((k) => ({ pos: Math.round(parseFloat(k.a['svg:offset'] || '0') * 100), color: withA(hexOf(k.a['loext:color-value']) || '#000000') }));
+      const radialish = /radial|ellipsoid/.test(style);
+      if (radialish) ms = ms.map((x) => ({ ...x, pos: 100 - x.pos })).reverse();
+      return { type: 'grad', angle: Math.round(ang), kind: /radial|ellipsoid|square|rectangular/.test(style) ? 'radial' : 'linear', stops: ms };
+    }
     const stops = style === 'axial' ? [{ pos: 0, color: withA(e) }, { pos: 50, color: withA(s) }, { pos: 100, color: withA(e) }] : [{ pos: 0, color: withA(s) }, { pos: 100, color: withA(e) }];
     return { type: 'grad', angle: Math.round(ang), kind: /radial|ellipsoid|square|rectangular/.test(style) ? 'radial' : 'linear', stops: /radial|ellipsoid/.test(style) ? stops.reverse().map((x, i) => ({ ...x, pos: i ? 100 : 0 })) : stops };
   }
@@ -358,7 +366,7 @@ function textBody(el, ctx, g, x, opt = {}) {
   else if (opt.style && Object.keys(opt.style).length) b.style = opt.style;
   return b;
 }
-const applyExtras = (e, x) => { if (!x) return e; for (const k of ['ph', 'phIdx', 'name', 'locked', 'decor', 'prompt', 'textbox', 'link', 'flipH', 'flipV', 'geom', 'adj', 'shadow', 'crop']) if (x[k] !== undefined) e[k] = x[k]; if (x.fill) e.fill = x.fill; if (x.line && e.type === 'line') e.line = x.line; return e; };
+const applyExtras = (e, x) => { if (!x) return e; for (const k of ['ph', 'phIdx', 'name', 'locked', 'decor', 'prompt', 'textbox', 'link', 'flipH', 'flipV', 'geom', 'adj', 'shadow', 'crop', 'paths']) if (x[k] !== undefined) e[k] = x[k]; if (x.lineCap && e.line) e.line = { ...e.line, cap: x.lineCap, join: x.lineJoin }; if (x.fill) e.fill = x.fill; if (x.line && e.type === 'line') e.line = x.line; return e; };
 
 /** placeholder level styles from the master's presentation styles (foreign files) */
 function phLevels(ctx, cls, ownStyle) {
@@ -441,21 +449,24 @@ function parseEl(el, ctx) {
       return preserve(el, { ...common, ...box, type: 'unknown', what: 'Object', src: null }, ctx);
     }
     if (['draw:custom-shape', 'draw:rect', 'draw:ellipse', 'draw:circle', 'draw:polygon', 'draw:polyline', 'draw:path', 'draw:regular-polygon', 'draw:caption'].includes(el.n)) {
-      let geom = 'rect'; let adj; let keepRaw = false;
+      let geom = 'rect'; let adj; let keepRaw = false; let customPathsOf = null;
       let flipH; let flipV;
       if (el.n === 'draw:custom-shape') {
         const eg = kid(el, 'draw:enhanced-geometry') || { a: {} };
         const t = eg.a['draw:type'] || '';
         if (ODF_TO_GEOM[t]) geom = ODF_TO_GEOM[t];
         else if (/^ooxml-/.test(t)) geom = resolvePrst(t.slice(6));
-        else if (!(x && x.geom)) { ctx.fidelity.add('geometry'); keepRaw = true; }
+        else if (!(x && x.geom)) {
+          const cp = pathsOfOdf(eg.a['draw:enhanced-path'], eg.a['svg:viewBox']);
+          if (cp) { geom = 'custom'; customPathsOf = cp; } else { ctx.fidelity.add('geometry'); keepRaw = true; }
+        }
         if (eg.a['draw:mirror-horizontal'] === 'true') flipH = true;
         if (eg.a['draw:mirror-vertical'] === 'true') flipV = true;
       } else if (el.n === 'draw:ellipse' || el.n === 'draw:circle') geom = 'ellipse';
       else if (el.n === 'draw:rect' && el.a['draw:corner-radius'] && len(el.a['draw:corner-radius']) > 0) { geom = 'roundRect'; adj = [Math.round((len(el.a['draw:corner-radius']) / Math.max(1, Math.min(box.w, box.h))) * 100000)]; }
       else if (el.n !== 'draw:rect') { ctx.fidelity.add('geometry'); keepRaw = true; }
       if (!el.a['svg:width'] && el.a['svg:viewBox']) { /* polygon without size – keep viewBox size */ }
-      const e = { ...common, ...box, type: 'shape', geom: SHAPES[geom] ? geom : 'rect', fill: fillOf(g, ctx.db, ctx.files, 'shape'), line: lineOf(g, ctx.db, 'shape'), shadow: shadowOf(g) };
+      const e = { ...common, ...box, type: 'shape', geom: SHAPES[geom] || geom === 'custom' ? geom : 'rect', ...(customPathsOf ? { paths: customPathsOf } : {}), fill: fillOf(g, ctx.db, ctx.files, 'shape'), line: lineOf(g, ctx.db, 'shape'), shadow: shadowOf(g) };
       if (e.fill === undefined) e.fill = { type: 'solid', color: '#729FCF' };
       if (e.line === undefined) e.line = { color: '#3465A4', width: 9525, dash: 'solid' };
       if (adj) e.adj = adj;
@@ -585,15 +596,24 @@ function parseAnims(root, ctx) {
   for (const p of all({ c: [root] }, 'anim:par')) {
     const pid = p.a['presentation:preset-id'];
     if (!pid) continue;
-    if (p.a['presentation:preset-class'] && p.a['presentation:preset-class'] !== 'entrance') { ctx.fidelity.add('animations'); continue; }
-    const effect = /appear/.test(pid) ? 'appear' : /fade|dissolve/.test(pid) ? 'fade' : /fly|ascend|descend|rise/.test(pid) ? 'fly' : /zoom|grow|expand/.test(pid) ? 'zoom' : /wipe|wheel|split|blinds/.test(pid) ? 'wipe' : null;
-    if (!effect) ctx.fidelity.add('animations');
+    const pcls = p.a['presentation:preset-class'] || 'entrance';
+    let hwA = null; try { hwA = p.a['hw:anim'] ? JSON.parse(p.a['hw:anim']) : null; } catch { hwA = null; }
+    const cls = hwA && hwA.cls ? hwA.cls : pcls === 'exit' ? 'exit' : pcls === 'emphasis' ? 'emph' : pcls === 'motion-path' ? 'path' : pcls === 'entrance' ? 'entr' : null;
+    if (!cls) { ctx.fidelity.add('animations'); continue; }
+    let effect = hwA && hwA.effect ? hwA.effect : /appear|disappear/.test(pid) ? 'appear' : /fade|dissolve/.test(pid) ? 'fade' : /fly|ascend|descend|rise/.test(pid) ? 'fly' : /zoom|grow|expand/.test(pid) ? 'zoom' : /wipe|wheel|split|blinds/.test(pid) ? 'wipe' : null;
+    if (!hwA && cls === 'emph') effect = /spin/.test(pid) ? 'spin' : /grow|shrink/.test(pid) ? 'grow' : /transparen/.test(pid) ? 'transparency' : null;
+    if (!hwA && cls === 'path') effect = 'custom';
+    if (!effect) { ctx.fidelity.add('animations'); if (cls !== 'entr') continue; }
     const targetEl = desc(p).find((c) => c.a['smil:targetElement']);
     const tgt = targetEl && targetEl.a['smil:targetElement'];
     if (!tgt) continue;
     let dur = 0; for (const c of desc(p)) { const d = secsOf(c.a['smil:dur']); if (d > 0.01) dur = Math.max(dur, d); }
     const nt = p.a['presentation:node-type'];
-    out.push({ id: uid('a'), el: tgt, effect: effect || 'appear', dir: p.a['hw:dir'] || SUB_DIR[p.a['presentation:preset-sub-type']] || (effect === 'fly' || effect === 'wipe' ? 'b' : undefined), trigger: nt === 'with-previous' ? 'with' : nt === 'after-previous' ? 'after' : 'click', duration: effect === 'appear' ? 0 : Math.round((dur || 0.5) * 1000), delay: Math.round(secsOf(p.a['smil:begin']) * 1000) });
+    const extra = {};
+    if (cls !== 'entr') extra.cls = cls;
+    if (hwA) for (const k of ['path', 'scale', 'angle', 'opacity']) if (hwA[k] != null) extra[k] = hwA[k];
+    if (cls === 'path' && !extra.path) { const m = desc(p).find((c) => c.n === 'anim:animateMotion'); extra.path = `${(m && m.a['svg:path']) || 'M 0 0 L 0.25 0'} E`; }
+    out.push({ id: uid('a'), el: tgt, ...extra, effect: effect || 'appear', dir: p.a['hw:dir'] || SUB_DIR[p.a['presentation:preset-sub-type']] || (effect === 'fly' || effect === 'wipe' ? 'b' : undefined), trigger: nt === 'with-previous' ? 'with' : nt === 'after-previous' ? 'after' : 'click', duration: effect === 'appear' ? 0 : Math.round((dur || 0.5) * 1000), delay: Math.round(secsOf(p.a['smil:begin']) * 1000) });
     if (!out[out.length - 1].dir) delete out[out.length - 1].dir;
   }
   return out;

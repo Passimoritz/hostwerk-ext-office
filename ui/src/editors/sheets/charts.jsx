@@ -65,6 +65,17 @@ function Pie({ data, plot, doughnut }) {
   return <g>{out}</g>;
 }
 
+const labelsOn = (chart, si) => !!(chart.labels || (chart.series && chart.series[si] && chart.series[si].labels));
+const trendOn = (chart, si) => !!(chart.trend || (chart.series && chart.series[si] && chart.series[si].trendline));
+/** least squares line through the values (x = index) */
+function fit(vals) {
+  const p = vals.map((v, i) => [i, v]).filter(([, v]) => typeof v === 'number');
+  if (p.length < 2) return null;
+  const n = p.length; const sx = p.reduce((a, [x]) => a + x, 0); const sy = p.reduce((a, [, y]) => a + y, 0);
+  const sxx = p.reduce((a, [x]) => a + x * x, 0); const sxy = p.reduce((a, [x, y]) => a + x * y, 0);
+  const d = n * sxx - sx * sx; if (!d) return null;
+  const b = (n * sxy - sx * sy) / d; return { a: (sy - b * sx) / n, b };
+}
 function Cartesian({ chart, data, plot }) {
   const type = chart.type; const horiz = type === 'bar'; const stacked = (type === 'column' || type === 'bar' || type === 'area') && chart.stacked;
   const percent = stacked === 'percent'; const scatter = type === 'scatter';
@@ -127,8 +138,10 @@ function Cartesian({ chart, data, plot }) {
       const off = catPos(i) - inner / 2 + (stacked ? 0 : si * bw);
       const p1 = vScale(Math.max(vt.min, Math.min(vt.max, a))); const p2 = vScale(Math.max(vt.min, Math.min(vt.max, b)));
       const r = horiz ? { x: Math.min(p1, p2), y: off, width: Math.abs(p2 - p1), height: Math.max(1, bw - 1) } : { x: off, y: Math.min(p1, p2), width: Math.max(1, bw - 1), height: Math.abs(p2 - p1) };
-      el.push(<rect key={`b${si}-${i}`} {...r} fill={s.color}><title>{`${s.name} · ${data.categories[i] ?? ''}: ${fmtNum(v0)}`}</title></rect>);
+      el.push(<rect key={`b${si}-${i}`} className="of-ch-mark" style={{ animationDelay: `${Math.min(400, i * 25)}ms` }} {...r} fill={s.color}><title>{`${s.name} · ${data.categories[i] ?? ''}: ${fmtNum(v0)}`}</title></rect>);
+      if (labelsOn(chart, si)) el.push(horiz ? <text key={`bl${si}-${i}`} x={r.x + r.width + 3} y={r.y + r.height / 2 + 3.5} fontSize={9.5} fill={TEXT}>{fmtNum(v0)}</text> : <text key={`bl${si}-${i}`} x={r.x + r.width / 2} y={r.y - 3} textAnchor="middle" fontSize={9.5} fill={TEXT}>{fmtNum(v0)}</text>);
     }));
+    S.forEach((s, si) => { if (!trendOn(chart, si) || horiz) return; const ln = fit(s.values); if (!ln) return; el.push(<line key={`t${si}`} x1={catPos(0)} x2={catPos(n - 1)} y1={vScale(ln.a)} y2={vScale(ln.a + ln.b * (n - 1))} stroke={s.color} strokeWidth={1.5} strokeDasharray="5 3" />); });
   } else if (type === 'line' || type === 'area') {
     const base = new Array(n).fill(0);
     const paths = [];
@@ -156,6 +169,8 @@ function Cartesian({ chart, data, plot }) {
         } else el.push(<path key={`l${si}-${k}`} d={d} fill="none" stroke={s.color} strokeWidth={2} strokeLinejoin="round" />);
       });
       if (type === 'line') pts.forEach((p, i) => p && el.push(<circle key={`m${si}-${i}`} cx={p.x} cy={p.y} r={3} fill="#fff" stroke={s.color} strokeWidth={1.5}><title>{`${s.name} · ${data.categories[i] ?? ''}: ${fmtNum(p.v)}`}</title></circle>));
+      if (labelsOn(chart, si)) pts.forEach((p, i) => p && el.push(<text key={`ml${si}-${i}`} x={p.x} y={p.y - 6} textAnchor="middle" fontSize={9.5} fill={TEXT}>{fmtNum(p.v)}</text>));
+      if (trendOn(chart, si) && !stacked) { const ln = fit(s.values); if (ln) el.push(<line key={`t${si}`} x1={catPos(0)} x2={catPos(n - 1)} y1={vScale(ln.a)} y2={vScale(ln.a + ln.b * (n - 1))} stroke={s.color} strokeWidth={1.5} strokeDasharray="5 3" />); }
     });
   } else if (scatter) {
     S.forEach((s, si) => s.values.forEach((v, i) => {

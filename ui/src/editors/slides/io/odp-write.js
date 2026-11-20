@@ -10,6 +10,7 @@ import { esc, escAttr, attrs, tag, XML_HEAD } from '../../_shared/xmltree.js';
 import { emuToLength } from '../units.js';
 import { resolveHex, resolveAlpha, resolveFont, THEMES } from '../themes.js';
 import { shapePath, SHAPES } from '../render/geometry.js';
+import { odfCustom } from '../render/custom.js';
 import { dataUrlToBytes, hashStr, EXT_OF_MIME, isZip } from './util.js';
 
 export const NS = {
@@ -128,7 +129,9 @@ function fillAttrs(fill, ctx) {
     const s = ctx.hex(st[0].color); const e = ctx.hex(st[st.length - 1].color);
     const radial = fill.kind === 'radial';
     const ang = ((90 - (Number(fill.angle) || 0)) % 360 + 360) % 360;
-    const name = ctx.commonStyle(`g${s}${e}${radial}${ang}`, (n) => tag('draw:gradient', { 'draw:name': n, 'draw:style': radial ? 'radial' : 'linear', 'draw:cx': radial ? '50%' : undefined, 'draw:cy': radial ? '50%' : undefined, 'draw:start-color': s, 'draw:end-color': e, 'draw:start-intensity': '100%', 'draw:end-intensity': '100%', 'draw:angle': `${ang}deg`, 'draw:border': '0%' }, null));
+    const multi = st.length > 2 ? st.map((x) => tag('loext:color-stop', { 'svg:offset': String(Math.max(0, Math.min(1, (radial ? 100 - x.pos : x.pos) / 100))), 'loext:color-type': 'rgb', 'loext:color-value': ctx.hex(x.color).toLowerCase() }, null)) : null;
+    if (multi && radial) multi.reverse();
+    const name = ctx.commonStyle(`g${s}${e}${radial}${ang}${multi ? st.map((x) => ctx.hex(x.color) + x.pos).join('') : ''}`, (n) => tag('draw:gradient', { 'draw:name': n, 'draw:style': radial ? 'radial' : 'linear', 'draw:cx': radial ? '50%' : undefined, 'draw:cy': radial ? '50%' : undefined, 'draw:start-color': radial ? e : s, 'draw:end-color': radial ? s : e, 'draw:start-intensity': '100%', 'draw:end-intensity': '100%', 'draw:angle': `${ang}deg`, 'draw:border': '0%' }, multi ? multi.join('') : null));
     const a = resolveAlpha(st[0].color);
     return { 'draw:fill': 'gradient', 'draw:fill-gradient-name': name, 'draw:opacity': a < 0.999 ? pct(a * 100) : undefined };
   }
@@ -388,6 +391,12 @@ function writeEl(e, ctx, st, masterName) {
       if (cls) { a['presentation:class'] = cls; if (empty) a['presentation:placeholder'] = 'true'; a['presentation:user-transformed'] = 'true'; }
       return tag('draw:frame', { ...a, ...extrasOf(e, ctx, { fill: e.fill && e.fill.type === 'grad' && e.fill.stops.length > 2 ? e.fill : undefined, shadow: e.shadow || undefined }) }, tag('draw:text-box', null, parasXml(b, ctx, st) || null));
     }
+    if (e.geom === 'custom' && e.paths && e.paths.length) {
+      const oc = odfCustom(e.paths);
+      const gsc = st.add('graphic', tag('style:graphic-properties', gp, null), {}, 'gr');
+      const egc = tag('draw:enhanced-geometry', { 'svg:viewBox': oc.viewBox, 'draw:type': 'non-primitive', 'draw:enhanced-path': oc.path, 'draw:mirror-horizontal': e.flipH ? 'true' : undefined, 'draw:mirror-vertical': e.flipV ? 'true' : undefined }, null);
+      return tag('draw:custom-shape', { ...idA, 'draw:style-name': gsc, ...geo(e), ...extrasOf(e, ctx, { geom: 'custom', paths: e.paths, lineCap: e.line && e.line.cap, lineJoin: e.line && e.line.join, fill: e.fill && (e.fill.type === 'grad' && e.fill.stops.length > 2) ? e.fill : undefined, shadow: e.shadow || undefined }) }, parasXml(b, ctx, st) + egc);
+    }
     const geom = SHAPES[e.geom] ? e.geom : 'rect';
     const W = Math.max(1, Math.round(e.w / 360)); const H = Math.max(1, Math.round(e.h / 360));
     const p = shapePath(geom, W, H, e.adj);
@@ -437,7 +446,7 @@ function chartTableXml(e, ctx, st, idA) {
 
 /* ---------------------------------------------------------------- animations */
 function animXml(slide, ctx) {
-  const list = (slide.animations || []).filter((a) => ctx.idMap[a.el]);
+  const list = (slide.animations || []).filter((a) => ctx.idMap[a.el] && a.effect !== 'raw');
   if (!list.length) return '';
   const clicks = [];
   for (const a of list) {
@@ -462,7 +471,32 @@ function animXml(slide, ctx) {
     } else if (a.effect === 'zoom') { pid = 'ooo-entrance-zoom'; sub = 'in'; body += `<anim:animateTransform smil:dur="${d}" smil:fill="hold" smil:targetElement="${id}" smil:values="0,0;1,1" smil:keyTimes="0;1" svg:type="scale"/>`; }
     else if (a.effect === 'wipe') { pid = 'ooo-entrance-wipe'; sub = FLY_SUB[dir] || 'from-bottom'; const v = dir === 'l' || dir === 'r'; body += `<anim:transitionFilter smil:dur="${d}" smil:targetElement="${id}" smil:type="barWipe" smil:subtype="${v ? 'leftToRight' : 'topToBottom'}"${dir === 'r' || dir === 'b' ? ' smil:direction="reverse"' : ''}/>`; }
     const nt = a.trigger === 'with' ? 'with-previous' : a.trigger === 'after' ? 'after-previous' : first ? 'on-click' : 'on-click';
-    return tag('anim:par', { 'smil:begin': secs(a.delay || 0), 'smil:fill': 'hold', 'presentation:node-type': nt, 'presentation:preset-class': 'entrance', 'presentation:preset-id': pid, 'presentation:preset-sub-type': sub, 'hw:dir': a.dir || undefined }, body);
+    const cls = a.cls || 'entr';
+    let pclass = 'entrance';
+    if (cls !== 'entr') {
+      // exit / emphasis / motion path (LibreOffice preset names; our parameters travel in hw:anim)
+      const dd = secs(a.duration || 500);
+      const hide = `<anim:set smil:begin="${secs(Math.max(0, (a.duration || 500) - 1))}" smil:dur="0.001s" smil:fill="hold" smil:targetElement="${id}" smil:attributeName="visibility" smil:to="hidden"/>`;
+      if (cls === 'exit') {
+        pclass = 'exit';
+        pid = { appear: 'ooo-exit-disappear', fade: 'ooo-exit-fade-out', fly: 'ooo-exit-fly-out', float: 'ooo-exit-descend', wipe: 'ooo-exit-wipe', split: 'ooo-exit-split', zoom: 'ooo-exit-zoom' }[a.effect] || 'ooo-exit-fade-out';
+        body = a.effect === 'appear' ? hide : `<anim:transitionFilter smil:dur="${dd}" smil:targetElement="${id}" smil:type="fade" smil:subtype="crossfade" smil:mode="out"/>${hide}`;
+      } else if (cls === 'emph') {
+        pclass = 'emphasis';
+        pid = { spin: 'ooo-emphasis-spin', grow: 'ooo-emphasis-grow-and-shrink', pulse: 'ooo-emphasis-grow-and-shrink', teeter: 'ooo-emphasis-wave', transparency: 'ooo-emphasis-transparency' }[a.effect] || 'ooo-emphasis-spin';
+        if (a.effect === 'spin') body = `<anim:animateTransform smil:dur="${dd}" smil:fill="hold" smil:targetElement="${id}" smil:by="${a.angle || 360}" svg:type="rotate"/>`;
+        else if (a.effect === 'transparency') body = `<anim:set smil:dur="${dd}" smil:fill="hold" smil:targetElement="${id}" smil:attributeName="opacity" smil:to="${a.opacity ?? 0.5}"/>`;
+        else { const s = a.effect === 'grow' ? a.scale || 1.5 : 1.05; body = `<anim:animateTransform smil:dur="${dd}" smil:fill="hold" smil:targetElement="${id}" smil:to="${s},${s}" svg:type="scale"${a.effect === 'grow' ? '' : ' smil:autoReverse="true"'}/>`; }
+      } else if (cls === 'path') {
+        pclass = 'motion-path';
+        pid = 'ooo-motionpath-custom';
+        body = `<anim:animateMotion smil:dur="${dd}" smil:fill="hold" smil:targetElement="${id}" svg:path="${escAttr(String(a.path || 'M 0 0 L 0.25 0').replace(/\s*E\s*$/, ''))}"/>`;
+      }
+      sub = undefined;
+    }
+    const hw = cls !== 'entr' || a.effect === 'float' || a.effect === 'split' || a.effect === 'wheel' ? json({ cls, effect: a.effect, path: a.path, scale: a.scale, angle: a.angle, opacity: a.opacity }) : undefined;
+    if (cls === 'entr' && hw) { pid = { float: 'ooo-entrance-ascend', split: 'ooo-entrance-split', wheel: 'ooo-entrance-wheel' }[a.effect]; body += `<anim:transitionFilter smil:dur="${d}" smil:targetElement="${id}" smil:type="fade" smil:subtype="crossfade"/>`; }
+    return tag('anim:par', { 'smil:begin': secs(a.delay || 0), 'smil:fill': 'hold', 'presentation:node-type': nt, 'presentation:preset-class': pclass, 'presentation:preset-id': pid, 'presentation:preset-sub-type': sub, 'hw:dir': a.dir || undefined, 'hw:anim': hw }, body);
   };
   const seq = clicks.map((g, gi) => tag('anim:par', { 'smil:begin': gi === 0 && list[0].trigger && list[0].trigger !== 'click' ? '0s' : 'next' }, g.pars.map((p) => tag('anim:par', { 'smil:begin': secs(p.begin) }, p.effects.map((a, k) => eff(a, k === 0)).join(''))).join(''))).join('');
   return `<anim:par presentation:node-type="timing-root"><anim:seq presentation:node-type="main-sequence">${seq}</anim:seq></anim:par>`;

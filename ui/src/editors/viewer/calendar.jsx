@@ -6,6 +6,7 @@ import { t } from '@hostwerk/i18n';
 import { parseICS, occurrences, describeRRule } from './ical.js';
 import { ActionRow, decodeText, locale } from './common.jsx';
 import { Keep, Raw } from '../_shared/keep.jsx';
+import { FileTypeIcon } from '../../lib/fileIcons.jsx';
 
 const tr = (s, v) => t(s, v);
 tr.locale = undefined;
@@ -43,7 +44,7 @@ export default function CalendarView({ file, bytes, host }) {
   return (
     <div className="of-view-cal">
       <div className="of-view-toolbar">
-        <h2 className="of-view-title"><CalendarDays size={18} /> <Keep>{cal.name || file.name}</Keep></h2>
+        <h2 className="of-view-title"><FileTypeIcon name={file.name} size={20} /> <Keep>{cal.name || file.name}</Keep></h2>
         <span className="small muted">{t('{n} appointments', { n: cal.events.length })}{cal.todos.length ? ` · ${t('{n} to-dos', { n: cal.todos.length })}` : ''}</span>
         <span className="grow" />
         {view === 'month' && (

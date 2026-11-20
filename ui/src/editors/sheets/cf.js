@@ -30,7 +30,7 @@ function stopValue(stop, nums, min, max) {
 
 function prepare(book, sheet, rule) {
   const p = { rule };
-  if (['dup', 'unique', 'top', 'bottom', 'above', 'below', 'scale', 'bar'].includes(rule.type)) {
+  if (['dup', 'unique', 'top', 'bottom', 'above', 'below', 'scale', 'bar', 'icons'].includes(rule.type)) {
     const nums = []; const counts = new Map();
     cellsOf(book, sheet, rule.ranges, (v) => {
       if (typeof v === 'number') nums.push(v);
@@ -50,6 +50,12 @@ function prepare(book, sheet, rule) {
       const stops = rule.stops && rule.stops.length === (rule.colors || []).length ? rule.stops : (rule.colors || []).length === 3 ? [{ type: 'min' }, { type: 'percentile', val: 50 }, { type: 'max' }] : [{ type: 'min' }, { type: 'max' }];
       p.sv = stops.map((s) => stopValue(s, nums, p.min, p.max));
       p.cols = (rule.colors || ['#F8696B', '#63BE7B']).map(hex);
+    }
+    if (rule.type === 'icons') {
+      const n = +String(rule.set || '3')[0] || 3;
+      const st = rule.stops && rule.stops.length === n ? rule.stops : Array.from({ length: n }, (_, i) => ({ type: 'percent', val: (i * 100) / n }));
+      p.th = st.map((x) => ({ v: x.type === 'formula' ? Number(x.val) : stopValue(x.type === 'number' ? { type: 'num', val: x.val } : x, nums, p.min, p.max), gte: x.gte !== false }));
+      p.n = n;
     }
     if (rule.type === 'bar') { const st = rule.stops || []; p.bmin = st[0] ? stopValue(st[0], nums, p.min, p.max) : Math.min(0, p.min); p.bmax = st[1] ? stopValue(st[1], nums, p.min, p.max) : p.max; }
   }
@@ -125,6 +131,15 @@ export function cfAt(book, sheet) {
         else if (v >= sv[sv.length - 1]) fill = mix(cols[cols.length - 1], cols[cols.length - 1], 0);
         else { let i = 0; while (i < sv.length - 2 && v > sv[i + 1]) i++; const t = sv[i + 1] === sv[i] ? 0 : (v - sv[i]) / (sv[i + 1] - sv[i]); fill = mix(cols[i], cols[i + 1], t); }
         out = { ...(out || {}), fill: out && out.fill ? out.fill : fill };
+        continue;
+      }
+      if (rule.type === 'icons') {
+        const v = book.value(sheet, r, c);
+        if (typeof v !== 'number' || (out && out.icon)) continue;
+        let i = 0;
+        for (let k = 1; k < p.n; k++) { const t = p.th[k]; if (t.gte ? v >= t.v : v > t.v) i = k; }
+        if (rule.reverse) i = p.n - 1 - i;
+        out = { ...(out || {}), icon: { set: rule.set || '3TrafficLights1', i, n: p.n, hide: rule.showValue === false } };
         continue;
       }
       if (rule.type === 'bar') {

@@ -27,7 +27,11 @@ Create, edit, manage and read documents, spreadsheets, presentations and PDFs ri
 - **Documents** like in Word: styles, fonts, lists, tables, images, headers and footers, page numbers, footnotes, table of contents, comments, track changes, find and replace, print layout with ruler and navigation – docx, odt, rtf, md, html, txt and doc
 - **Spreadsheets** like in Excel: formulas with hundreds of functions, several sheets, number formats, conditional formatting, data validation, sort and filter, charts, freeze panes, selection summary – xlsx, xls, ods, csv and many more
 - **Presentations** like in PowerPoint: slides with layouts and themes, text boxes, shapes, images, tables, charts, transitions and animations, notes, slide show with presenter view in its own Hostwerk window – pptx, odp and ppt
-- **PDFs:** read, search, highlight, notes, stamps, signature, fill in forms, reorder, rotate, delete, insert, merge and split pages
+- **PDFs:** read, search, highlight, notes, stamps, signature, fill in forms, reorder, rotate, delete, insert, merge and split pages, text recognition (OCR), real redaction, compare two PDFs, password protection
+- **Edit together (1.1):** documents, spreadsheets and presentations are co-edited live by everyone logged in to this Hostwerk – with cursors, selections and one saver
+- **Live data (1.1):** live fields in documents and slides (date, Hostwerk values, a cell of another spreadsheet), live data tables and database tables of Hostwerk's databases as sheets (changes are written back after you confirm), forms from a spreadsheet with a public page, rules with notifications, scheduled PDF reports, Kanban/calendar/gallery views of a sheet
+- **Writing and presenting (1.1):** “/” commands, LaTeX formulas (saved as real Office equations), diagrams from text (Mermaid), compare versions, presentation from a document, phone as remote control via QR code, AI helpers with the provider you set up in Hostwerk
+- **Safe sharing (1.1):** password-protected Word/Excel/PowerPoint/OpenDocument files open and stay encrypted when saved (password or Hostwerk's password vault), clean before sharing, publish as a web page, Office library in Hostwerk's backups
 - **Read everything else:** e-mails (eml, msg), contacts (vcf), calendars (ics), e-books (epub), Visio, Apple Pages/Keynote/Numbers, OpenDocument drawings, images, JSON, XML and ZIP
 - **Google Drive:** with your own Google OAuth client (the settings show the steps) sign in once in a Hostwerk window, then Google Docs, Sheets and Slides open in the built-in editors and save back to Google
 - **Nothing gets lost:** parts the editors don't edit (macros, SmartArt, pivot tables, embedded objects …) are kept unchanged when saving
@@ -42,7 +46,9 @@ Create, edit, manage and read documents, spreadsheets, presentations and PDFs ri
 
 ## Install
 
-In Hostwerk (3.2.2 or newer, extension SDK 3.15): **Extensions → Discover** and click “Install”.
+In Hostwerk (3.2.2 or newer, extension SDK 3.15): **Extensions → Discover** and click “Install”. The coloured file icons and thumbnails in the list and grid of Hostwerk's Files need Hostwerk 3.2.3 (SDK 3.16) – older versions show Hostwerk's own icons there, everything else works the same.
+
+**Components on demand:** a few heavy parts are not in the package and are downloaded once when you first use them (Office asks first and shows the size; fixed addresses, every file checked against a pinned SHA-256; afterwards they work offline): the text recognition engine for PDFs (OCR, German + English, ≈ 23 MB), diagrams from text (Mermaid, ≈ 14 MB) and the PDF fonts for Chinese, Japanese and Korean (≈ 33 MB).
 
 Native extensions run as part of Hostwerk (own server and interface part). That is why Hostwerk only installs them from the official catalogue (with checksum) or in developer mode.
 
@@ -51,6 +57,7 @@ Native extensions run as part of Hostwerk (own server and interface part). That 
 - `office` in Hostwerk's data folder – your files, shown in Files as “Office documents” (location can be changed in the settings)
 - `office-data` – tags, notes, versions, trash, search index, shares, own templates
 - `office-engine` – the own office engine (only when it is needed, about 1.5 GB)
+- `office-components` – components on demand (OCR, Mermaid, Asian PDF fonts – only those you used)
 
 Removing the extension deletes nothing. Only “Remove completely” offers to delete these folders too (you see each one with its size first).
 
@@ -60,7 +67,8 @@ Removing the extension deletes nothing. Only “Remove completely” offers to d
 npm ci                               # libraries for the build
 node --test tests/*.test.js          # tests
 node tools/build.js                  # build the interface and editors (ui/index.js, ui/assets/*)
-node check.js . --strict             # same check as the catalogue (sdk/check.js)
+node tools/package.js --dir /tmp/pkg # the release package exactly as CI builds it (size, content)
+node check.js /tmp/pkg --strict      # same check as the catalogue (sdk/check.js on the package)
 ```
 
 Interface in `ui/src` (Files integration, editor frame and settings in `ui/src/shell`, editors in `ui/src/editors/<kind>` – loaded only when a file is opened), server part in `server/`. Texts in the code are English, German is in `locales/de.json`.

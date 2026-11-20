@@ -3,14 +3,17 @@
  * loop, rehearse timings) and the presenter view – in the same window or in a second Hostwerk window synced with
  * BroadcastChannel (the second window is the editor screen #/office-edit?…&present=<token>&window=1).
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronLeft, ChevronRight, X, Pause, Play, RotateCcw, Square, Monitor, PenLine, MousePointer2, Eraser, Minus, Plus } from 'lucide-react';
+import { ChevronLeft, ChevronRight, X, Pause, Play, RotateCcw, Square, Monitor, PenLine, MousePointer2, Eraser, Minus, Plus, Smartphone } from 'lucide-react';
+import { startRemote } from './host11.js';
+import { extra } from './lazy.js';
+import { slideTitle } from './model.js';
 import { t } from '@hostwerk/i18n';
 import SlideView from './render/SlideView.jsx';
 import { S } from './units.js';
 import { motionOk } from './motion.js';
-import { buildSteps, animDecor, visibleSlides } from './anim.js';
+import { buildSteps, animDecor, visibleSlides, motionJobs, morphPairs } from './anim.js';
 import { Keep } from '../_shared/keep.jsx';
 
 export { buildSteps, animDecor };
@@ -22,20 +25,52 @@ function Stage({ doc, idx, step, playing, black, transitionFrom, fit, openLink, 
   const W = S(doc.size.w); const H = S(doc.size.h);
   const scale = Math.min(box.w / W, box.h / H);
   const groups = useMemo(() => (slide ? buildSteps(slide) : []), [slide]);
-  const decor = useMemo(() => animDecor(groups, step, playing, motionOk()), [groups, step, playing]);
+  const decor = useMemo(() => animDecor(groups, step, playing, motionOk(), { W, H }), [groups, step, playing, W, H]);
+  const layerRef = useRef(null);
+  const trType0 = slide && transitionFrom != null && motionOk() ? (slide.transition || {}).type || 'none' : 'none';
+  const morph = trType0 === 'morph' && transitionFrom != null ? morphPairs(doc.slides[transitionFrom], slide) : null;
+  // motion paths of the playing click group (Web Animations, 60 fps on the compositor)
+  useLayoutEffect(() => {
+    if (!playing || !layerRef.current || !motionOk()) return undefined;
+    const anims = [];
+    for (const j of motionJobs(groups, step, { W, H })) {
+      const node = layerRef.current.querySelector(`[data-el="${j.el}"]`);
+      if (node && node.animate) anims.push(node.animate(j.frames, { duration: j.duration, delay: j.delay, fill: 'both', easing: 'ease-in-out' }));
+    }
+    return () => anims.forEach((a) => { try { a.cancel(); } catch { /* done */ } });
+  }, [groups, step, playing, W, H]);
+  // Morph: matched objects glide from their place on the previous slide, the rest cross-fades
+  useLayoutEffect(() => {
+    if (!morph || !layerRef.current) return undefined;
+    const dur = (slide.transition && slide.transition.duration) || 1500;
+    const anims = [];
+    const ids = new Set(morph.map((p) => p.to.id));
+    for (const { from, to } of morph) {
+      const node = layerRef.current.querySelector(`[data-el="${to.id}"]`);
+      if (!node || !node.animate) continue;
+      const sx = to.w ? from.w / to.w : 1; const sy = to.h ? from.h / to.h : 1;
+      const dx = S(from.x + from.w / 2 - (to.x + to.w / 2)); const dy = S(from.y + from.h / 2 - (to.y + to.h / 2));
+      const r0 = from.rot || 0; const r1 = to.rot || 0;
+      node.style.transformOrigin = '50% 50%';
+      anims.push(node.animate([{ transform: `translate(${dx}px, ${dy}px) rotate(${r0}deg) scale(${sx}, ${sy})` }, { transform: `translate(0, 0) rotate(${r1}deg) scale(1, 1)` }], { duration: dur, easing: 'cubic-bezier(.45,.05,.25,1)', fill: 'backwards' }));
+    }
+    layerRef.current.querySelectorAll('.of-slides-stage > .of-slides-el[data-el]').forEach((n) => { if (!ids.has(n.dataset.el) && n.animate) anims.push(n.animate([{ opacity: 0 }, { opacity: 1 }], { duration: dur * 0.7, delay: dur * 0.3, easing: 'ease-out', fill: 'backwards' })); });
+    return () => anims.forEach((a) => { try { a.cancel(); } catch { /* done */ } });
+  }, [idx, transitionFrom]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!slide) return null;
   const tr = slide.transition || {};
   const tType = transitionFrom != null && motionOk() ? tr.type || 'none' : 'none';
+  const isMorph = tType === 'morph';
   const dur = tr.duration || 500;
   const dir = tr.dir || 'l';
   const prev = transitionFrom != null ? doc.slides[transitionFrom] : null;
   const style = { width: W * scale, height: H * scale };
-  const anim = tType === 'none' ? undefined : `of-slides-tr-${tType}${['push', 'wipe', 'cover'].includes(tType) ? `-${dir}` : ''} ${dur}ms cubic-bezier(.3,.7,.2,1) both`;
+  const anim = tType === 'none' || isMorph ? undefined : `of-slides-tr-${tType}${['push', 'wipe', 'cover'].includes(tType) ? `-${dir}` : ''} ${dur}ms cubic-bezier(.3,.7,.2,1) both`;
   const outAnim = tType === 'push' ? `of-slides-tr-pushout-${dir} ${dur}ms cubic-bezier(.3,.7,.2,1) both` : undefined;
   return (
     <div className="of-slides-stagebox" style={style}>
-      {prev && tType !== 'none' && <div key={`p${transitionFrom}-${idx}`} className="of-slides-layer" style={{ animation: outAnim }}><SlideView doc={doc} slide={prev} index={transitionFrom} scale={scale} mode="show" /></div>}
-      <div key={`c${idx}`} className="of-slides-layer" style={{ animation: anim }}><SlideView doc={doc} slide={slide} index={idx} scale={scale} mode="show" elDecor={decor} openLink={openLink} /></div>
+      {prev && tType !== 'none' && <div key={`p${transitionFrom}-${idx}`} className="of-slides-layer" style={{ animation: isMorph ? `of-slides-tr-fadeout ${Math.round(dur * 0.6)}ms ease-in both` : outAnim }}><SlideView doc={doc} slide={prev} index={transitionFrom} scale={scale} mode="show" hideIds={isMorph && morph ? new Set(morph.map((p) => p.from.id)) : undefined} /></div>}
+      <div key={`c${idx}`} ref={layerRef} className="of-slides-layer" style={{ animation: anim }}><SlideView doc={doc} slide={slide} index={idx} scale={scale} mode="show" elDecor={decor} openLink={openLink} /></div>
       {black && <div className={`of-slides-blank ${black}`} />}
       {rehearse}
     </div>
@@ -109,7 +144,21 @@ export function PresenterConsole({ doc, idx, step, black, onCmd, startedAt, embe
 }
 
 /* ---------------------------------------------------------------- the show */
-export default function Show({ doc, start = 0, onExit, presenter = false, loop = false, autoAdvance = 0, openLink, rehearse = false, onTimings, openPresenterWindow }) {
+export default function Show({ doc: doc0, start = 0, onExit: onExit0, presenter = false, loop = false, autoAdvance = 0, openLink, rehearse = false, onTimings, openPresenterWindow, host: hwHost, refreshLive }) {
+  // live fields: values refresh while the show runs; the last ones go back to the editor (saved for PowerPoint)
+  const [doc, setLiveDoc] = useState(doc0);
+  const liveRef = useRef(doc0); liveRef.current = doc;
+  useEffect(() => {
+    if (!refreshLive) return undefined;
+    let alive = true; let tm = null;
+    const tick = async () => { try { const r = await refreshLive(liveRef.current); if (alive && r.doc !== liveRef.current) setLiveDoc(r.doc); } catch { /* keep */ } if (alive) tm = setTimeout(tick, 15000); };
+    tick();
+    return () => { alive = false; clearTimeout(tm); };
+  }, [refreshLive]);
+  const onExit = useCallback(() => onExit0(refreshLive ? liveRef.current : null), [onExit0, refreshLive]);
+  const [remoteS, setRemoteS] = useState(null);
+  const remoteRef = useRef(null);
+  const [phoneLaser, setPhoneLaser] = useState(null);
   const root = useRef(null);
   const stageRef = useRef(null);
   const box = useBox(stageRef);
@@ -195,9 +244,26 @@ export default function Show({ doc, start = 0, onExit, presenter = false, loop =
     return () => { try { ch.postMessage({ type: 'end' }); } catch { /* ignore */ } ch.close(); chan.current = null; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (chan.current) chan.current.postMessage({ type: 'state', idx: st.idx, step: st.step, black, ended }); }, [st.idx, st.step, black, ended, remote]);
+  useEffect(() => {
+    const r = remoteRef.current; if (!r) return;
+    const pos = vis.findIndex((v) => v.i === st.idx); const nx = vis[pos + 1];
+    const s = doc.slides[st.idx];
+    r.send({ idx: st.idx, pos: pos + 1, total: vis.length, step: st.step, steps: groupsOf(st.idx).length, title: s ? slideTitle(s) : '', notes: (s && s.notes) || '', next: nx ? slideTitle(nx.s) : '', black, ended, startedAt: startedAt.current });
+  }, [st.idx, st.step, black, ended, remoteS, doc]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { if (remoteRef.current) remoteRef.current.close(); }, []);
+  const toggleRemote = async () => {
+    if (remoteS) { setRemoteS((x) => ({ ...x, open: !x.open })); return; }
+    setRemoteS({ open: true, busy: true });
+    try {
+      const r = await startRemote(hwHost, { title: (doc.meta && doc.meta.title) || '', onCmd: (m) => handleCmdRef.current(m), onPeer: (m) => setRemoteS((x) => ({ ...(x || {}), phones: m.count ?? ((x && x.phones) || 0) + (m.type === 'leave' ? -1 : 1) })) });
+      remoteRef.current = r;
+      setRemoteS({ open: true, url: r.url, qr: r.qr, phones: 0 });
+    } catch (e) { setRemoteS({ open: true, error: e.message || String(e) }); }
+  };
 
   const handleCmdRef = useRef(null);
   handleCmdRef.current = (m) => {
+    if (m.cmd === 'laser') { setPhoneLaser(m.x == null ? null : { x: m.x, y: m.y }); return; }
     if (m.cmd === 'next') next(); else if (m.cmd === 'prev') prev(); else if (m.cmd === 'goto') goto(m.idx);
     else if (m.cmd === 'black') setBlack((b) => (b === 'black' ? null : 'black')); else if (m.cmd === 'end') finish();
   };
@@ -240,12 +306,14 @@ export default function Show({ doc, start = 0, onExit, presenter = false, loop =
       else if (key === 'e' || key === 'E') { if (penCanvas.current) penCanvas.current.getContext('2d').clearRect(0, 0, 99999, 99999); }
       else if (key === 'a' && e.ctrlKey) { e.preventDefault(); setTool(null); }
       else if (key === 's' || key === 'S') { if (!presenter) return; setMode((m) => (m === 'console' ? 'audience' : 'console')); }
+      else if (key === 'r' || key === 'R') { toggleRemoteRef.current(); }
       e.stopPropagation();
     };
     window.addEventListener('keydown', k, true);
     return () => window.removeEventListener('keydown', k, true);
   }, [next, prev, goto, finish, enter, vis, st.idx, doc, presenter]);
 
+  const toggleRemoteRef = useRef(null); toggleRemoteRef.current = toggleRemote;
   // cursor hide
   useEffect(() => {
     let tm = null;
@@ -285,6 +353,8 @@ export default function Show({ doc, start = 0, onExit, presenter = false, loop =
           <canvas ref={penCanvas} className="of-slides-pen" width={box.w} height={box.h} />
           {ended && <div className="of-slides-ended" onClick={(e) => { e.stopPropagation(); finish(); }}>{t('End of slide show – click to exit.')}</div>}
           {tool === 'laser' && laser && <div className="of-slides-laser" style={{ left: laser.x, top: laser.y }} />}
+          {phoneLaser && <div className="of-slides-laser phone" style={{ left: `calc(50% + ${(phoneLaser.x - 0.5) * box.w}px)`, top: `calc(50% + ${(phoneLaser.y - 0.5) * box.h}px)` }} />}
+          {remoteS && remoteS.open && <RemoteCard s={remoteS} onClose={() => setRemoteS((x) => ({ ...x, open: false }))} />}
           <div className={`of-slides-showbar ${cursor ? 'on' : ''}`} onClick={(e) => e.stopPropagation()}>
             <button type="button" title={t('Previous')} aria-label={t('Previous')} onClick={prev}><ChevronLeft size={18} /></button>
             <span className="small">{vis.findIndex((v) => v.i === st.idx) + 1} / {vis.length}</span>
@@ -292,6 +362,7 @@ export default function Show({ doc, start = 0, onExit, presenter = false, loop =
             <button type="button" className={tool === 'laser' ? 'on' : ''} title={t('Laser pointer (L)')} aria-label={t('Laser pointer (L)')} onClick={() => setTool(tool === 'laser' ? null : 'laser')}><MousePointer2 size={16} /></button>
             <button type="button" className={tool === 'pen' ? 'on' : ''} title={t('Pen (Ctrl+P)')} aria-label={t('Pen (Ctrl+P)')} onClick={() => setTool(tool === 'pen' ? null : 'pen')}><PenLine size={16} /></button>
             <button type="button" title={t('Erase drawings (E)')} aria-label={t('Erase drawings (E)')} onClick={() => penCanvas.current && penCanvas.current.getContext('2d').clearRect(0, 0, 99999, 99999)}><Eraser size={16} /></button>
+            <button type="button" className={remoteS && remoteS.url ? 'on' : ''} title={t('Phone as remote control (R)')} aria-label={t('Phone as remote control (R)')} onClick={toggleRemote}><Smartphone size={16} /></button>
             {presenter && <button type="button" title={t('Presenter view (S)')} aria-label={t('Presenter view (S)')} onClick={() => setMode('console')}><Monitor size={16} /></button>}
             <button type="button" title={t('End show (Esc)')} aria-label={t('End show (Esc)')} onClick={finish}><X size={16} /></button>
           </div>
@@ -301,6 +372,23 @@ export default function Show({ doc, start = 0, onExit, presenter = false, loop =
     </div>
   );
   return host ? createPortal(content, host) : content;
+}
+
+function RemoteCard({ s, onClose }) {
+  const [own, setOwn] = useState(null);
+  useEffect(() => { if (s.url && !s.qr) extra().then((m) => { try { setOwn(m.qrSvg(s.url, { size: 200 })); } catch { setOwn(null); } }).catch(() => {}); }, [s.url, s.qr]);
+  const svg = s.qr && /^<svg/.test(s.qr) ? s.qr : own;
+  return (
+    <div className="of-slides-remote" onClick={(e) => e.stopPropagation()} role="dialog" aria-label={t('Phone as remote control')}>
+      <div className="row-tight"><Smartphone size={16} /><b className="grow">{t('Phone as remote control')}</b><button type="button" className="btn xs ghost icon" title={t('Close')} aria-label={t('Close')} onClick={onClose}><X size={14} /></button></div>
+      {s.busy && <div className="small muted">{t('Starting …')}</div>}
+      {s.error && <div className="small">{t('Remote control is not available here ({error}).', { error: s.error })}</div>}
+      {svg && <div className="of-slides-qr" dangerouslySetInnerHTML={{ __html: svg }} />}
+      {!svg && s.qr && <div className="of-slides-qr"><img src={s.qr} alt={t('QR code')} width={200} height={200} /></div>}
+      {s.url && <div className="small muted of-slides-remote-url"><Keep>{s.url}</Keep></div>}
+      {s.url && <div className="small">{s.phones > 0 ? t('{n} phone connected', { n: s.phones }) : t('Scan the code with your phone – next, previous, notes, timer and a laser pointer. Works over Hostwerk’s remote access too.')}</div>}
+    </div>
+  );
 }
 
 function RehearseBox({ startedAt, slideStart, onNext }) {

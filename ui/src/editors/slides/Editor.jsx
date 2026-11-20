@@ -7,15 +7,23 @@ import { Loading, Empty, Callout, Btn, confirmDialog, promptDialog } from '@host
 import { toast } from '../../lib/toast';
 import { contextMenu } from '@hostwerk/kit';
 import { t } from '@hostwerk/i18n';
-import { Presentation, Plus, Copy, Trash2, EyeOff, Scissors, ClipboardPaste, BringToFront, SendToBack, Group, Ungroup, Type, PanelRight, FolderPlus, Pencil, LayoutTemplate, CopyPlus, Link2, Sparkles, StickyNote, FileWarning, Download, Minus } from 'lucide-react';
+import { Presentation, Plus, Copy, Trash2, EyeOff, Scissors, ClipboardPaste, BringToFront, SendToBack, Group, Ungroup, Type, PanelRight, FolderPlus, Pencil, LayoutTemplate, CopyPlus, Link2, Sparkles, StickyNote, FileWarning, Download, Minus, MessageSquarePlus, Wand2, Crop, Paintbrush, Image as ImageIcon, PaintBucket, Users } from 'lucide-react';
 import Ribbon, { SIZES_PT } from './Ribbon.jsx';
 import Canvas from './Canvas.jsx';
 import Show, { PresenterRemote } from './Present.jsx';
-import { Thumbs, Sorter, Outline, NotesPage, FormatPane, CommentsPane, AnimPane } from './Panels.jsx';
+import { Thumbs, Sorter, NotesPage, FormatPane } from './Panels.jsx';
+import { OutlineView, CommentsPane, AnimPane, DesignerPane, CompareDialog, FromDocDialog, LiveFieldDialog, AiDialog, iconElement } from './Extras.jsx';
+import { available as hostFeatures, joinCollab, fieldValue, aiAsk } from './host11.js';
+import { connect as collabConnect, colorFor } from './collab.js';
+import * as Y from 'yjs';
+import { liveRuns, applyLiveValues, liveFieldBox } from './features.js';
 import { FooterDialog, SizeDialog, ChartDataDialog } from './dialogs.jsx';
 import SlideView from './render/SlideView.jsx';
 import { readAny, writeAny, saveFormat, OOXML, ODF } from './io/index.js';
-import { nodeToCanvas, canvasBytes, imagePdf, printHtml } from './io/export.js';
+import { nodeToCanvas, canvasBytes, imagePdf, printHtml, elementToCanvas, canvasUrl } from './io/export.js';
+import { extra } from './lazy.js';
+import { slideBackground } from './render/SlideView.jsx';
+import { css as themeCss } from './themes.js';
 import { FIDELITY } from './io/util.js';
 import { tableOp } from './table.js';
 import { S, EMU_PER_PT, cmToEmu } from './units.js';
@@ -67,8 +75,8 @@ function useOffscreen() {
   const [job, setJob] = useState(null);
   const ref = useRef(null);
   const queue = useRef(Promise.resolve());
-  const render = useCallback((doc, slide, index) => {
-    const p = queue.current.then(() => new Promise((resolve) => setJob({ doc, slide, index, resolve })));
+  const render = useCallback((doc, slide, index, flat = false, hold = false) => {
+    const p = queue.current.then(() => new Promise((resolve) => setJob({ doc, slide, index, resolve, flat, hold })));
     queue.current = p.catch(() => {});
     return p;
   }, []);
@@ -76,12 +84,15 @@ function useOffscreen() {
     if (!job || !ref.current) return;
     // wait a frame so images decode and autofit settles
     const imgs = [...ref.current.querySelectorAll('img')];
-    Promise.all(imgs.map((i) => (i.complete ? null : new Promise((r) => { i.onload = r; i.onerror = r; })))).then(() => setTimeout(() => { const node = ref.current && ref.current.firstChild; job.resolve(node); setJob(null); }, 40));
+    Promise.all(imgs.map((i) => (i.complete ? null : new Promise((r) => { i.onload = r; i.onerror = r; })))).then(() => setTimeout(() => { const node = ref.current && ref.current.firstChild; if (job.hold) job.resolve({ node, release: () => setJob(null) }); else { job.resolve(node); setJob(null); } }, 40));
   }, [job]);
   const host = typeof document !== 'undefined' ? document.body : null;
-  const el = job && host ? createPortal(<div className="of-slides-offscreen" ref={ref} aria-hidden="true"><SlideView doc={job.doc} slide={job.slide} index={job.index} scale={1} mode="show" /></div>, host) : null;
+  const el = job && host ? createPortal(<div className="of-slides-offscreen" ref={ref} aria-hidden="true"><SlideView doc={job.doc} slide={job.slide} index={job.index} scale={1} mode="show" elDecor={job.flat ? FLAT : undefined} /></div>, host) : null;
   return [el, render];
 }
+
+/** rendering for the vector PDF: no rotation (applied per object in the PDF), nothing hidden */
+const FLAT = () => ({ style: { transform: 'none' } });
 
 /* ---------------------------------------------------------------- entry: presenter remote or editor */
 export default function Editor(props) {
@@ -128,6 +139,14 @@ function SlidesEditor({ file, bytes, readOnly: ro0, settings = {}, host = {} }) 
   const [collapsed, setCollapsed] = useState({});
   const [caretTick, setCaretTick] = useState(0);
   const [notesH, setNotesH] = useState(110);
+  const [selAnimId, setSelAnimId] = useState(null);
+  const [rulers, setRulers] = useState(false);
+  const [cropId, setCropId] = useState(null);
+  const [focusComment, setFocusComment] = useState(null);
+  const [peers, setPeers] = useState([]);
+  const [ribbonMin, setRibbonMin] = useState(false);
+  const feats = useMemo(() => hostFeatures(host), [host]);
+  const collabRef = useRef(null);
   const textApi = useRef(null);
   const rootRef = useRef(null);
   const [offscreen, renderOff] = useOffscreen();
@@ -187,16 +206,83 @@ function SlidesEditor({ file, bytes, readOnly: ro0, settings = {}, host = {} }) 
   // dirty + status
   useEffect(() => {
     if (!doc) return;
-    if (host.dirty) host.dirty(doc !== savedDoc.current);
+    if (host.dirty) host.dirty(doc !== savedDoc.current && !(collabRef.current && collabRef.current.isLeader && !collabRef.current.isLeader()));
   }, [doc]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!doc || !host.status) return;
     const n = doc.slides.length;
     host.status(`${t('Slide {n} of {total}', { n: slideIdx + 1, total: n })} · ${doc.theme.name || ''}`);
   }, [doc && doc.slides.length, slideIdx, doc && doc.theme.name]); // eslint-disable-line react-hooks/exhaustive-deps
+  /* ---------------- shell 1.1: interactive mark, command palette, dropped files */
+  useEffect(() => { if (phase === 'ready' && typeof host.perf === 'function') { try { host.perf('interactive'); } catch { /* old shell */ } } }, [phase]); // eslint-disable-line react-hooks/exhaustive-deps
+  const cRef = useRef(null);
+  useEffect(() => {
+    if (phase !== 'ready' || !host.palette || typeof host.palette.register !== 'function') return undefined;
+    const run = (name, ...a) => () => { const f = cRef.current && cRef.current[name]; if (typeof f === 'function') f(...a); };
+    const cmds = [
+      { id: 'slides.new', title: t('New slide'), group: t('Slides'), keys: 'Ctrl+M', run: run('newSlide') },
+      { id: 'slides.present', title: t('From beginning'), group: t('Slide show'), keys: 'F5', run: run('present', 'start') },
+      { id: 'slides.presentCur', title: t('From current slide'), group: t('Slide show'), keys: 'Shift+F5', run: run('present', 'current') },
+      { id: 'slides.designer', title: t('Designer'), group: t('Design'), run: run('designer') },
+      { id: 'slides.fromDoc', title: t('Presentation from a document'), group: t('Insert'), run: run('fromDoc') },
+      { id: 'slides.icons', title: t('Live field'), group: t('Insert'), run: run('liveField') },
+      { id: 'slides.compare', title: t('Compare versions'), group: t('Review'), run: run('compare') },
+      { id: 'slides.comment', title: t('New comment'), group: t('Review'), keys: 'Ctrl+Alt+M', run: run('addComment') },
+      { id: 'slides.rulers', title: t('Ruler'), group: t('View'), run: run('toggleRulers') },
+      { id: 'slides.outline', title: t('Outline view'), group: t('View'), run: run('setView', 'outline') },
+      { id: 'slides.sorter', title: t('Slide sorter'), group: t('View'), run: run('setView', 'sorter') },
+      ...(feats.ai ? [{ id: 'slides.ai', title: t('AI: speaker notes and text'), group: t('AI'), run: run('ai') }] : []),
+    ];
+    if (readOnly) cmds.splice(0, cmds.length, ...cmds.filter((x) => /present|compare|rulers|outline|sorter/i.test(x.id)));
+    const off = host.palette.register(cmds);
+    return () => { if (typeof off === 'function') off(); };
+  }, [phase, readOnly, feats.ai]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (phase !== 'ready' || readOnly || typeof host.insertFiles !== 'function') return undefined;
+    const off = host.insertFiles(async (files) => {
+      for (const f of files) {
+        if (!/^image\//.test(f.mime || '') && !/^(png|jpe?g|gif|webp|svg|bmp)$/i.test(f.ext || '')) continue;
+        const bytes = await f.bytes();
+        const mime = f.mime || `image/${String(f.ext).toLowerCase() === 'jpg' ? 'jpeg' : String(f.ext).toLowerCase()}`;
+        const src = await readFile(new Blob([bytes], { type: mime }));
+        if (cRef.current && cRef.current.insertPictureSrc) await cRef.current.insertPictureSrc(src);
+      }
+    });
+    return () => { if (typeof off === 'function') off(); };
+  }, [phase, readOnly]); // eslint-disable-line react-hooks/exhaustive-deps
+  /* ---------------- co-editing (host.collab, element level) */
+  useEffect(() => {
+    if (phase !== 'ready' || readOnly || !host.collab || !file || !file.path) return undefined;
+    let conn = null; let alive = true;
+    const me0 = (host.collab && typeof host.collab.me === 'function' && host.collab.me()) || null;
+    const me = { name: (me0 && me0.name) || gen.author || t('Guest'), color: (me0 && me0.color) || colorFor(gen.author || String(Math.random())), ...(me0 && me0.id ? { id: me0.id } : {}) };
+    joinCollab(host, Y, me).then(async (s) => {
+      if (!alive || !s) { if (s) s.close(); return; }
+      await s.synced;
+      if (!alive) { s.close(); return; }
+      conn = collabConnect(s, {
+        me, onPeers: setPeers, getDoc: () => histRef.current.doc,
+        setDoc: (d, initial) => setHist((hs) => (initial ? { ...history(d), past: hs ? hs.past : [] } : histPush(hs, d, 'remote'))),
+      });
+      conn.isLeader = s.isLeader;
+      collabRef.current = conn;
+    }).catch(() => { /* co-editing not available – edit alone */ });
+    return () => { alive = false; if (conn) conn.close(); collabRef.current = null; setPeers([]); };
+  }, [phase]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (collabRef.current && doc) collabRef.current.push(doc); }, [doc]);
+  useEffect(() => { if (collabRef.current) collabRef.current.presence({ slide: curId, sel }); }, [curId, sel]);
+  /* ---------------- live fields */
+  const refreshLive = useCallback(async (d0) => {
+    const d = d0 || histRef.current.doc;
+    const keys = {}; for (const r of liveRuns(d)) keys[r.key] = r.live;
+    const values = {};
+    await Promise.all(Object.entries(keys).map(async ([k, l]) => { try { const v = await fieldValue(host, l.id, l.params); if (v != null) values[k] = v; } catch { /* keep the last value */ } }));
+    return { values, doc: applyLiveValues(d, values) };
+  }, [host]);
   // keep current slide valid
   useEffect(() => { if (doc && !doc.slides.some((s) => s.id === curId) && doc.slides.length) setCurId(doc.slides[Math.min(slideIdx, doc.slides.length - 1)].id); }, [doc, curId, slideIdx]);
-  useEffect(() => { setSel([]); setEditing(null); setGroupFocus(null); }, [curId]);
+  useEffect(() => { setSel([]); setEditing(null); setGroupFocus(null); setCropId(null); setSelAnimId(null); }, [curId]);
+  useEffect(() => { if (cropId && !sel.includes(cropId)) setCropId(null); }, [sel, cropId]);
   useEffect(() => { if (slide) setSel((s) => s.filter((id) => findEl(slide.elements, id))); }, [slide]);
   // ribbon state follows the caret while editing
   useEffect(() => {
@@ -210,7 +296,7 @@ function SlidesEditor({ file, bytes, readOnly: ro0, settings = {}, host = {} }) 
   const writeFmt = useMemo(() => {
     if (file.converted) return file.converted.to;
     const e = String(file.ext || '').toLowerCase();
-    if ([...OOXML, 'odp', 'otp'].includes(e)) return e;
+    if ([...OOXML, 'odp', 'otp', 'fodp'].includes(e)) return e;
     return saveFormat(e);
   }, [file.ext, file.converted]);
   const chartImage = useCallback(async () => null, []);
@@ -237,9 +323,28 @@ function SlidesEditor({ file, bytes, readOnly: ro0, settings = {}, host = {} }) 
       try { return await host.convert(await serialize('pptx'), 'pptx', 'pdf'); } catch { /* fall back to the built-in raster PDF */ }
     }
     const idx = d.slides.map((s, i) => i).filter((i) => !d.slides[i].hidden);
-    const imgs = await renderSlides(idx.length ? idx : [0], 2, 'image/jpeg');
+    const list = idx.length ? idx : [0];
+    // vector PDF (real text and shapes); objects without a vector form become pictures; any failure → raster PDF
+    try {
+      const { createVectorPdf } = await extra();
+      const vp = createVectorPdf({ raster: (el, w, hh) => elementToCanvas(el, w, hh, 2) });
+      for (const i of list) {
+        const s = d.slides[i];
+        const { node, release } = await renderOff(d, s, i, true, true);
+        try {
+          const model = new Map();
+          const layout = d.layouts.find((l) => l.id === s.layoutId);
+          walk([...(s.showMaster === false ? [] : (layout && layout.decor) || []), ...s.elements], (e) => model.set(e.id, e));
+          const bg = slideBackground(d, s);
+          const background = bg.type === 'solid' ? { css: themeCss(bg.color, d.theme) } : bg.type === 'grad' ? { grad: { ...bg, stops: bg.stops.map((x) => ({ pos: x.pos, css: themeCss(x.color, d.theme) })) } } : bg.type === 'image' ? { image: bg.src } : { css: '#ffffff' };
+          await vp.addPage({ node, size: { w: S(d.size.w), h: S(d.size.h) }, model, background });
+        } finally { release(); }
+      }
+      return await vp.finish(d.meta && d.meta.title);
+    } catch { /* fall back to the picture PDF */ }
+    const imgs = await renderSlides(list, 2, 'image/jpeg');
     return imagePdf(imgs.map((x) => ({ jpeg: x.bytes, pxW: x.canvas.width, pxH: x.canvas.height })), S(d.size.w), S(d.size.h), d.meta && d.meta.title);
-  }, [host, serialize, renderSlides]);
+  }, [host, serialize, renderSlides, renderOff]);
   const exportRun = useCallback(async (ext) => {
     const d = histRef.current.doc;
     if (ext === 'pdf') return pdfBytes();
@@ -323,7 +428,7 @@ function SlidesEditor({ file, bytes, readOnly: ro0, settings = {}, host = {} }) 
     if (host.setExporter) {
       host.setExporter({
         formats: [
-          { ext: 'pptx', label: t('PowerPoint presentation (.pptx)') }, { ext: 'odp', label: t('OpenDocument presentation (.odp)') },
+          { ext: 'pptx', label: t('PowerPoint presentation (.pptx)') }, { ext: 'odp', label: t('OpenDocument presentation (.odp)') }, { ext: 'fodp', label: t('Flat OpenDocument presentation (.fodp)') },
           { ext: 'pdf', label: t('PDF') }, { ext: 'png', label: t('PNG image of the current slide') }, { ext: 'zip', label: t('All slides as PNG images (.zip)') },
           ...(MACRO_EXT(file.ext) ? [{ ext: 'pptm', label: t('PowerPoint with macros (.pptm)') }] : []),
           { ext: 'potx', label: t('PowerPoint template (.potx)') }, { ext: 'ppsx', label: t('PowerPoint show (.ppsx)') },
@@ -337,8 +442,9 @@ function SlidesEditor({ file, bytes, readOnly: ro0, settings = {}, host = {} }) 
     const d = histRef.current.doc;
     const idx = d.slides.map((s, i) => i).filter((i) => !d.slides[i].hidden);
     const imgs = await renderSlides(idx, 2, 'image/jpeg');
-    const urls = imgs.map((x) => x.canvas.toDataURL('image/jpeg', 0.9));
+    const urls = await Promise.all(imgs.map((x) => canvasUrl(x.canvas, 'image/jpeg', 0.9)));
     if (host.print) host.print(printHtml(urls, S(d.size.w), S(d.size.h), { title: d.meta && d.meta.title }));
+    setTimeout(() => urls.forEach((u) => { if (/^blob:/.test(u)) URL.revokeObjectURL(u); }), 120000);
   }, [renderSlides, host]);
 
   /* ---------------- helpers */
@@ -657,21 +763,30 @@ function SlidesEditor({ file, bytes, readOnly: ro0, settings = {}, host = {} }) 
     setTransition: (patch) => change((d) => updateSlides(d, selSlides.length ? selSlides : [curId], (s) => ({ ...s, transition: { type: 'none', dir: 'l', duration: 500, advanceAfter: null, ...(s.transition || {}), ...patch } })), 'transition'),
     transitionToAll: () => { const tr = slide.transition; change((d) => ({ ...d, slides: d.slides.map((s) => ({ ...s, transition: { ...tr } })) })); toast.success(t('Applied to all slides')); },
     previewTransition: () => setPresent({ start: slideIdx, presenter: false, preview: true }),
+    selAnim: (() => { const l = (slide && slide.animations) || []; return l.find((a) => a.id === selAnimId && sel.includes(a.el)) || l.find((a) => sel.includes(a.el)) || null; })(),
     setAnim: (patch) => {
       if (!sel.length) return;
       change((d) => updateSlide(d, slide.id, (s) => {
         let anims = (s.animations || []).slice();
         for (const id of sel) {
-          const i = anims.findIndex((a) => a.el === id);
-          if (i >= 0) anims[i] = { ...anims[i], ...patch };
-          else anims.push({ id: uid('a'), el: id, effect: 'fade', dir: 'b', trigger: 'click', duration: 500, delay: 0, ...patch });
+          const i = anims.findIndex((a) => a.el === id && (sel.length > 1 || !selAnimId || a.id === selAnimId));
+          const j = i >= 0 ? i : anims.findIndex((a) => a.el === id);
+          if (j >= 0) { const n = { ...anims[j], ...patch }; if (patch.cls && patch.cls !== anims[j].cls) { delete n.raw; } anims[j] = n; }
+          else { const a = { id: uid('a'), el: id, cls: 'entr', effect: 'fade', dir: 'b', trigger: 'click', duration: 500, delay: 0, ...patch }; anims.push(a); if (sel.length === 1) setTimeout(() => setSelAnimId(a.id), 0); }
         }
         anims = anims.map((a) => (a.effect === 'appear' ? { ...a, duration: a.duration || 1 } : a));
         return { ...s, animations: anims };
       }), 'anim');
     },
+    addAnim: (spec) => {
+      if (!sel.length) return;
+      const ids = [];
+      change((d) => updateSlide(d, slide.id, (s) => ({ ...s, animations: [...(s.animations || []), ...sel.map((id) => { const a = { id: uid('a'), el: id, dir: 'b', trigger: 'click', duration: spec.effect === 'appear' ? 1 : spec.cls === 'path' ? 2000 : 500, delay: 0, ...spec }; ids.push(a.id); return a; })] })));
+      if (ids.length) setSelAnimId(ids[ids.length - 1]);
+    },
     removeAnim: () => change((d) => updateSlide(d, slide.id, (s) => ({ ...s, animations: (s.animations || []).filter((a) => !sel.includes(a.el)) }))),
-    moveAnim: (dir) => change((d) => updateSlide(d, slide.id, (s) => { const a = (s.animations || []).slice(); const i = a.findIndex((x) => sel.includes(x.el)); const j = i + dir; if (i < 0 || j < 0 || j >= a.length) return s; [a[i], a[j]] = [a[j], a[i]]; return { ...s, animations: a }; })),
+    removeSelAnim: () => { const l = (slide.animations || []); const a = l.find((x) => x.id === selAnimId) || l.find((x) => sel.includes(x.el)); if (a) change((d) => updateSlide(d, slide.id, (s) => ({ ...s, animations: s.animations.filter((x) => x.id !== a.id) }))); },
+    moveAnim: (dir) => change((d) => updateSlide(d, slide.id, (s) => { const a = (s.animations || []).slice(); const i = a.findIndex((x) => x.id === selAnimId) >= 0 ? a.findIndex((x) => x.id === selAnimId) : a.findIndex((x) => sel.includes(x.el)); const j = i + dir; if (i < 0 || j < 0 || j >= a.length) return s; [a[i], a[j]] = [a[j], a[i]]; return { ...s, animations: a }; })),
     previewAnims: () => setPresent({ start: slideIdx, presenter: false, preview: true }),
     toggleHidden: () => { const ids = selSlides.length ? selSlides : [curId]; const on = !slide.hidden; change((d) => updateSlides(d, ids, { hidden: on })); },
     setShow: (patch) => change((d) => ({ ...d, show: { loop: false, autoAdvance: 0, useTimings: true, ...(d.show || {}), ...patch } })),
@@ -698,8 +813,31 @@ function SlidesEditor({ file, bytes, readOnly: ro0, settings = {}, host = {} }) 
     resetPicture: () => change((d) => updateEls(d, slide.id, sel, (e) => ({ ...e, crop: { l: 0, t: 0, r: 0, b: 0 }, opacity: 1, geom: undefined, shadow: null, line: null }))),
     cropToShape: (g) => change((d) => updateEls(d, slide.id, sel, (e) => (e.type === 'image' && SHAPES[g] ? { ...e, geom: g } : e))),
     print,
+    feats, peers,
+    crop: () => { const e = selEls[0]; if (e && e.type === 'image') setCropId(cropId ? null : e.id); },
+    cropping: !!cropId,
+    insertIcon: (name, d) => {
+      const size = Math.round(doc.size.h * 0.16);
+      const p = center(size, size);
+      addToSlide([iconElement(name, d, { ...p, size, color: 'accent1' })]);
+    },
+    iconColor: (col) => change((d) => updateEls(d, slide.id, sel, (e) => (e.geom === 'custom' && e.paths && e.paths.every((p) => p.fill === false) ? { ...e, line: { ...(e.line || { width: 19050, dash: 'solid', cap: 'round', join: 'round' }), color: col || 'tx1' } } : e))),
+    designer: () => setPane((cur) => (cur === 'designer' ? null : 'designer')),
+    compare: () => setDialog({ type: 'compare' }),
+    fromDoc: () => setDialog({ type: 'fromdoc' }),
+    liveField: () => setDialog({ type: 'live' }),
+    refreshLive: async () => { const r = await refreshLive(); if (r.doc !== histRef.current.doc) change(() => r.doc, 'live'); toast.success(t('Live fields refreshed')); },
+    ai: () => setDialog({ type: 'ai' }),
+    toggleRulers: () => setRulers((x) => !x),
+    rulers,
+    ribbonMin, toggleRibbon: () => setRibbonMin((x) => !x),
+    addComment: () => { setPane('comments'); setTimeout(() => { const ta = rootRef.current && rootRef.current.querySelector('.of-slides-newcomment textarea'); if (ta) ta.focus(); }, 40); },
+    addGuide: (axis) => change((d) => ({ ...d, guides: [...(d.guides || []), { id: uid('gd'), axis, pos: Math.round((axis === 'x' ? d.size.w : d.size.h) / 2) }] })),
+    clearGuides: () => change((d) => ({ ...d, guides: [] })),
   };
 
+  c.insertPictureSrc = (src) => insertPicture(src, phTarget());
+  cRef.current = c;
   const applyPainter = (id) => {
     const p = painter; setPainter(null);
     change((d) => updateEls(d, slide.id, [id], (e) => {
@@ -723,6 +861,9 @@ function SlidesEditor({ file, bytes, readOnly: ro0, settings = {}, host = {} }) 
     if (e.key === 'F5') { e.preventDefault(); startShow(e.shiftKey ? 'current' : 'start'); return; }
     if (ctrl && k === 's') { e.preventDefault(); explicitSave.current = true; if (host.save) host.save(); return; }
     if (ctrl && k === 'p') { e.preventDefault(); print(); return; }
+    if (ctrl && e.key === 'F1') { e.preventDefault(); setRibbonMin((x) => !x); return; }
+    if (e.shiftKey && !ctrl && e.key === 'F9') { e.preventDefault(); setGrid((x) => !x); return; }
+    if (e.altKey && !ctrl && e.key === 'F9') { e.preventDefault(); setGuides((x) => !x); return; }
     if (readOnly) {
       if (['pagedown', 'arrowdown'].includes(k) || (inThumbs && k === 'arrowright')) { e.preventDefault(); const n = doc.slides[slideIdx + 1]; if (n) selectSlide(n.id); }
       if (['pageup', 'arrowup'].includes(k) || (inThumbs && k === 'arrowleft')) { e.preventDefault(); const n = doc.slides[slideIdx - 1]; if (n) selectSlide(n.id); }
@@ -731,7 +872,8 @@ function SlidesEditor({ file, bytes, readOnly: ro0, settings = {}, host = {} }) 
     }
     if (ctrl && k === 'z') { e.preventDefault(); undo(); return; }
     if (ctrl && (k === 'y' || (e.shiftKey && k === 'z'))) { e.preventDefault(); redo(); return; }
-    if (ctrl && k === 'm') { e.preventDefault(); newSlideCmd(); return; }
+    if (ctrl && k === 'm' && !e.altKey) { e.preventDefault(); newSlideCmd(); return; }
+    if (ctrl && e.altKey && k === 'm') { e.preventDefault(); c.addComment(); return; }
     if (inThumbs || view === 'sorter') {
       if (k === 'delete' || k === 'backspace') { e.preventDefault(); delSlides(selSlides.length ? selSlides : [curId]); return; }
       if (ctrl && k === 'd') { e.preventDefault(); dupSlides(); return; }
@@ -763,6 +905,11 @@ function SlidesEditor({ file, bytes, readOnly: ro0, settings = {}, host = {} }) 
       return;
     }
     if (ctrl && ['b', 'i', 'u'].includes(k) && sel.length) { e.preventDefault(); c.toggleRun(k); return; }
+    if (ctrl && e.shiftKey && k === 'c' && sel.length) { e.preventDefault(); if (!painter) c.formatPainter(); return; }
+    if (ctrl && e.shiftKey && k === 'v' && sel.length && painter) { e.preventDefault(); for (const id of sel) applyPainter(id); return; }
+    if (ctrl && e.shiftKey && (e.key === '>' || e.key === '<') && sel.length) { e.preventDefault(); c.growFont(e.key === '>' ? 1 : -1); return; }
+    if (e.altKey && e.shiftKey && (k === 'arrowleft' || k === 'arrowright') && sel.length) { e.preventDefault(); c.level(k === 'arrowright' ? 1 : -1); return; }
+    if (k === 'escape' && cropId) { setCropId(null); return; }
     if (ctrl && ['e', 'l', 'r', 'j'].includes(k) && sel.length) { e.preventDefault(); c.align({ e: 'ctr', l: 'l', r: 'r', j: 'just' }[k]); return; }
     if ((k === 'delete' || k === 'backspace') && sel.length) { e.preventDefault(); change((d) => deleteEls(d, slide.id, sel.filter((id) => !(findEl(slide.elements, id) || {}).locked))); setSel([]); return; }
     if (k.startsWith('arrow') && sel.length) {
@@ -792,7 +939,9 @@ function SlidesEditor({ file, bytes, readOnly: ro0, settings = {}, host = {} }) 
       contextMenu(e, [
         { label: t('Paste'), icon: ClipboardPaste, hint: keyLabel('Ctrl+V'), onClick: () => pasteFromSystem() },
         { label: t('Layout …'), icon: LayoutTemplate, onClick: () => setTab('home') },
-        { label: t('Format background …'), onClick: () => setTab('design') },
+        { label: t('Format background …'), icon: PaintBucket, onClick: () => setTab('design') },
+        { label: t('Designer ideas'), icon: Wand2, onClick: () => setPane('designer') },
+        { label: t('New comment'), icon: MessageSquarePlus, hint: keyLabel('Ctrl+Alt+M'), onClick: () => c.addComment() },
         { label: t('New slide'), icon: Plus, hint: keyLabel('Ctrl+M'), onClick: () => newSlideCmd() },
       ]);
       return;
@@ -809,7 +958,10 @@ function SlidesEditor({ file, bytes, readOnly: ro0, settings = {}, host = {} }) 
       sel.length > 1 && { label: t('Group'), icon: Group, hint: keyLabel('Ctrl+G'), onClick: c.group },
       el.type === 'group' && { label: t('Ungroup'), icon: Ungroup, hint: keyLabel('Ctrl+Shift+G'), onClick: c.ungroup },
       { label: t('Link …'), icon: Link2, hint: keyLabel('Ctrl+K'), onClick: c.insertLink },
-      { label: t('Add animation'), icon: Sparkles, onClick: () => { c.setAnim({ effect: 'fade' }); setTab('animations'); } },
+      el.type === 'image' && { label: t('Crop'), icon: Crop, onClick: () => { setSel([id]); setCropId(id); } },
+      { label: t('Add animation'), icon: Sparkles, onClick: () => { c.addAnim({ cls: 'entr', effect: 'fade' }); setTab('animations'); } },
+      { label: t('New comment'), icon: MessageSquarePlus, hint: keyLabel('Ctrl+Alt+M'), onClick: () => c.addComment() },
+      { label: t('Copy formatting'), icon: Paintbrush, hint: keyLabel('Ctrl+Shift+C'), onClick: () => c.formatPainter() },
       { label: t('Format …'), icon: PanelRight, onClick: () => setPane('format') },
       { label: t('Delete'), icon: Trash2, danger: true, hint: keyLabel('Del'), onClick: () => { change((d) => deleteEls(d, slide.id, sel)); setSel([]); } },
     ]);
@@ -851,15 +1003,16 @@ function SlidesEditor({ file, bytes, readOnly: ro0, settings = {}, host = {} }) 
   }
   const panes = pane && slide ? (
     pane === 'format' ? <FormatPane doc={doc} slide={slide} sel={sel} change={change} units={units} onClose={() => setPane(null)} onCrop={c.resetPicture} />
-      : pane === 'comments' ? <CommentsPane doc={doc} slide={slide} change={change} author={gen.author} readOnly={readOnly} onClose={() => setPane(null)} />
-        : pane === 'anim' ? <AnimPane doc={doc} slide={slide} sel={sel} setSel={setSel} change={change} readOnly={readOnly} onClose={() => setPane(null)} /> : null
+      : pane === 'comments' ? <CommentsPane doc={doc} slide={slide} change={change} author={gen.author} readOnly={readOnly} onClose={() => setPane(null)} selEl={selEls[0]} focusId={focusComment} setFocusId={setFocusComment} />
+        : pane === 'anim' ? <AnimPane doc={doc} slide={slide} sel={sel} setSel={setSel} change={change} readOnly={readOnly} onClose={() => setPane(null)} selAnimId={selAnimId} setSelAnimId={setSelAnimId} onPreview={() => c.previewAnims()} />
+          : pane === 'designer' ? <DesignerPane doc={doc} slide={slide} onClose={() => setPane(null)} onApply={(d) => change((dd) => updateSlide(dd, slide.id, (s) => ({ ...s, elements: d.elements, ...(d.background ? { background: d.background } : {}) })))} /> : null
   ) : null;
   const promptFn = (e) => t(e.prompt || '');
   const zoomPct = Math.round(zoom * 100);
   return (
     <div className={`of-slides-root ${readOnly ? 'ro' : ''}`} ref={rootRef} onKeyDown={onKeyDown} tabIndex={-1}>
       {!host.fidelity && fidelity.length > 0 && <div className="of-slides-callout"><Callout kind="info" title={t('Some parts can’t be edited here')}>{t('They are kept unchanged when you save: {list}.', { list: fidelity.join(', ') })}</Callout></div>}
-      {!readOnly ? <Ribbon c={c} tab={tab} setTab={setTab} /> : (
+      {!readOnly ? <Ribbon c={c} tab={tab} setTab={setTab} collapsed={ribbonMin} setCollapsed={setRibbonMin} /> : (
         <div className="of-slides-robar">
           <span className="small muted grow">{t('Read only – you can browse, present, print and export.')}</span>
           <Btn className="sm" icon={Presentation} onClick={() => startShow('start')}>{t('From beginning')}</Btn>
@@ -877,7 +1030,9 @@ function SlidesEditor({ file, bytes, readOnly: ro0, settings = {}, host = {} }) 
                 editing={editing} setEditing={setEditing} tool={tool} setTool={setTool} createAt={createAt} readOnly={readOnly} guides={guides} grid={grid} snap={snap}
                 textApi={textApi} onContext={elMenu} onPlaceholderPicture={async (el) => { const [f] = await pickFile('image/*'); if (f) insertPicture(await readFile(f), el); }}
                 prompt={promptFn} spellcheck={spell} onSave={() => host.save && host.save()} onHistory={(w) => (w === 'undo' ? undo() : redo())} groupFocus={groupFocus} setGroupFocus={setGroupFocus}
-                painter={painter} applyPainter={applyPainter} />
+                painter={painter} applyPainter={applyPainter} rulers={rulers} units={units} cropId={cropId} setCropId={setCropId} peers={peers.filter((p) => p.slide === slide.id)}
+                comments={pane === 'comments' ? (slide.comments || []).filter((x) => !x.parent && x.pos && !x.done) : null} focusComment={focusComment} onComment={(id) => { setFocusComment(id); setPane('comments'); }}
+                selAnim={tab === 'animations' || pane === 'anim' ? c.selAnim : null} />
               {notesPane && (
                 <div className="of-slides-notes" style={{ height: notesH }}>
                   <div className="of-slides-notesgrip" role="separator" aria-label={t('Resize notes')} onPointerDown={(e) => { const y0 = e.clientY; const h0 = notesH; const mv = (ev) => setNotesH(Math.max(48, Math.min(400, h0 - (ev.clientY - y0)))); const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); }; window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up); }} />
@@ -889,7 +1044,7 @@ function SlidesEditor({ file, bytes, readOnly: ro0, settings = {}, host = {} }) 
             </>
           )}
           {view === 'sorter' && <Sorter doc={doc} curId={curId} selSlides={selSlides} onSelect={selectSlide} onOpen={(id) => { setCurId(id); setView('normal'); }} onReorder={(ids, to) => !readOnly && change((d) => moveSlides(d, ids, to))} onContext={slideMenu} zoom={Math.max(0.6, Math.min(2, zoom * 1.4))} />}
-          {view === 'outline' && <Outline doc={doc} change={change} readOnly={readOnly} spellcheck={spell} onOpen={(id) => { setCurId(id); setView('normal'); }} />}
+          {view === 'outline' && <OutlineView doc={doc} change={change} readOnly={readOnly} spellcheck={spell} curId={curId} onOpen={(id) => { setCurId(id); setView('normal'); }} />}
           {view === 'notes' && slide && <NotesPage doc={doc} slide={slide} index={slideIdx} change={change} readOnly={readOnly} spellcheck={spell} />}
         </div>
         {panes && <div className="of-slides-side">{panes}</div>}
@@ -900,6 +1055,7 @@ function SlidesEditor({ file, bytes, readOnly: ro0, settings = {}, host = {} }) 
         {tool && <span className="small muted">· {t('Drag on the slide to draw – Esc cancels')}</span>}
         {painter && <span className="small muted">· {t('Click an object to apply the formatting')}</span>}
         <span className="grow" />
+        {peers.length > 0 && <span className="of-slides-peers" title={peers.map((p) => p.user.name).join(', ')} aria-label={t('Editing with {names}', { names: peers.map((p) => p.user.name).join(', ') })}><Users size={12} />{peers.slice(0, 5).map((p) => h('span', { key: p.id, className: 'of-slides-peer', style: { background: p.user.color } }, String(p.user.name || '?').slice(0, 1).toUpperCase()))}</span>}
         <button type="button" className={`btn xs ghost ${notesPane ? 'active' : ''}`} onClick={() => setNotesPane((x) => !x)} title={t('Notes')}><StickyNote size={12} />{t('Notes')}</button>
         <button type="button" className={`btn xs ghost ${pane === 'comments' ? 'active' : ''}`} onClick={() => c.togglePane('comments')} title={t('Comments')}>{t('Comments')}{slide && (slide.comments || []).length ? ` (${slide.comments.length})` : ''}</button>
         <span className="of-slides-viewbtns">
@@ -913,8 +1069,8 @@ function SlidesEditor({ file, bytes, readOnly: ro0, settings = {}, host = {} }) 
       </div>
       {present && (
         <Show doc={doc} start={present.start} presenter={present.preview ? false : present.presenter} rehearse={present.rehearse} loop={!present.preview && !!((doc.show && doc.show.loop) || ss.loop)} autoAdvance={present.preview ? 0 : (doc.show && doc.show.autoAdvance) || ss.autoAdvance || 0}
-          openLink={(u) => (host.openLink ? host.openLink(u) : null)} openPresenterWindow={openPresenterWindow}
-          onExit={() => { setPresent(null); setTimeout(() => rootRef.current && rootRef.current.focus(), 0); }}
+          openLink={(u) => (host.openLink ? host.openLink(u) : null)} openPresenterWindow={openPresenterWindow} host={host} refreshLive={liveRuns(doc).length ? refreshLive : null}
+          onExit={(last) => { setPresent(null); if (last && !readOnly && last !== histRef.current.doc) change(() => last, 'live'); setTimeout(() => rootRef.current && rootRef.current.focus(), 0); }}
           onTimings={async (tm) => {
             if (readOnly) return;
             const ok = await confirmDialog({ title: t('Keep the new slide timings?'), text: t('The slides then advance automatically in the slide show.'), confirm: t('Keep timings') });
@@ -924,6 +1080,10 @@ function SlidesEditor({ file, bytes, readOnly: ro0, settings = {}, host = {} }) 
       {dialog && dialog.type === 'footer' && <FooterDialog footer={doc.footer} onClose={() => setDialog(null)} onApply={(f) => change((d) => ({ ...d, footer: f }))} />}
       {dialog && dialog.type === 'size' && <SizeDialog size={doc.size} units={units} onClose={() => setDialog(null)} onApply={(sz, how) => change((d) => setSize(d, sz, how))} />}
       {dialog && dialog.type === 'chart' && (() => { const el = slide && findEl(slide.elements, dialog.id); return el ? <ChartDataDialog chart={el.chart} onClose={() => setDialog(null)} onApply={(ch) => change((d) => updateEls(d, slide.id, [el.id], (x) => ({ ...x, chart: ch })))} /> : null; })()}
+      {dialog && dialog.type === 'compare' && <CompareDialog doc={doc} file={file} host={host} readAny={readAny} onClose={() => setDialog(null)} onGoto={(id) => { setCurId(id); setSelSlides([id]); setView('normal'); }} />}
+      {dialog && dialog.type === 'fromdoc' && <FromDocDialog doc={doc} host={host} ai={feats.ai} onClose={() => setDialog(null)} onCreate={(slides, mode) => { if (!slides.length) return; change((d) => (mode === 'replace' ? { ...d, slides, sections: [] } : insertSlides(d, slides, slideIdx + 1))); setCurId(slides[0].id); setSelSlides([slides[0].id]); toast.success(t('{n} slides created', { n: slides.length })); }} />}
+      {dialog && dialog.type === 'live' && <LiveFieldDialog host={host} onClose={() => setDialog(null)} onInsert={(f, v) => addToSlide([liveFieldBox(doc, f, v)])} />}
+      {dialog && dialog.type === 'ai' && slide && <AiDialog host={host} slide={slide} selEl={selEls[0]} onClose={() => setDialog(null)} onNotes={(s) => change((d) => updateSlide(d, slide.id, { notes: s }))} onText={(s) => { const e0 = selEls[0]; if (!e0 || !e0.text) { change((d) => updateSlide(d, slide.id, { notes: s })); return; } change((d) => updateEls(d, slide.id, [e0.id], (x) => ({ ...x, text: { ...x.text, paras: s.split(/\r?\n/).filter((l, i, a) => l.trim() || i < a.length - 1).map((l, i) => { const m0 = /^(\s*)(?:[-•*]\s+)?(.*)$/.exec(l); const old = x.text.paras[Math.min(i, x.text.paras.length - 1)] || { runs: [] }; const r0 = (old.runs || [])[0] || {}; const { text: _t, ...rp } = r0; return { ...old, level: Math.min(8, Math.floor(m0[1].length / 2)), runs: m0[2] ? [{ ...rp, text: m0[2] }] : [] }; }) } }))); }} />}
       {offscreen}
     </div>
   );

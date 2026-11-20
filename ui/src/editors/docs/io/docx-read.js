@@ -9,7 +9,7 @@
  */
 import JSZip from 'jszip';
 import { parseXml, kids, kid, all, text as xtext, serialize, local } from '../../_shared/xmltree.js';
-import { defaultModel, sizeName, twipToMm, normalizeInline, fixDoc, dataUrl, mimeOf, uid, imageSize } from './pm.js';
+import { defaultModel, sizeName, twipToMm, normalizeInline, fixDoc, dataUrl, mimeOf, uid, imageSize, hfKey } from './pm.js';
 
 const W = (el, name) => kid(el, `w:${name}`);
 const val = (el) => (el ? el.a['w:val'] : undefined);
@@ -17,6 +17,27 @@ const onOff = (el) => !!el && !['0', 'false', 'off'].includes(String(val(el) == 
 const HL = { yellow: '#FFFF00', green: '#00FF00', cyan: '#00FFFF', magenta: '#FF00FF', blue: '#0000FF', red: '#FF0000', darkBlue: '#000080', darkCyan: '#008080', darkGreen: '#008000', darkMagenta: '#800080', darkRed: '#800000', darkYellow: '#808000', darkGray: '#808080', lightGray: '#C0C0C0', black: '#000000', white: '#FFFFFF' };
 const PPR_MODELED = new Set(['w:pStyle', 'w:numPr', 'w:jc', 'w:spacing', 'w:ind', 'w:pageBreakBefore', 'w:outlineLvl']);
 const RPR_MODELED = new Set(['w:rStyle', 'w:b', 'w:bCs', 'w:i', 'w:iCs', 'w:u', 'w:strike', 'w:dstrike', 'w:vertAlign', 'w:sz', 'w:szCs', 'w:rFonts', 'w:color', 'w:highlight', 'w:shd', 'w:rPrChange', 'w:ins', 'w:del']);
+
+/** Word fields we show as live fields (the rest stay preserved with their result) */
+const FIELD_KINDS = { PAGE: 'page', NUMPAGES: 'pages', SECTIONPAGES: 'pages', DATE: 'date', TIME: 'time', CREATEDATE: 'date', SAVEDATE: 'date', PRINTDATE: 'date', AUTHOR: 'author', TITLE: 'title', FILENAME: 'filename', SUBJECT: 'subject', NUMWORDS: 'words' };
+export function fieldKind(instr) { const w = String(instr || '').trim().split(/\s+/)[0].toUpperCase(); return FIELD_KINDS[w] || null; }
+const firstMarks = (nodes) => { const n = (nodes || []).find((x) => x.type === 'text' && x.marks && x.marks.length); return n ? n.marks.filter((m) => !['comment', 'insertion', 'deletion', 'sdt'].includes(m.type)) : undefined; };
+/** what kind of content control a w:sdtPr describes */
+export function sdtInfo(pr) {
+  const o = { kind: 'rich' };
+  if (!pr) return o;
+  o.tag = val(W(pr, 'tag')) || null; o.alias = val(W(pr, 'alias')) || null; o.placeholder = !!W(pr, 'showingPlcHdr');
+  const cb = kid(pr, 'w14:checkbox');
+  if (cb) { const c = kid(cb, 'w14:checked'); o.kind = 'checkbox'; o.checked = !!c && ['1', 'true'].includes(String(c.a['w14:val'] != null ? c.a['w14:val'] : val(c))); }
+  else if (W(pr, 'dropDownList') || W(pr, 'comboBox')) { const l = W(pr, 'dropDownList') || W(pr, 'comboBox'); o.kind = l.n === 'w:comboBox' ? 'combo' : 'dropdown'; o.items = kids(l, 'w:listItem').map((li) => ({ text: li.a['w:displayText'] != null ? li.a['w:displayText'] : li.a['w:value'] || '', value: li.a['w:value'] != null ? li.a['w:value'] : li.a['w:displayText'] || '' })); }
+  else if (W(pr, 'date')) { const d = W(pr, 'date'); o.kind = 'date'; o.fullDate = d.a['w:fullDate'] || null; o.format = val(W(d, 'dateFormat')) || null; }
+  else if (W(pr, 'text')) o.kind = 'text';
+  else if (W(pr, 'picture')) o.kind = 'picture';
+  else if (W(pr, 'docPartObj') || W(pr, 'docPartList')) o.kind = 'docpart';
+  else if (W(pr, 'group')) o.kind = 'group';
+  if (o.tag && o.tag.startsWith('hostwerk-field:')) { try { const f = JSON.parse(o.tag.slice(15)); o.field = { kind: f.k === 'cell' ? 'cell' : 'hostwerk', instr: '', source: f.s || null, params: f.p || null, label: o.alias || f.l || '' }; } catch { /* a normal control */ } }
+  return o;
+}
 
 async function readText(zip, path) { const f = zip.file(path); return f ? f.async('string') : null; }
 function relsOf(xml, base) {
@@ -48,7 +69,8 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
   const docXml = await readText(zip, docPath);
   if (!docXml) throw new Error('This file has no Word document inside.');
   const relsPath = docPath.replace(/([^/]+)$/, '_rels/$1.rels');
-  const rels = relsOf(await readText(zip, relsPath), docPath);
+  let rels = relsOf(await readText(zip, relsPath), docPath);
+  const docRels = rels;
   const relOfType = (t) => Object.values(rels).find((r) => r.type === t);
 
   // theme fonts
@@ -176,8 +198,12 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
         if (parent != null && comments[parent]) comments[id].parent = parent;
       }
     }
-    for (const c of Object.values(comments)) if (c.parent != null) comments[c.parent].replies.push({ author: c.author, date: c.date, text: c.text });
-    model.comments = Object.entries(comments).filter(([, c]) => c.parent == null).map(([, c]) => ({ id: c.id, author: c.author, date: c.date, text: c.text, resolved: c.resolved, replies: c.replies }));
+    // durable ids (Word 2016+): kept so a thread stays the same thread after saving here
+    const idRel = Object.values(rels).find((r) => r.type === 'commentsIds');
+    const idXml = idRel ? await readText(zip, idRel.target) : null;
+    if (idXml) for (const e of all(parseXml(idXml), 'w16cid:commentId')) { const id = paraToComment[e.a['w16cid:paraId']]; if (id != null && comments[id]) comments[id].durableId = e.a['w16cid:durableId'] || null; }
+    for (const c of Object.values(comments)) if (c.parent != null) comments[c.parent].replies.push({ author: c.author, date: c.date, text: c.text, durableId: c.durableId || null });
+    model.comments = Object.entries(comments).filter(([, c]) => c.parent == null).map(([, c]) => ({ id: c.id, author: c.author, date: c.date, text: c.text, resolved: c.resolved, replies: c.replies, durableId: c.durableId || null }));
   }
 
   // media cache
@@ -280,21 +306,45 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
         case 'w:smartTag': case 'w:customXml': case 'w:dir': case 'w:bdo': await inlines(c, ctx, out); break;
         case 'w:sdt': {
           const pr = W(c, 'sdtPr');
-          const cb = pr && kid(pr, 'w14:checkbox');
-          if (cb) { ctx.checkbox = { checked: val(kid(cb, 'w14:checked')) === '1' || kid(cb, 'w14:checked')?.a['w14:val'] === '1' }; break; }
-          fid.add('contentControls');
-          await inlines(W(c, 'sdtContent') || { c: [] }, ctx, out);
+          const info = sdtInfo(pr);
+          const content = W(c, 'sdtContent') || { c: [] };
+          const prXml = pr ? serialize(pr) : '';
+          const endXml = W(c, 'sdtEndPr') ? serialize(W(c, 'sdtEndPr')) : '';
+          // a check box at the start of a paragraph = a check list item (what our writer and Word's lists do)
+          if (info.kind === 'checkbox' && !out.some((x) => x.type !== 'text' || /\S/.test(x.text || '')) && !ctx.checkbox && !ctx.noTask) { ctx.checkbox = { checked: info.checked }; break; }
+          if (info.field) {
+            const inner = []; await inlines(content, ctx, inner);
+            out.push({ type: 'field', attrs: { ...info.field, value: inner.map((x) => x.text || '').join(''), ox: serialize(c) }, marks: firstMarks(inner) });
+            break;
+          }
+          if (['checkbox', 'dropdown', 'combo', 'date'].includes(info.kind)) {
+            const inner = []; await inlines(content, ctx, inner);
+            const value = inner.map((x) => x.text || '').join('');
+            out.push({ type: 'contentControl', attrs: { kind: info.kind, value, checked: !!info.checked, items: info.items || null, format: info.format || null, fullDate: info.fullDate || null, tag: info.tag || null, alias: info.alias || null, placeholder: !!info.placeholder, pr: prXml, end: endXml }, marks: firstMarks(inner) });
+            break;
+          }
+          // plain/rich text controls: the text stays normal, editable text with an `sdt` mark – written back as the same control
+          const sid = uid('s');
+          const before = out.length;
+          await inlines(content, { ...ctx, marks: [...ctx.marks, { type: 'sdt', attrs: { id: sid, kind: info.kind, alias: info.alias || null, tag: info.tag || null, pr: prXml, end: endXml } }] }, out);
+          if (out.length === before || !out.slice(before).some((x) => x.type === 'text')) {
+            if (!out.slice(before).length) out.push({ type: 'contentControl', attrs: { kind: 'text', value: '', checked: false, items: null, format: null, fullDate: null, tag: info.tag || null, alias: info.alias || null, placeholder: true, pr: prXml, end: endXml } });
+            else fid.add('contentControls');
+          }
           break;
         }
         case 'w:fldSimple': {
           const instr = (c.a['w:instr'] || '').trim();
           const hm = /^HYPERLINK\s+"([^"]+)"/i.exec(instr);
           if (hm) { await inlines(c, { ...ctx, marks: [...ctx.marks, { type: 'link', attrs: { href: hm[1] } }] }, out); break; }
-          const resultText = paraPlain(c);
+          const inner = []; await inlines(c, ctx, inner);
+          const resultText = inner.map((x) => x.text || '').join('') || paraPlain(c);
+          const fk = fieldKind(instr);
+          if (fk) { out.push({ type: 'field', attrs: { kind: fk, instr, value: resultText, ox: serialize(c) }, marks: firstMarks(inner) }); break; }
           out.push({ type: 'preserved', attrs: { format: 'docx', kind: 'field', label: instr.split(/\s+/)[0] || 'Field', text: resultText, src: null, xml: serialize(c) } });
           break;
         }
-        case 'm:oMathPara': case 'm:oMath': { const latex = ommlToLatex(c).trim(); out.push({ type: 'equation', attrs: { latex, omml: serialize(c), ommlLatex: latex } }); break; }
+        case 'm:oMathPara': case 'm:oMath': { const latex = ommlToLatex(c).replace(/\s+/g, ' ').trim(); out.push({ type: 'equation', attrs: { latex, display: c.n === 'm:oMathPara', omml: serialize(c), ommlLatex: latex } }); break; }
         case 'w:bookmarkStart': case 'w:bookmarkEnd': case 'w:proofErr': case 'w:permStart': case 'w:permEnd': case 'w:pPr': break;
         case 'mc:AlternateContent': out.push(await preservedOf({ n: 'w:r', a: {}, c: [c] }, c)); break;
         default: break;
@@ -324,6 +374,8 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
           if (/^TOC\b/i.test(instr)) { ctx.toc = true; out.push(...result); return; }
           if (ctx.fields.length) { out.push(...result); return; }
           const textOf = result.map((n) => n.text || '').join('');
+          const fk = fieldKind(instr);
+          if (fk && result.every((n) => n.type === 'text')) { out.push({ type: 'field', attrs: { kind: fk, instr, value: textOf, ox: f.xml.join('') }, marks: firstMarks(result) }); return; }
           out.push({ type: 'preserved', attrs: { format: 'docx', kind: 'field', label: instr.split(/\s+/)[0] || 'Field', text: textOf, src: null, xml: f.xml.join('') } });
           return;
         }
@@ -385,6 +437,8 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
         else if (kid(holder, 'wp:wrapTopAndBottom')) { wrap = null; align = align === 'right' ? 'right' : 'center'; }
         if (align !== 'left' && align !== 'right' && align !== 'center') align = 'left';
       }
+      // a diagram made here: the picture is its rendering, the alt text its source (round trip through Word/Google)
+      if (src && pr && /^hostwerk-diagram/.test(pr.a.title || '')) return { type: 'diagram', attrs: { kind: (pr.a.title.split(':')[1] || 'mermaid'), source: pr.a.descr || '', src, svg: null, width, height } };
       if (src) {
         return { type: 'image', attrs: { src, alt: (pr && pr.a.descr) || '', title: (pr && pr.a.title) || null, width, height, align, wrap, ox: { xml: serialize(r), width, src: src.length } } };
       }
@@ -454,9 +508,24 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
     if (pa.firstLine) attrs.firstLine = pa.firstLine;
     if (role === 'title' || role === 'subtitle' || role === 'listparagraph') attrs.pstyle = role;
     if (sid && !level && !['title', 'subtitle', 'listparagraph', 'normal', 'quote', 'code', 'toc'].includes(role)) attrs.styleId = sid;
-    const keep = pPr ? kids(pPr, '*').filter((x) => !PPR_MODELED.has(x.n)).map((x) => [x.n, serialize(x)]) : [];
+    const keep = [];
+    let section = null;
+    for (const x of pPr ? kids(pPr, '*') : []) {
+      if (PPR_MODELED.has(x.n)) continue;
+      if (x.n === 'w:sectPr') { section = x; continue; }
+      if (x.n === 'w:pPrChange') { const op = kid(x, 'w:pPr'); attrs.pchange = { id: x.a['w:id'] || uid('p'), author: x.a['w:author'] || '', date: x.a['w:date'] || null, old: op ? serialize(op) : '<w:pPr/>' }; continue; }
+      if (x.n === 'w:rPr') {
+        // the paragraph mark itself was inserted / deleted (Enter / joining paragraphs with track changes on)
+        const mi = W(x, 'ins') || W(x, 'moveTo'); const md = W(x, 'del') || W(x, 'moveFrom');
+        const rev = mi || md;
+        if (rev) attrs.pmark = { type: mi ? 'ins' : 'del', id: rev.a['w:id'] || uid('m'), author: rev.a['w:author'] || '', date: rev.a['w:date'] || null };
+        const rest = kids(x, '*').filter((y) => !['w:ins', 'w:del', 'w:moveTo', 'w:moveFrom'].includes(y.n));
+        if (rest.length) keep.push(['w:rPr', `<w:rPr>${rest.map(serialize).join('')}</w:rPr>`]);
+        continue;
+      }
+      keep.push([x.n, serialize(x)]);
+    }
     if (keep.length) attrs.ox = { ppr: keep };
-    if (keep.some(([n]) => n === 'w:sectPr')) fid.add('sections');
     // style-level run formatting of custom styles shows as direct formatting
     let styleRun = {};
     if (sid && !level && role !== 'title' && role !== 'subtitle') for (const s of styleChain(sid)) if (s.rPr && !s.def) styleRun = { ...styleRun, ...plainRun(s.rPr) };
@@ -491,7 +560,7 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
     if (pa.pageBreakBefore) blocks.push({ type: 'pageBreak' });
     for (const n of out) { if (n.type === '__pagebreak') { if (cur.length) emit(cur); blocks.push({ type: 'pageBreak' }); cur = []; } else cur.push(n); }
     if (cur.length || !blocks.length) emit(cur);
-    return { blocks, list: list ? { ...list, numId, level: ilvl } : null, role, toc: ctx.toc, fieldOpen: ctx.fields.length > 0, fields: ctx.fields };
+    return { blocks, list: list ? { ...list, numId, level: ilvl } : null, role, toc: ctx.toc, fieldOpen: ctx.fields.length > 0, fields: ctx.fields, section };
   }
   function plainPara(pPr) {
     const o = {};
@@ -524,6 +593,8 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
       const trPr = W(tr, 'trPr');
       const header = !!(trPr && W(trPr, 'tblHeader'));
       const row = { type: 'tableRow', content: [] };
+      const rIns = trPr && W(trPr, 'ins'); const rDel = trPr && W(trPr, 'del');
+      if (rIns || rDel) { const rv = rIns || rDel; row.attrs = { change: { type: rIns ? 'ins' : 'del', id: rv.a['w:id'] || uid('r'), author: rv.a['w:author'] || '', date: rv.a['w:date'] || null } }; }
       let col = 0;
       const cellsOf = (el) => kids(el, '*').flatMap((x) => (x.n === 'w:tc' ? [x] : x.n === 'w:sdt' ? kids(W(x, 'sdtContent'), 'w:tc') : x.n === 'w:customXml' ? kids(x, 'w:tc') : []));
       for (const tc of cellsOf(tr)) {
@@ -574,6 +645,8 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
           continue;
         }
         for (const b of r.blocks) flat.push({ node: b, list: r.list && b.type !== 'pageBreak' ? r.list : null, quote: r.role === 'quote' });
+        // a paragraph with a w:sectPr ends a section – the section break (own page setup, headers) follows it
+        if (r.section) flat.push({ node: { type: 'sectionBreak', attrs: await sectionAttrs(r.section) } });
       } else if (el.n === 'w:tbl') for (const t of await tableNode(el)) flat.push({ node: t });
       else if (el.n === 'w:sdt') {
         const pr = W(el, 'sdtPr');
@@ -590,7 +663,12 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
             if (role === 'toc') { const m = /(\d)\s*$/.exec(styles[st].name); entries.push({ level: m ? Number(m[1]) : 1, text: t }); } else if (!entries.length) title = t;
           }
           flat.push({ node: { type: 'toc', attrs: { title, entries } } });
-        } else { fid.add('contentControls'); for (const b of await blocksOf(content)) flat.push({ node: b }); }
+        } else {
+          // block content control (rich text around paragraphs/tables): kept as a frame around editable blocks
+          const info = sdtInfo(pr);
+          const inner = await blocksOf(content);
+          flat.push({ node: { type: 'controlBlock', attrs: { kind: info.kind, alias: info.alias || null, tag: info.tag || null, pr: pr ? serialize(pr) : '', end: W(el, 'sdtEndPr') ? serialize(W(el, 'sdtEndPr')) : '' }, content: inner.length ? inner : [{ type: 'paragraph' }] } });
+        }
       } else if (el.n === 'w:customXml') { for (const b of await blocksOf(el)) flat.push({ node: b }); }
       else if (el.n === 'mc:AlternateContent') { const pv = await preservedOf({ n: 'w:p', a: {}, c: [el] }, el); flat.push({ node: { type: 'paragraph', content: [pv] } }); }
       else if (el.n === 'w:sectPr' || el.n === 'w:bookmarkStart' || el.n === 'w:bookmarkEnd' || el.n === 'w:proofErr') { /* handled elsewhere / no content */ }
@@ -601,46 +679,75 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
     return groupBlocks(flat);
   }
 
+  /** one header/footer part → { text, align, doc } (rich content with fields, pictures, tables) */
+  const hfCache = {};
+  async function readHf(rid) {
+    const rr = docRels[rid];
+    if (!rr) return null;
+    if (hfCache[rr.target]) return hfCache[rr.target];
+    const hx = await readText(zip, rr.target);
+    if (!hx) return null;
+    const hr = parseXml(hx);
+    const ps = all(hr, 'w:p');
+    const t = ps.map((p) => paraPlain(p, true)).filter((x) => x.trim()).join(' ').replace(/\s+/g, ' ').trim();
+    const firstFilled = ps.find((p) => paraPlain(p, true).trim());
+    const jc = firstFilled && val(W(W(firstFilled, 'pPr') || { c: [] }, 'jc'));
+    const tabbed = firstFilled && /\t/.test(paraPlain(firstFilled, true).trim());
+    // the part's own relationships (pictures, links) while reading its content
+    const saved = rels; const savedComments = openComments;
+    rels = relsOf(await readText(zip, rr.target.replace(/([^/]+)$/, '_rels/$1.rels')), rr.target);
+    openComments = new Set();
+    let blocks = [];
+    try { blocks = await blocksOf(hr); } finally { rels = saved; openComments = savedComments; }
+    const doc = fixDoc({ type: 'doc', content: blocks });
+    const res = { text: t, align: jc === 'center' || tabbed ? 'center' : jc === 'right' || jc === 'end' ? 'right' : 'left', doc, part: rr.target };
+    hfCache[rr.target] = res;
+    return res;
+  }
+  /** a w:sectPr → page setup, break type, header/footer of that section */
+  async function sectionAttrs(sect) {
+    const page = { ...model.page, margins: { ...model.page.margins } };
+    const pg = W(sect, 'pgSz');
+    if (pg) {
+      const w = twipToMm(pg.a['w:w']); const h = twipToMm(pg.a['w:h']);
+      const land = pg.a['w:orient'] === 'landscape' || w > h;
+      page.orientation = land ? 'landscape' : 'portrait';
+      page.width = Math.min(w, h); page.height = Math.max(w, h);
+      page.size = sizeName(w, h);
+    }
+    const mar = W(sect, 'pgMar');
+    if (mar) page.margins = { top: twipToMm(Math.abs(Number(mar.a['w:top'] || 1440))), right: twipToMm(mar.a['w:right'] || 1440), bottom: twipToMm(Math.abs(Number(mar.a['w:bottom'] || 1440))), left: twipToMm(mar.a['w:left'] || 1440) };
+    const cols = W(sect, 'cols');
+    page.columns = cols && Number(cols.a['w:num']) > 1 ? Math.min(3, Number(cols.a['w:num'])) : 1;
+    const hf = {};
+    for (const [tagName, key] of [['w:headerReference', 'header'], ['w:footerReference', 'footer']]) {
+      for (const ref of kids(sect, tagName)) {
+        const type = ref.a['w:type'] || 'default';
+        const h = await readHf(ref.a['r:id']);
+        if (h) hf[`${key}${type === 'default' ? '' : type === 'first' ? 'First' : 'Even'}`] = h;
+      }
+    }
+    return { type: val(W(sect, 'type')) || 'nextPage', page, titlePage: !!(W(sect, 'titlePg') && onOff(W(sect, 'titlePg'))), hf, sectPr: serialize(sect) };
+  }
+
   const content = await blocksOf(body);
   model.doc = fixDoc({ type: 'doc', content });
 
   // final section: page setup, header/footer
   const sect = W(body, 'sectPr');
   if (sect) {
-    const pg = W(sect, 'pgSz');
-    if (pg) {
-      const w = twipToMm(pg.a['w:w']); const h = twipToMm(pg.a['w:h']);
-      const land = pg.a['w:orient'] === 'landscape' || w > h;
-      model.page.orientation = land ? 'landscape' : 'portrait';
-      model.page.width = Math.min(w, h); model.page.height = Math.max(w, h);
-      model.page.size = sizeName(w, h);
-    }
-    const mar = W(sect, 'pgMar');
-    if (mar) model.page.margins = { top: twipToMm(Math.abs(Number(mar.a['w:top'] || 1440))), right: twipToMm(mar.a['w:right'] || 1440), bottom: twipToMm(Math.abs(Number(mar.a['w:bottom'] || 1440))), left: twipToMm(mar.a['w:left'] || 1440) };
-    const cols = W(sect, 'cols');
-    if (cols && Number(cols.a['w:num']) > 1) model.page.columns = Math.min(3, Number(cols.a['w:num']));
-    if (W(sect, 'titlePg') && onOff(W(sect, 'titlePg'))) model.titlePage = true;
-    for (const [tagName, key] of [['w:headerReference', 'header'], ['w:footerReference', 'footer']]) {
-      const ref = kids(sect, tagName).find((x) => (x.a['w:type'] || 'default') === 'default');
-      const rr = ref && rels[ref.a['r:id']];
-      const hx = rr ? await readText(zip, rr.target) : null;
-      if (hx) {
-        const hr = parseXml(hx);
-        const ps = all(hr, 'w:p');
-        const t = ps.map((p) => paraPlain(p, true)).filter((x) => x.trim()).join(' ').replace(/\s+/g, ' ').trim();
-        const firstFilled = ps.find((p) => paraPlain(p, true).trim());
-        const jc = firstFilled && val(W(W(firstFilled, 'pPr') || { c: [] }, 'jc'));
-        const tabbed = firstFilled && /\t/.test(paraPlain(firstFilled, true).trim());
-        model[key] = { text: t, align: jc === 'center' || tabbed ? 'center' : jc === 'right' || jc === 'end' ? 'right' : 'left' };
-        if (all(hr, 'w:drawing').length || all(hr, 'w:tbl').length) fid.add('headerLayout');
-      }
-    }
+    const s = await sectionAttrs(sect);
+    model.page = s.page;
+    if (s.titlePage) model.titlePage = true;
+    for (const k of ['header', 'footer', 'headerFirst', 'footerFirst', 'headerEven', 'footerEven']) if (s.hf[k]) model[k] = s.hf[k];
   }
+  // sections before inherit their headers/footers from the one before (Word's rule) – resolved when shown
 
   // settings, core properties
   const setRel = relOfType('settings');
   const setXml = setRel ? await readText(zip, setRel.target) : null;
   if (setXml && /<w:trackRevisions(?:\s*\/>|\s+w:val="(?:1|true|on)")/.test(setXml)) model.trackChanges = true;
+  if (setXml && /<w:evenAndOddHeaders(?:\s*\/>|\s+w:val="(?:1|true|on)")/.test(setXml)) model.evenOdd = true;
   const coreRel = Object.values(rootRels).find((r) => r.type === 'core-properties');
   const core = coreRel ? await readText(zip, coreRel.target) : null;
   if (core) {
@@ -658,6 +765,7 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
   model.keep.docx = {
     zip: bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes), docPath, rootTag: rootTag ? rootTag[0] : null,
     sectPr: sect ? serialize(sect) : null, header: { ...model.header }, footer: { ...model.footer }, ext,
+    hf: Object.fromEntries(['header', 'footer', 'headerFirst', 'footerFirst', 'headerEven', 'footerEven'].map((k) => [k, model[k] ? hfKey(model[k]) : ''])),
   };
   return model;
 }
@@ -752,12 +860,26 @@ export function ommlToLatex(el) {
     case 'sSup': return `${inner(ch('e'))}^${g(ch('sup'))}`;
     case 'sSub': return `${inner(ch('e'))}_${g(ch('sub'))}`;
     case 'sSubSup': return `${inner(ch('e'))}_${g(ch('sub'))}^${g(ch('sup'))}`;
-    case 'rad': return `\\sqrt{${inner(ch('e'))}}`;
-    case 'd': { const pr = ch('dPr'); const b = pr && kid(pr, 'm:begChr'); const e = pr && kid(pr, 'm:endChr'); return `${b ? b.a['m:val'] : '('}${kids(el, 'm:e').map(inner).join(',')}${e ? e.a['m:val'] : ')'}`; }
-    case 'nary': { const pr = ch('naryPr'); const c = pr && kid(pr, 'm:chr'); const sym = c ? c.a['m:val'] : '∫'; return `${sym}${ch('sub') && inner(ch('sub')) ? `_${g(ch('sub'))}` : ''}${ch('sup') && inner(ch('sup')) ? `^${g(ch('sup'))}` : ''} ${inner(ch('e'))}`; }
+    case 'd': {
+      const pr = ch('dPr'); const b = pr && kid(pr, 'm:begChr'); const e = pr && kid(pr, 'm:endChr');
+      const fence = (v, def) => { const s = v == null ? def : v; return s === '' ? '.' : s === '{' ? '\\{' : s === '}' ? '\\}' : s === '|' ? '|' : s; };
+      return `\\left${fence(b && b.a['m:val'], '(')} ${kids(el, 'm:e').map(inner).join(',')} \\right${fence(e && e.a['m:val'], ')')}`;
+    }
+    case 'nary': {
+      const pr = ch('naryPr'); const c = pr && kid(pr, 'm:chr'); const sym = c ? c.a['m:val'] : '∫';
+      const cmd = { '∑': '\\sum', '∏': '\\prod', '∫': '\\int', '∬': '\\iint', '∭': '\\iiint', '∮': '\\oint', '⋃': '\\bigcup', '⋂': '\\bigcap' }[sym] || sym;
+      return `${cmd}${ch('sub') && inner(ch('sub')) ? `_${g(ch('sub'))}` : ''}${ch('sup') && inner(ch('sup')) ? `^${g(ch('sup'))}` : ''} ${inner(ch('e'))}`;
+    }
     case 'func': return `${inner(ch('fName'))} ${inner(ch('e'))}`;
-    case 'eqArr': return kids(el, 'm:e').map(inner).join(' \\\\ ');
-    case 'rPr': case 'ctrlPr': case 'fPr': case 'radPr': case 'sSupPr': case 'sSubPr': case 'dPr': case 'naryPr': case 'oMathParaPr': case 'deg': return '';
+    case 'eqArr': return `\\begin{aligned}${kids(el, 'm:e').map(inner).join(' \\\\ ')}\\end{aligned}`;
+    case 'm': return `\\begin{matrix}${kids(el, 'm:mr').map((r) => kids(r, 'm:e').map(inner).join(' & ')).join(' \\\\ ')}\\end{matrix}`;
+    case 'acc': { const pr = ch('accPr'); const c = pr && kid(pr, 'm:chr'); const a = c ? c.a['m:val'] : '̂'; const cmd = { '̂': 'hat', '⃗': 'vec', '̃': 'tilde', '̇': 'dot', '̈': 'ddot', '̄': 'bar', '̌': 'check' }[a] || 'hat'; return `\\${cmd}{${inner(ch('e'))}}`; }
+    case 'bar': return `\\overline{${inner(ch('e'))}}`;
+    case 'limLow': return `${inner(ch('e'))}_${g(ch('lim'))}`;
+    case 'limUpp': return `${inner(ch('e'))}^${g(ch('lim'))}`;
+    case 'borderBox': return `\\boxed{${inner(ch('e'))}}`;
+    case 'rad': { const d = ch('deg'); const dv = d ? inner(d) : ''; return dv ? `\\sqrt[${dv}]{${inner(ch('e'))}}` : `\\sqrt{${inner(ch('e'))}}`; }
+    case 'rPr': case 'ctrlPr': case 'fPr': case 'radPr': case 'sSupPr': case 'sSubPr': case 'dPr': case 'naryPr': case 'oMathParaPr': case 'deg': case 'accPr': case 'barPr': case 'mPr': case 'limLowPr': case 'limUppPr': case 'eqArrPr': case 'funcPr': case 'sSubSupPr': case 'borderBoxPr': return '';
     default: return inner(el);
   }
 }
@@ -771,3 +893,4 @@ export async function docxToText(bytes) {
   return all(body, 'w:p').map((p) => paraPlain(p)).join('\n');
 }
 void imageSize;
+

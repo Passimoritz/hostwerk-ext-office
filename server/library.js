@@ -68,7 +68,7 @@ class Library {
     return {
       path: l.rel, ...(l.root ? { root: l.root } : {}), name, dir, ext, kind: dir ? null : f ? f.kind : null, family: dir ? null : f ? f.family : null,
       size: dir ? 0 : s.size, mtime: Math.floor(s.mtimeMs), ctime: Math.floor(s.birthtimeMs || s.ctimeMs),
-      ...this.d.meta.fields(l.key), shared: this.d.sharedKeys().has(l.key), thumb: !!(idx && idx.thumb && idx.mtime === Math.floor(s.mtimeMs)),
+      ...this.d.meta.fields(l.key), shared: this.d.sharedKeys().has(l.key), thumb: !dir && (!!(idx && idx.thumb && idx.mtime === Math.floor(s.mtimeMs)) || !!(this.d.thumbHas && this.d.thumbHas(l.key, Math.floor(s.mtimeMs)))),
     };
   }
   entryOf(q) { const l = this.loc(q); return this.entry(l); }
@@ -212,6 +212,8 @@ class Library {
   }
   rekey(a, b) { this.d.meta.rekey(a, b); this.d.versions.rekey(a, b); if (this.d.onRekey) this.d.onRekey(a, b); }
   changed(rel) { if (this.d.onChange) this.d.onChange(rel); }
+  /** after every successful write of a file (save, form append, restore): rules, publishing, co-editing rooms … (1.1) */
+  wrote(l, st) { if (this.d.onWrite) { try { this.d.onWrite({ key: l.key, root: l.root, rel: l.rel, full: l.full, mtime: Math.floor(st.mtimeMs), size: st.size }); } catch { /* listeners never break a save */ } } }
 
   /* ---------- raw ---------- */
   read(q) { const l = this.file(q); return { ...l, mtime: Math.floor(l.st.mtimeMs) }; }
@@ -238,6 +240,7 @@ class Library {
     if (label) { const v = this.d.versions.add(l.key, data, { label, auto: false }); if (v) version = v.id; }
     const now = fs.statSync(l.full);
     if (!l.root) this.changed(l.rel);
+    this.wrote(l, now);
     return { ok: true, mtime: Math.floor(now.mtimeMs), size: now.size, version };
   }
   /** New file with a free name in dir → Entry */
@@ -262,6 +265,7 @@ class Library {
     this.d.versions.add(l.key, fs.readFileSync(l.full), { label: `Before restoring ${new Date(v ? v.time : Date.now()).toISOString().slice(0, 16).replace('T', ' ')}`, auto: false });
     writeFileAtomic(l.full, data);
     if (!l.root) this.changed(l.rel);
+    this.wrote(l, fs.statSync(l.full));
     return this.entry(l);
   }
 }

@@ -6,12 +6,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loading, Empty, Callout, Btn, toast, confirmDialog, promptDialog } from '@hostwerk/ui';
 import { t } from '@hostwerk/i18n';
 import { Keep, Raw } from '../_shared/keep.jsx';
-import { Check, X, SquareFunction, Plus, ChevronLeft, ChevronRight, AlertTriangle, ExternalLink, ChevronDown, Info, Minus, CloudOff } from 'lucide-react';
+import { Check, X, SquareFunction, Plus, ChevronLeft, ChevronRight, AlertTriangle, ExternalLink, ChevronDown, Info, Minus, CloudOff, Copy as CopyIcon } from 'lucide-react';
 import { Book } from './model.js';
 import { Grid } from './Grid.jsx';
 import { Ribbon } from './Ribbon.jsx';
 import { CellInput } from './CellInput.jsx';
 import { MenuHost, showMenu, showPopover, closeMenu, pickColor, MenuList } from './menus.jsx';
+import { RefreshCw as RefreshIcon, Sparkles as SparkIcon } from 'lucide-react';
 import { makeLocale } from './format/locale.js';
 import { FORMAT_PRESETS, fmtKind, changeDecimals, makeCurrencyFormat, ACCOUNTING, formatValue, isDateFormat } from './format/numfmt.js';
 import { todaySerial, nowSerial } from './format/dates.js';
@@ -31,6 +32,8 @@ import { toTSV, toHTML, parseTSV, parseHTML } from './clipboard.js';
 import { FormatCellsDialog } from './dialogs/FormatCells.jsx';
 import { SortDialog, FilterMenu, TextToColumnsDialog, RemoveDuplicatesDialog, ValidationDialog, CsvDialog } from './dialogs/Data.jsx';
 import { RuleDialog, RulesManager, CF_STYLES } from './dialogs/CondFormat.jsx';
+import { usePlus } from './plus/usePlus.jsx';
+import { VIEW_TYPES } from './plus/Views.jsx';
 import { FindPanel, GoToDialog, NamesDialog, InsertFunctionDialog, LinkDialog, NoteDialog, ChartDialog, PrintDialog, PasteSpecialDialog, CellsDialog, MacrosSheet, StatsDialog, CommandSearch, UnhideSheetDialog } from './dialogs/Misc.jsx';
 
 const K = (r, c) => r * MAXC + c;
@@ -86,15 +89,17 @@ export function Editor({ file, bytes, readOnly = false, settings = {}, host = {}
   const stRef = useRef({});
   const clipId = useRef(`c${Math.random().toString(36).slice(2)}`);
   const csvOpts = useRef(null);
+  const plusRef = useRef(null);
 
   /* ---------- load ---------- */
   const load = useCallback(async (opts) => {
     try {
       loading.current = true;
       let b;
+      try { performance.mark('of-sheet-load'); } catch { /* old browser */ }
       if (!bytes || !bytes.length) b = Book.blank({ loc, settings: S, sheetName: lang === 'de' ? 'Tabelle1' : 'Sheet1' });
       else if (CSV.includes(workExt) || (workExt === 'txt')) b = csvToBook(bytes, { loc, settings: S, ext: workExt, ...(opts || {}) });
-      else b = await openBytes(bytes, workExt, { loc, settings: S });
+      else b = await openBytes(bytes, workExt, { loc, settings: S, convert: host.hasConverter && host.convert && !(settings.converters && settings.converters.autoEngine === 'off') ? (x, f, to) => host.convert(x, f, to) : null });
       if (!b.sheets.length) b = Book.blank({ loc, settings: S });
       if (S.autoCalc === false) b.autoCalc = false;
       if (b.fileManualCalc) b.autoCalc = false;
@@ -106,6 +111,8 @@ export function Editor({ file, bytes, readOnly = false, settings = {}, host = {}
       setVer((v) => v + 1);
       setFid(b.fidelity || []);
       setErr(null);
+      // the shell measures open → usable per kind
+      requestAnimationFrame(() => { try { performance.mark('of-sheet-ready'); } catch { /* old browser */ } if (host.perf) host.perf('interactive'); });
     } catch (e) { setErr(e); }
     finally { setTimeout(() => { loading.current = false; }, 0); }
   }, [bytes, workExt, loc]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -114,7 +121,7 @@ export function Editor({ file, bytes, readOnly = false, settings = {}, host = {}
     if (!book) return undefined;
     return book.on((info) => {
       setVer((v) => v + 1);
-      if (!loading.current && !readOnly && !(info && info.viewOnly) && host.dirty) host.dirty(true);
+      if (!loading.current && !readOnly && !(info && info.viewOnly) && host.dirty && !(plusRef.current && plusRef.current.follower())) host.dirty(true);
     });
   }, [book]); // eslint-disable-line react-hooks/exhaustive-deps
   // fidelity: let the shell show it (fallback: own callout)
@@ -208,8 +215,8 @@ export function Editor({ file, bytes, readOnly = false, settings = {}, host = {}
     const r = at ? at.r : sel.r; const c = at ? at.c : sel.c;
     const sp = sheet.spill.get(K(r, c));
     if (sp && text === undefined) { go(Math.floor(sp.anchor / MAXC), sp.anchor % MAXC); }
-    const full = text === undefined ? book.editText(sheet, r, c, toDisp) : text;
-    setEdit({ r, c, sheetId: sheet.id, text: full, caret: full.length, mode, where, orig: book.editText(sheet, r, c, toDisp), point: null, pc: null });
+    const full = text === undefined ? plusRef.current.editText(sheet, r, c, toDisp) : text;
+    setEdit({ r, c, sheetId: sheet.id, text: full, caret: full.length, mode, where, orig: plusRef.current.editText(sheet, r, c, toDisp), point: null, pc: null });
     setAc(null);
     if (gridApi.current) gridApi.current.scrollTo(r, c);
     if (where === 'bar') setTimeout(() => barInput.current && barInput.current.focus(), 0);
@@ -265,9 +272,12 @@ export function Editor({ file, bytes, readOnly = false, settings = {}, host = {}
     if (!sh) { setEdit(null); return true; }
     const text = e.text;
     if (text === e.orig && !ctrlEnter) { setEdit(null); setAc(null); if (sh !== sheet) switchSheet(book.sheets.indexOf(sh)); afterCommitMove(move); return true; }
+    let typed = text;
+    try { typed = plusRef.current.inputText(text, e.r, e.c); } catch { toast.error(t('This reference is outside the sheet.')); return false; }
     book.begin('Typing');
     try {
-      book.input(sh, e.r, e.c, text);
+      book.input(sh, e.r, e.c, typed);
+      plusRef.current.afterInput(sh, e.r, e.c, typed);
       if (!text.startsWith('=') && text.includes('\n')) { const cell = sh.cells.get(K(e.r, e.c)); if (cell && !(cell.s && cell.s.wrap)) book.setCell(sh, e.r, e.c, { ...cell, s: book.styles.merge(cell.s, { wrap: true }) }); }
       if (ctrlEnter) {
         const src = sh.cells.get(K(e.r, e.c));
@@ -487,13 +497,14 @@ export function Editor({ file, bytes, readOnly = false, settings = {}, host = {}
   /* ---------- the command dispatcher ---------- */
   const run = async (cmd, arg) => {
     if (!book) return;
-    const MUT = !['copy', 'find', 'replace', 'goto', 'gotoSpecial', 'selectSpecial', 'print', 'printDo', 'zoom', 'zoomSet', 'zoomSel', 'gridlinesView', 'showFormulas', 'formulaBar', 'compact', 'macros', 'stats', 'names', 'commandSearch', 'filterMenu', 'calcNow', 'freezeView', 'showNotes', 'csvOptions', 'filterToggleView'].includes(cmd);
+    const MUT = !['copy', 'find', 'replace', 'goto', 'gotoSpecial', 'selectSpecial', 'print', 'printDo', 'zoom', 'zoomSet', 'zoomSel', 'gridlinesView', 'showFormulas', 'formulaBar', 'compact', 'macros', 'stats', 'names', 'commandSearch', 'filterMenu', 'calcNow', 'freezeView', 'showNotes', 'csvOptions', 'filterToggleView', 'compare', 'ai', 'collab', 'calcOptions', 'r1c1', 'pivotEdit', 'formOpen', 'rules', 'liveRefresh', 'dbRefresh', 'tableStylesMenu', 'view', 'pivotRefreshAll', 'save'].includes(cmd);
     if (MUT && readOnly && !['filterToggle', 'filterClear', 'filterReapply', 'gridlines', 'headings', 'freeze'].includes(cmd)) { guard(); return; }
     if (edit && MUT && !['insertFn', 'autosum'].includes(cmd)) { if (!(await commit('stay'))) return; }
     const g = activeRange();
     switch (cmd) {
       case 'undo': { if (edit) { cancelEdit(); return; } const tx = book.undo(); if (tx && tx.meta && tx.meta.sel) setSel(tx.meta.sel, { scroll: true }); break; }
       case 'redo': book.redo(); break;
+      case 'save': if (host.save) host.save(); break;
       case 'copy': doCopy(false); break;
       case 'cut': doCopy(true); break;
       case 'paste': await pasteFromSystem(); break;
@@ -635,7 +646,7 @@ export function Editor({ file, bytes, readOnly = false, settings = {}, host = {}
       case 'macros': setDialog({ kind: 'macros' }); break;
       case 'stats': setDialog({ kind: 'stats' }); break;
       case 'commandSearch': setDialog({ kind: 'cmdSearch' }); break;
-      default: break;
+      default: if (plusRef.current && plusRef.current.run(cmd, arg)) return; break;
     }
     if (!edit) focusGrid();
   };
@@ -772,6 +783,10 @@ export function Editor({ file, bytes, readOnly = false, settings = {}, host = {}
       if (k === 'Delete' || k === 'Backspace') { e.preventDefault(); if (guard()) deleteChart(chartSel); return; }
       if (k === 'Escape') { setChartSel(null); return; }
     }
+    if (plus.objSel) {
+      if (k === 'Delete' || k === 'Backspace') { e.preventDefault(); plus.delObj(plus.objSel.kind, plus.objSel.id); return; }
+      if (k === 'Escape') { plus.setObjSel(null); return; }
+    }
     const arrows = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
     if (arrows[k]) {
       e.preventDefault();
@@ -801,6 +816,7 @@ export function Editor({ file, bytes, readOnly = false, settings = {}, host = {}
       case k === 'F2' && e.shiftKey: e.preventDefault(); run('note'); return;
       case k === 'F2': e.preventDefault(); startEdit(undefined, 'edit'); return;
       case k === 'F9': e.preventDefault(); run('calcNow'); return;
+      case k === 'F5' && e.altKey: e.preventDefault(); run(ctrl ? 'pivotRefreshAll' : 'pivotRefresh'); return;
       case k === 'Delete': e.preventDefault(); if (guard()) for (const x of sel.ranges) book.clear(sheet, [clipRange(x)], 'contents'); return;
       case k === 'Backspace': e.preventDefault(); if (guard()) startEdit('', 'enter'); return;
       case k === 'Escape': if (copy) setCopy(null); if (painter) setPainter(null); return;
@@ -819,6 +835,7 @@ export function Editor({ file, bytes, readOnly = false, settings = {}, host = {}
       if (lower === 'a') { e.preventDefault(); const rg = region(sel.r, sel.c); const cur = activeRange(); const isRegion = cur.r1 === rg.r1 && cur.c1 === rg.c1 && cur.r2 === rg.r2 && cur.c2 === rg.c2; setSel({ ...sel, ranges: [isRegion || (rg.r1 === rg.r2 && rg.c1 === rg.c2) ? { r1: 0, c1: 0, r2: MAXR - 1, c2: MAXC - 1 } : rg] }, { scroll: false }); return; }
       if ((k === '1' && !e.shiftKey) || (lower === 'f' && e.shiftKey)) { e.preventDefault(); e.stopPropagation(); run('formatCells'); return; }
       if (lower === 'l' && e.shiftKey) { e.preventDefault(); run('filterToggle'); return; }
+      if (lower === 't' && !e.shiftKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); run('table'); return; }
       if (lower === 'v' && e.shiftKey) { pasteMode.current = { what: 'values' }; return; } // the paste event follows
       if (k === '%' || (e.shiftKey && k === '5')) { e.preventDefault(); run('numPreset', 'percent'); return; }
       if (k === '$') { e.preventDefault(); run('numPreset', 'currency'); return; }
@@ -843,7 +860,7 @@ export function Editor({ file, bytes, readOnly = false, settings = {}, host = {}
       if (readOnly) { e.preventDefault(); guard(); return; }
       const sp = sheet.spill.get(K(sel.r, sel.c));
       void sp;
-      setEdit({ r: sel.r, c: sel.c, sheetId: sheet.id, text: '', caret: 0, mode: 'enter', where: 'cell', orig: book.editText(sheet, sel.r, sel.c, toDisp), point: null, pc: null });
+      setEdit({ r: sel.r, c: sel.c, sheetId: sheet.id, text: '', caret: 0, mode: 'enter', where: 'cell', orig: plusRef.current.editText(sheet, sel.r, sel.c, toDisp), point: null, pc: null });
       if (gridApi.current) gridApi.current.scrollTo(sel.r, sel.c);
     }
   };
@@ -874,6 +891,8 @@ export function Editor({ file, bytes, readOnly = false, settings = {}, host = {}
     pasteMode.current = null;
     const html = e.clipboardData.getData('text/html');
     const text = e.clipboardData.getData('text/plain');
+    const img = [...(e.clipboardData.files || [])].find((f) => /^image\//.test(f.type));
+    if (img && !text) { plus.addImageFile(img); return; }
     pasteData(html || null, text || null, mode);
   };
   const onCopyEv = (e) => { if (edit) return; doCopy(false, e); };
@@ -896,6 +915,9 @@ export function Editor({ file, bytes, readOnly = false, settings = {}, host = {}
       { label: curCell && curCell.note ? t('Edit note') : t('New note'), disabled: readOnly, onClick: () => run('note') }, ...(curCell && curCell.note ? [{ label: t('Delete note'), disabled: readOnly, onClick: () => run('clear', 'notes') }] : []),
       { label: curCell && curCell.link ? t('Edit link …') : t('Link …'), disabled: readOnly, onClick: () => run('link') },
     );
+    if (plus.curPivot) items.push('-', { label: t('Refresh'), icon: RefreshIcon, onClick: () => run('pivotRefresh') }, { label: t('PivotTable fields …'), onClick: () => run('pivotEdit') });
+    if (plus.curTable) items.push('-', { label: t('Table'), items: [{ label: t('Total row'), checked: !!plus.curTable.totals, onClick: () => run('tableOpt', 'totals') }, { label: t('Banded rows'), checked: plus.curTable.stripes !== false, onClick: () => run('tableOpt', 'stripes') }, { label: t('Rename table …'), onClick: () => run('tableName') }, { label: t('Convert to range'), onClick: () => run('tableToRange') }] });
+    if (plus.aiReady && curCell && curCell.f) items.push({ label: t('Explain this formula'), icon: SparkIcon, onClick: () => run('ai', 'explain') });
     items.push('-', { label: t('Format cells …'), kbd: 'Ctrl+1', disabled: readOnly, onClick: () => run('formatCells') }, { label: t('Define name …'), disabled: readOnly, onClick: () => run('defineName') });
     showMenu(at, items);
   };
@@ -911,6 +933,10 @@ export function Editor({ file, bytes, readOnly = false, settings = {}, host = {}
     ]);
   };
 
+  /* ---------- Office 1.1 features (tables, pivots, objects, views, live data, forms, co-editing, AI …) ---------- */
+  const plus = usePlus({ book, sheet, sel: sel || cellSel(0, 0), setSel, host, readOnly, loc, guard, setDialog, settings, activeRange, clipRange: (x) => (book ? clipRange(x) : x), switchSheet, focusGrid, normAnchor, showMenu, pickColor: (at, cb) => pickColor(at, null, cb) });
+  plusRef.current = plus;
+
   /* ---------- render ---------- */
   if (err) return <div className="of-sheet-root"><Empty icon={CloudOff} title={t('This spreadsheet could not be opened')} text={String(err.message || err)} action={<Btn onClick={() => load()}>{t('Try again')}</Btn>} /></div>;
   if (!book || !sheet) return <div className="of-sheet-root"><Loading text={t('Opening spreadsheet …')} /></div>;
@@ -923,7 +949,7 @@ export function Editor({ file, bytes, readOnly = false, settings = {}, host = {}
     if (g.c1 === 0 && g.c2 >= MAXC - 1) return `${g.r1 + 1}:${g.r2 + 1}`;
     return `${addr(g.r1, g.c1)}:${addr(g.r2, g.c2)}`;
   })();
-  const barText = edit ? edit.text : (sheet.cells.get(K(sel.r, sel.c)) ? book.editText(sheet, sel.r, sel.c, toDisp) : (() => { const sp = sheet.spill.get(K(sel.r, sel.c)); if (!sp) return ''; const a = sp.anchor; const ac2 = sheet.cells.get(a); return ac2 && ac2.f ? `=${toDisp(ac2.f)}` : ''; })());
+  const barText = edit ? edit.text : (sheet.cells.get(K(sel.r, sel.c)) ? plusRef.current.editText(sheet, sel.r, sel.c, toDisp) : (() => { const sp = sheet.spill.get(K(sel.r, sel.c)); if (!sp) return ''; const a = sp.anchor; const ac2 = sheet.cells.get(a); return ac2 && ac2.f ? `=${toDisp(ac2.f)}` : ''; })());
   const spilledHere = !edit && !sheet.cells.has(K(sel.r, sel.c)) && sheet.spill.has(K(sel.r, sel.c));
   const nameGo = (v) => {
     const s = String(v).trim(); if (!s) return false;
@@ -984,10 +1010,12 @@ export function Editor({ file, bytes, readOnly = false, settings = {}, host = {}
   return (
     <div className={`of-sheet-root${compact ? ' is-compact' : ''}`}>
       <MenuHost />
-      {!compact && <Ribbon run={run} cur={curStyle} flags={flags} />}
+      {!compact && <Ribbon run={run} cur={curStyle} flags={{ ...flags, plus: plus.flags, chartSel: !!chartSel }} />}
       {!host.fidelity && fid.length > 0 && <div className="of-sheet-callout"><Callout kind="info" title={t('Some parts of this file can’t be edited here')}>{t('They are kept unchanged when you save: {list}.', { list: fid.map((x) => t(x)).join(' · ') })}</Callout></div>}
       {CSV.includes(workExt) && csvNote && book.csv && <div className="of-sheet-strip small"><Info size={14} /><span className="grow">{t('Text file · delimiter {d} · {enc}. Formatting, formulas’ results and further sheets are not stored in this format – save a copy as .xlsx to keep them.', { d: book.csv.delimiter === '\t' ? t('Tab') : book.csv.delimiter, enc: book.csv.encoding })}</span><Btn className="xs ghost" onClick={() => run('csvOptions')}>{t('Import options …')}</Btn><button type="button" className="btn ghost xs icon" aria-label={t('Hide')} title={t('Hide')} onClick={() => setCsvNote(false)}><X size={12} /></button></div>}
-      {formulaBar && (
+      {plus.bars()}
+      {plus.viewType && plus.viewBar}
+      {formulaBar && !plus.viewType && (
         <div className="of-sheet-fbar">
           <input className="input sm mono of-sheet-namebox" aria-label={t('Name box')} title={t('Name box – type a cell, range or name and press Enter')} key={nameBox} defaultValue={nameBox}
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); nameGo(e.currentTarget.value); } if (e.key === 'Escape') { e.currentTarget.value = nameBox; focusGrid(); } }} onFocus={(e) => e.target.select()} />
@@ -1004,13 +1032,14 @@ export function Editor({ file, bytes, readOnly = false, settings = {}, host = {}
             onKeyDown={onKey} />
         </div>
       )}
-      <div className="of-sheet-main">
-        <Grid ref={gridApi} book={book} sheet={sheet} version={ver} sel={sel} zoom={zoom} readOnly={readOnly} showFormulas={showFormulas} loc={loc} defFont={defFont}
+      {plus.viewBody ? <div className="of-sheet-main is-view">{plus.viewBody}</div> : <div className="of-sheet-main">
+        <Grid ref={gridApi} remote={plus.remote} r1c1={plus.r1c1} onOutline={(b) => run('outline', b)} objects={(objRect) => plus.overlay(objRect, zoom / 100)} onBlankClick={() => { if (plus.objSel) plus.setObjSel(null); }} book={book} sheet={sheet} version={ver} sel={sel} zoom={zoom} readOnly={readOnly} showFormulas={showFormulas} loc={loc} defFont={defFont}
           edit={edit && edit.sheetId === sheet.id ? edit : edit ? { other: true } : null} refs={refs} pointing={!!(edit && pointable(edit))} copy={copy && { sheetId: copy.sheetId, g: copy.g }}
           onSel={(s) => { const single = s.ranges.length === 1 && s.ranges[0].r1 === s.ranges[0].r2 && s.ranges[0].c1 === s.ranges[0].c2; if (edit && !pointable(edit)) { commit(null).then((ok) => { if (ok) setSel(s, { scroll: single }); }); return; } setSel(s, { scroll: single }); setChartSel(null); }}
           expandMerges={expandMerges}
           onPointRef={(gg, phase) => insertRef(gg, phase)}
           onEditStart={(r, c) => { if (readOnly) return; const cur = sheet.cells.get(K(r, c)); if (cur && (cur.link || cur.link_) && false) return; setSelState(cellSel(r, c)); setTimeout(() => startEdit(undefined, 'edit', 'cell', { r, c }), 0); }}
+          fillPreview={(src, dst) => { try { return book.fillPreview(sheet, src, dst, toDisp); } catch { return null; } }}
           onFill={(src, dst, ctrlCopy) => { if (!guard()) return; book.fill(sheet, src, dst, { copy: ctrlCopy }); setSel({ r: sel.r, c: sel.c, ranges: [dst], anchor: sel.anchor, end: { r: dst.r2, c: dst.c2 } }, { scroll: false }); }}
           onMove={(src, r, c, cp) => { if (!guard()) return; const res = book.moveRange(sheet, src, r, c, { copy: cp }); setSel({ r: res.r1, c: res.c1, ranges: [res], anchor: { r: res.r1, c: res.c1 }, end: { r: res.r2, c: res.c2 } }, { scroll: false }); }}
           onResize={(axis, idxs, px) => { if (!guard()) return; book.setSizes(sheet, axis, idxs, px); }}
@@ -1030,9 +1059,9 @@ export function Editor({ file, bytes, readOnly = false, settings = {}, host = {}
             return <>
               <CellInput inputRef={input} className={`of-sheet-celledit${visible ? ' is-on' : ''}`} value={visible ? edit.text : ''} marks={visible ? marks : null} ariaLabel={t('Cell {ref}', { ref: addr(sel.r, sel.c) })}
                 style={visible ? { left: er.x, top: er.y, minWidth: er.w, width: estW, minHeight: er.h, height: Math.max(er.h, lines * parseFloat(editorFont.fontSize) * 1.25 + 6), ...editorFont } : { left: Math.max(0, er.x), top: Math.max(0, er.y), width: 1, height: 1 }}
-                onChange={(v, caret) => { if (!edit) { if (readOnly) return; setEdit({ r: sel.r, c: sel.c, sheetId: sheet.id, text: v, caret, mode: 'enter', where: 'cell', orig: book.editText(sheet, sel.r, sel.c, toDisp), point: null, pc: null }); updateAc(v, caret); return; } setEdit({ ...edit, text: v, caret, point: edit.point && caret === edit.point.end ? edit.point : null }); updateAc(v, caret); }}
+                onChange={(v, caret) => { if (!edit) { if (readOnly) return; setEdit({ r: sel.r, c: sel.c, sheetId: sheet.id, text: v, caret, mode: 'enter', where: 'cell', orig: plusRef.current.editText(sheet, sel.r, sel.c, toDisp), point: null, pc: null }); updateAc(v, caret); return; } setEdit({ ...edit, text: v, caret, point: edit.point && caret === edit.point.end ? edit.point : null }); updateAc(v, caret); }}
                 onSelect={(s) => { if (edit && s !== edit.caret) setEdit((x) => x && { ...x, caret: s, point: x.point && x.point.end === s ? x.point : null }); }}
-                onCompositionStart={() => { if (!edit && !readOnly) setEdit({ r: sel.r, c: sel.c, sheetId: sheet.id, text: '', caret: 0, mode: 'enter', where: 'cell', orig: book.editText(sheet, sel.r, sel.c, toDisp), point: null, pc: null }); }}
+                onCompositionStart={() => { if (!edit && !readOnly) setEdit({ r: sel.r, c: sel.c, sheetId: sheet.id, text: '', caret: 0, mode: 'enter', where: 'cell', orig: plusRef.current.editText(sheet, sel.r, sel.c, toDisp), point: null, pc: null }); }}
                 onKeyDown={onKey} onPaste={onPaste} onCopy={onCopyEv} onCut={onCutEv} />
               {edit && ac && (edit.where === 'cell' ? visible : true) && <div className="of-sheet-ac" role="listbox" style={edit.where === 'bar' ? { left: 200, top: 2 } : { left: er.x, top: er.y + Math.max(er.h, 20) + 2 }}>
                 {ac.items.map((it, i) => <button key={it.name + it.kind} type="button" role="option" aria-selected={i === ac.i} className={i === ac.i ? 'is-on' : ''} onMouseDown={(e) => { e.preventDefault(); acceptAc(it); }}><b className="mono"><Keep>{it.name}</Keep></b><span className="small muted">{it.kind === 'name' ? t('Name') : FUNC_INFO.get(it.en) ? t(FUNC_INFO.get(it.en).desc) : ''}</span></button>)}
@@ -1048,7 +1077,7 @@ export function Editor({ file, bytes, readOnly = false, settings = {}, host = {}
             </>;
           }}
         </Grid>
-      </div>
+      </div>}
       <div className="of-sheet-bottom">
         <div className="of-sheet-tabs" role="tablist" aria-label={t('Sheets')}>
           <button type="button" className="btn ghost xs icon" aria-label={t('Previous sheet')} title={t('Previous sheet (Ctrl+PageUp)')} onClick={() => { let i = book.active - 1; while (i >= 0 && book.sheets[i].hidden) i--; if (i >= 0) switchSheet(i); }}><ChevronLeft size={14} /></button>
@@ -1071,12 +1100,12 @@ export function Editor({ file, bytes, readOnly = false, settings = {}, host = {}
           {sheet.filter && sheet.filterHidden.size > 0 && <span className="muted">{t('Filter mode')}</span>}
           <span className="grow" />
           {stats && <>
-            {stats.avg != null && <span>{t('Average')}: <b>{stats.avg}</b></span>}
-            <span>{t('Count')}: <b>{stats.cnt}</b></span>
-            {stats.sum != null && <span>{t('Sum')}: <b>{stats.sum}</b></span>}
-            {stats.min != null && <span className="of-sheet-hide-sm">{t('Min')}: <b>{stats.min}</b></span>}
-            {stats.max != null && <span className="of-sheet-hide-sm">{t('Max')}: <b>{stats.max}</b></span>}
+            {[['avg', 'Average', ''], ['cnt', 'Count', ''], ['sum', 'Sum', ''], ['min', 'Min', ' of-sheet-hide-sm'], ['max', 'Max', ' of-sheet-hide-sm']].filter(([k]) => stats[k] != null).map(([k, l, cls]) => (
+              <button key={k} type="button" className={`of-sheet-stat${cls}`} title={t('Click to copy {what}', { what: t(l) })} onClick={() => { const v = String(stats[k]); try { navigator.clipboard.writeText(v); toast.success(t('Copied: {v}', { v })); } catch { toast(v); } }}>{t(l)}: <b>{stats[k]}</b></button>))}
           </>}
+          <span className="of-sheet-viewbtns" role="group" aria-label={t('View')}>
+            {VIEW_TYPES.map(([id, l, I]) => <button key={id} type="button" className={`btn ghost xs icon${(plus.viewType || 'grid') === id ? ' is-active' : ''}`} aria-label={t(l)} title={t(l)} aria-pressed={(plus.viewType || 'grid') === id} onClick={() => run('view', id)}><I size={13} /></button>)}
+          </span>
           <span className="of-sheet-zoom">
             <button type="button" className="btn ghost xs icon" aria-label={t('Zoom out')} title={t('Zoom out')} onClick={() => setZoom(zoom - 10)}><Minus size={12} /></button>
             <input type="range" min={10} max={400} step={5} value={zoom} onChange={(e) => setZoom(+e.target.value)} aria-label={t('Zoom')} />
@@ -1130,8 +1159,9 @@ export function Editor({ file, bytes, readOnly = false, settings = {}, host = {}
       case 'macros': return <MacrosSheet onClose={close} load={async () => { const b = book.pkg ? await vbaProjectBytes(book.pkg.bytes) : null; return b ? readVba(b) : []; }} />;
       case 'stats': return <StatsDialog book={book} onClose={close} />;
       case 'cmdSearch': return <CommandSearch commands={cmdList} onClose={close} onRun={runCmd} />;
+      case 'plus': return null;
       case 'unhideSheet': return <UnhideSheetDialog book={book} onClose={close} onApply={(id) => { const sh = book.sheetById(id); book.setSheetProps(sh, { hidden: false }, 'Unhide sheet'); switchSheet(book.sheets.indexOf(sh)); }} />;
-      default: return null;
+      default: return plus.dialog(dialog, close);
     }
   }
 }

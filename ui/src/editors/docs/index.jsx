@@ -4,6 +4,8 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { DocsEditor } from './Editor.jsx';
+import { Compare } from './dialogs2.jsx';
+import { docsCommands } from './extras.jsx';
 import { templateModel } from './templates.js';
 import { readDocument, writeDocument, documentText } from './io/index.js';
 import { docToHtml } from './io/render-html.js';
@@ -60,4 +62,6 @@ function Preview({ bytes, ext, name }) {
   );
 }
 
-export default { kind: 'docs', Editor: DocsEditor, create, toText, Preview };
+// Compare: the shell's compare view (host.compare) · commands: static palette entries (the open editor registers its own)
+export default { kind: 'docs', Editor: DocsEditor, create, toText, Preview, Compare, commands: [], reportsInteractive: true };
+void docsCommands;

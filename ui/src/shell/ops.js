@@ -3,10 +3,12 @@
  * Every change ends with changed() so open lists refresh; destructive steps offer "Undo" where the backend allows it.
  */
 import { confirmDialog, promptDialog } from '@hostwerk/ui';
+import * as HAPI from '@hostwerk/api';
 import { toast } from '../lib/toast';
 import { t, pl } from '@hostwerk/i18n';
 import { office } from '../lib/api';
-import { loadEditor } from '../lib/loader';
+import { loadEditor, warmEditor, kindFor } from '../lib/loader';
+import { markOpen } from '../lib/perf';
 import { FORMATS, extOf } from '../lib/formats';
 import { changed, settingsNow, loadStatus, hasConverterIn } from './store';
 import { basename, dirname, ensureExt, splitExt, validateName, fileKey, toQuery } from './util';
@@ -33,7 +35,34 @@ export function filesRoute(f = {}, { select = true } = {}) {
 }
 /** The editor as a full view (screen) – Back returns to `back` (the folder in Files) */
 export const screenRoute = (f, extra = {}) => `/office-edit?${toQuery({ ...(f.root ? { root: f.root } : {}), path: f.path, back: filesRoute(f), ...extra })}`;
-export function openEditor(f, extra = {}) { location.hash = screenRoute(canon(f), extra); }
+/**
+ * Page change with the View Transitions API (Files ↔ editor: a short zoom/fade, 160 ms) – plain change where the API
+ * is missing or motion is reduced. The new view counts as there when the editor host mounted (event office:view) or
+ * after 400 ms at the latest.
+ */
+export function viewTransition(update, type = 'office-open') {
+  const reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduced || typeof document === 'undefined' || typeof document.startViewTransition !== 'function' || document.hidden) { update(); return; }
+  // the editor host announces itself (office:view); back to Files: React renders the folder within a few ms
+  const ready = () => new Promise((res) => { const h = () => { window.removeEventListener('office:view', h); res(); }; window.addEventListener('office:view', h); setTimeout(h, type === 'office-open' ? 300 : 80); });
+  try { document.startViewTransition({ update: async () => { update(); await ready(); }, types: [type] }); } catch {
+    try { document.startViewTransition(async () => { update(); await ready(); }); } catch { update(); }
+  }
+}
+export function openEditor(f, extra = {}) {
+  const c = canon(f);
+  markOpen(c.name || basename(c.path));
+  warmEditor(kindFor(c.name || c.path));
+  viewTransition(() => { location.hash = screenRoute(c, extra); }, 'office-open');
+}
+// names of Hostwerk's Files roots ("Webprojekte (htdocs)") – breadcrumb of the editor, places in lists
+let rootNames = null;
+export async function rootLabel(root) {
+  if (!root || root === LIB_ROOT) return t('Office documents');
+  if (!rootNames) rootNames = HAPI.get('/files/roots').then((l) => new Map((Array.isArray(l) ? l : []).map((r) => [r.id, r.label])), () => new Map());
+  const m = await rootNames;
+  return m.get(root) || (/^opened:/.test(root) ? '' : root);
+}
 const errMsg = (e) => (e && e.message) || String(e);
 
 /* ---------------- New files ---------------- */

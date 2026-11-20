@@ -10,6 +10,7 @@
 import JSZip from 'jszip';
 import { parseXml, kids, kid, all, text as xtext, serialize } from '../../_shared/xmltree.js';
 import { defaultModel, sizeName, normalizeInline, fixDoc, dataUrl, mimeOf, uid } from './pm.js';
+import { normalizeMathml, mathmlToLatex } from './mathml.js';
 
 /** length string → mm */
 export function lenMm(v) {
@@ -218,7 +219,11 @@ export async function readOdt(input, settings, { ext = 'odt' } = {}) {
         case 'draw:custom-shape': case 'draw:rect': case 'draw:ellipse': case 'draw:line': case 'draw:g': case 'draw:polygon': case 'draw:path': case 'draw:connector':
           fid.add('shape'); out.push({ type: 'preserved', attrs: { format: 'odt', kind: 'shape', label: 'Shape', text: all(c, 'text:p').map(xtext).join(' '), src: null, width: null, xml: serialize(c) } }); break;
         case 'text:page-number': case 'text:page-count': case 'text:date': case 'text:time': case 'text:title': case 'text:subject': case 'text:author-name': case 'text:file-name': case 'text:chapter': case 'text:sequence': case 'text:variable-get': case 'text:user-field-get': case 'text:bookmark-ref': case 'text:reference-ref': case 'text:sequence-ref': case 'text:note-ref': case 'text:word-count': case 'text:character-count':
-          out.push({ type: 'preserved', attrs: { format: 'odt', kind: 'field', label: c.n.replace('text:', ''), text: xtext(c), src: null, width: null, xml: serialize(c) } }); break;
+          {
+            const fk = { 'text:page-number': 'page', 'text:page-count': 'pages', 'text:date': 'date', 'text:time': 'time', 'text:title': 'title', 'text:author-name': 'author', 'text:file-name': 'filename', 'text:subject': 'subject' }[c.n];
+            if (fk && !(c.a['text:fixed'] === 'true')) { out.push({ type: 'field', attrs: { kind: fk, instr: '', value: xtext(c), ox: null }, marks: ctx.marks.length ? [...ctx.marks] : undefined }); break; }
+            out.push({ type: 'preserved', attrs: { format: 'odt', kind: 'field', label: c.n.replace('text:', ''), text: xtext(c), src: null, width: null, xml: serialize(c) } }); break;
+          }
         case 'text:meta': case 'text:ruby-base': case 'text:hidden-text': await inlines(c, ctx, out); break;
         case 'text:ruby': await inlines(kid(c, 'text:ruby-base') || { c: [] }, ctx, out); break;
         default: if (c.c && c.c.length) await inlines(c, ctx, out);
@@ -241,8 +246,21 @@ export async function readOdt(input, settings, { ext = 'odt' } = {}) {
     const w = f.a['svg:width'] ? Math.round((lenMm(f.a['svg:width']) || 0) * (96 / 25.4)) : null;
     const h = f.a['svg:height'] ? Math.round((lenMm(f.a['svg:height']) || 0) * (96 / 25.4)) : null;
     const gs = merged('graphic', f.a['draw:style-name'], 'p');
+    // a formula object (MathML inline or as a sub-document "Object N/content.xml")
+    if (obj && obj.n === 'draw:object') {
+      let mathXml = kid(obj, 'math:math') ? serialize(kid(obj, 'math:math')) : null;
+      const href = (obj.a['xlink:href'] || '').replace(/^\.\//, '').replace(/\/$/, '');
+      if (!mathXml && href && zip) { const sub = zip.file(`${href}/content.xml`); const x = sub ? await sub.async('string') : ''; const k = x.search(/<(math:)?math[\s>]/); if (k >= 0) mathXml = x.slice(k); }
+      if (mathXml) {
+        const mathml = normalizeMathml(mathXml);
+        const latex = (xtext(kid(f, 'svg:desc')) || '').trim() || mathmlToLatex(mathml);
+        return { type: 'equation', attrs: { latex, mathml, display: /display="block"/.test(mathml) } };
+      }
+    }
     if (img && !obj && !tb) {
       const src = await picture(img.a['xlink:href'], img);
+      const ttl = xtext(kid(f, 'svg:title')) || '';
+      if (src && /^hostwerk-diagram/.test(ttl)) return { type: 'diagram', attrs: { kind: ttl.split(':')[1] || 'mermaid', source: xtext(kid(f, 'svg:desc')) || '', src, svg: null, width: w, height: h } };
       if (src) {
         const anchor = f.a['text:anchor-type'];
         let align = null; let wrap = null;

@@ -9,8 +9,9 @@
  */
 import JSZip from 'jszip';
 import { parseXml, kids, serialize, esc, escAttr } from '../../_shared/xmltree.js';
-import { pageBox, mmToTwip, firstFont, ptOf, hexColor, parseDataUrl, imageSize, walk, TEXTBLOCKS, fillFields, headingsOf } from './pm.js';
+import { pageBox, mmToTwip, firstFont, ptOf, hexColor, parseDataUrl, imageSize, walk, TEXTBLOCKS, fillFields, headingsOf, hfKey, hfHas } from './pm.js';
 import { equationOmml } from './equation.js';
+import { mathmlToOmml } from './mathml.js';
 
 const NS = {
   w: 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
@@ -98,7 +99,10 @@ export async function writeDocx(model, { ext = 'docx' } = {}) {
   const relList = kids(parseXml(relsXml), 'Relationship').map((r) => ({ id: r.a.Id, type: r.a.Type, target: r.a.Target, mode: r.a.TargetMode }));
   let ridN = 1;
   const newRels = [];
+  // while a header/footer part is written its relationships go to that part's own .rels (scope)
+  let scope = null;
   const addRel = (type, target, external = false) => {
+    if (scope) { const id = `rIdH${scope.n++}`; scope.rels.push({ id, type, target, mode: external ? 'External' : undefined }); return id; }
     let id; do { id = `rIdOf${ridN++}`; } while (relList.some((r) => r.id === id));
     const rel = { id, type, target, mode: external ? 'External' : undefined };
     relList.push(rel); newRels.push(rel);
@@ -156,8 +160,9 @@ export async function writeDocx(model, { ext = 'docx' } = {}) {
 
   // ---- media
   const mediaRid = new Map(); let mediaN = 1; let drawingId = 5000;
-  const imageRid = (src) => {
-    if (mediaRid.has(src)) return mediaRid.get(src);
+  const imageRid = (src0) => {
+    const src = src0; const key = `${scope ? scope.part : ''}|${src0}`;
+    if (mediaRid.has(key)) return mediaRid.get(key);
     const d = parseDataUrl(src);
     let res = null;
     if (d && ['png', 'jpg', 'gif', 'bmp'].includes(d.ext)) {
@@ -167,11 +172,11 @@ export async function writeDocx(model, { ext = 'docx' } = {}) {
       if (d.ext === 'jpg') ensureDefault('jpeg', 'image/jpeg');
       res = { rid: addRel(RT.image, name), size: imageSize(d.bytes) };
     } else if (!d && /^https?:/i.test(src)) res = { rid: addRel(RT.image, src, true), size: null, link: true };
-    mediaRid.set(src, res);
+    mediaRid.set(key, res);
     return res;
   };
   const hyperRid = new Map();
-  const linkRid = (href) => { if (!hyperRid.has(href)) hyperRid.set(href, addRel(RT.hyperlink, href, true)); return hyperRid.get(href); };
+  const linkRid = (href) => { const key = `${scope ? scope.part : ''}|${href}`; if (!hyperRid.has(key)) hyperRid.set(key, addRel(RT.hyperlink, href, true)); return hyperRid.get(key); };
 
   // ---- comments: ids and ranges (first/last inline node index per comment)
   const comments = (model.comments || []).map((c, k) => ({ ...c, wid: k }));
@@ -216,7 +221,7 @@ export async function writeDocx(model, { ext = 'docx' } = {}) {
   /* ============ inline content ============ */
   const rPrOf = (marks, extra = {}) => {
     const map = new Map();
-    let link = null; let ins = null; let del = null;
+    let link = null; let ins = null; let del = null; let sdt = null;
     for (const m of marks || []) {
       const a = m.attrs || {};
       switch (m.type) {
@@ -238,6 +243,7 @@ export async function writeDocx(model, { ext = 'docx' } = {}) {
         case 'link': link = a.href; break;
         case 'insertion': ins = a; break;
         case 'deletion': del = a; break;
+        case 'sdt': sdt = a; break;
         case 'formatChange': map.set('w:rPrChange', `<w:rPrChange w:id="${revN++}" w:author="${escAttr(a.author || '')}"${a.date ? ` w:date="${escAttr(a.date)}"` : ''}>${a.old || '<w:rPr/>'}</w:rPrChange>`); break;
         default:
       }
@@ -245,7 +251,7 @@ export async function writeDocx(model, { ext = 'docx' } = {}) {
     if (link && !map.has('w:color')) map.set('w:color', '<w:color w:val="0563C1"/>');
     if (link && !map.has('w:u')) map.set('w:u', '<w:u w:val="single"/>');
     if (extra.sup) map.set('w:vertAlign', '<w:vertAlign w:val="superscript"/>');
-    return { rpr: map.size ? `<w:rPr>${ordered(map, RPR_ORDER)}</w:rPr>` : '', link, ins, del };
+    return { rpr: map.size ? `<w:rPr>${ordered(map, RPR_ORDER)}</w:rPr>` : '', link, ins, del, sdt };
   };
   const textRuns = (text, rpr, deleted) => {
     let s = '';
@@ -270,6 +276,48 @@ export async function writeDocx(model, { ext = 'docx' } = {}) {
     return `<w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/>${docPr}<wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="${NS.a}" noChangeAspect="1"/></wp:cNvGraphicFramePr>${graphic}</wp:inline></w:drawing>`;
   };
 
+  /* ---- content controls (check box, drop-down, date, plain text) ---- */
+  let sdtId = 700000;
+  const controlXml = (a, rpr) => {
+    const kind = a.kind || 'text';
+    let pr = a.pr || '';
+    if (!pr) {
+      const type = kind === 'checkbox' ? `<w14:checkbox><w14:checked w14:val="${a.checked ? 1 : 0}"/><w14:checkedState w14:val="2612" w14:font="MS Gothic"/><w14:uncheckedState w14:val="2610" w14:font="MS Gothic"/></w14:checkbox>`
+        : kind === 'dropdown' || kind === 'combo' ? `<w:${kind === 'combo' ? 'comboBox' : 'dropDownList'}>${(a.items || []).map((it) => `<w:listItem w:displayText="${escAttr(it.text)}" w:value="${escAttr(it.value != null ? it.value : it.text)}"/>`).join('')}</w:${kind === 'combo' ? 'comboBox' : 'dropDownList'}>`
+          : kind === 'date' ? `<w:date${a.fullDate ? ` w:fullDate="${escAttr(a.fullDate)}"` : ''}><w:dateFormat w:val="${escAttr(a.format || 'dd.MM.yyyy')}"/><w:lid w:val="de-DE"/><w:storeMappedDataAs w:val="dateTime"/><w:calendar w:val="gregorian"/></w:date>` : '<w:text/>';
+      pr = `<w:sdtPr>${a.alias ? `<w:alias w:val="${escAttr(a.alias)}"/>` : ''}${a.tag ? `<w:tag w:val="${escAttr(a.tag)}"/>` : ''}<w:id w:val="${sdtId++}"/>${!a.value && kind !== 'checkbox' ? '<w:showingPlcHdr/>' : ''}${type}</w:sdtPr>`;
+    } else {
+      if (kind === 'checkbox') pr = pr.replace(/(<w14:checked\b[^>]*w14:val=")[^"]*(")/, `$1${a.checked ? 1 : 0}$2`);
+      if (kind === 'date' && a.fullDate) pr = /w:fullDate="/.test(pr) ? pr.replace(/w:fullDate="[^"]*"/, `w:fullDate="${escAttr(a.fullDate)}"`) : pr.replace(/<w:date\b/, `<w:date w:fullDate="${escAttr(a.fullDate)}"`);
+      if (a.value && !a.placeholder) pr = pr.replace(/<w:showingPlcHdr\s*\/>/, '');
+    }
+    const body = kind === 'checkbox'
+      ? `<w:r><w:rPr><w:rFonts w:ascii="MS Gothic" w:eastAsia="MS Gothic" w:hAnsi="MS Gothic" w:hint="eastAsia"/></w:rPr>${t(a.checked ? '☒' : '☐')}</w:r>`
+      : `<w:r>${rpr}${t(a.value || (a.placeholder ? '' : ' '))}</w:r>`;
+    return `<w:sdt>${pr}${a.end || ''}<w:sdtContent>${body}</w:sdtContent></w:sdt>`;
+  };
+  /* ---- fields: Word's own (fldSimple, cached result) and Hostwerk's live values (a locked plain-text control) ---- */
+  const FIELD_INSTR = { page: 'PAGE', pages: 'NUMPAGES', date: 'DATE \\@ "dd.MM.yyyy"', time: 'TIME \\@ "HH:mm"', author: 'AUTHOR', title: 'TITLE', filename: 'FILENAME', subject: 'SUBJECT', words: 'NUMWORDS' };
+  const fieldXml = (a, rpr) => {
+    const value = a.value == null ? '' : String(a.value);
+    if (a.ox) {
+      const was = [...String(a.ox).matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g)].map((m) => m[1]).join('').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+      if (was === value) return a.ox;
+    }
+    if (a.kind === 'hostwerk' || a.kind === 'cell') {
+      const tag = `hostwerk-field:${JSON.stringify({ k: a.kind, s: a.source || null, p: a.params || null, l: a.label || '' })}`;
+      return `<w:sdt><w:sdtPr>${rpr}<w:alias w:val="${escAttr(a.label || 'Hostwerk')}"/><w:tag w:val="${escAttr(tag)}"/><w:id w:val="${sdtId++}"/><w:lock w:val="contentLocked"/><w:text/></w:sdtPr><w:sdtContent><w:r>${rpr}${t(value || ' ')}</w:r></w:sdtContent></w:sdt>`;
+    }
+    const instr = a.instr || FIELD_INSTR[a.kind] || 'DATE';
+    return `<w:fldSimple w:instr=" ${escAttr(instr.trim())} "><w:r>${rpr}${t(value || ' ')}</w:r></w:fldSimple>`;
+  };
+  /** a kept text box whose text was edited here: new paragraphs in every w:txbxContent (Word + VML fallback) */
+  const textboxEdited = (xml, text) => xml.replace(/<w:txbxContent>([\s\S]*?)<\/w:txbxContent>/g, (m, inner) => {
+    const ppr = (/<w:pPr>[\s\S]*?<\/w:pPr>/.exec(inner) || [''])[0].replace(/<w:rPr>[\s\S]*?<\/w:rPr>/, '');
+    const rpr = (/<w:r>\s*(<w:rPr>[\s\S]*?<\/w:rPr>)/.exec(inner) || [null, ''])[1];
+    return `<w:txbxContent>${String(text).split('\n').map((line) => `<w:p>${ppr}${line ? `<w:r>${rpr}${t(line)}</w:r>` : ''}</w:p>`).join('')}</w:txbxContent>`;
+  });
+
   /** inline nodes → paragraph content XML */
   const inlineXml = (content, base = {}) => {
     const items = []; // { xml, link, ins, del, marker }
@@ -278,9 +326,17 @@ export async function writeDocx(model, { ext = 'docx' } = {}) {
       for (const c of startsAt.get(at) || []) items.push({ marker: true, xml: `<w:commentRangeStart w:id="${c.wid}"/>${c.replyIds.map((r) => `<w:commentRangeStart w:id="${r}"/>`).join('')}` });
       const marks = [...(base.marks || []), ...(n.marks || [])];
       if (n.type === 'text') {
-        const { rpr, link, ins, del } = rPrOf(marks);
-        items.push({ xml: textRuns(n.text, rpr, !!del), link, ins, del });
+        const { rpr, link, ins, del, sdt } = rPrOf(marks);
+        items.push({ xml: textRuns(n.text, rpr, !!del), link, ins, del, sdt });
       } else if (n.type === 'hardBreak') items.push({ xml: '<w:r><w:br/></w:r>' });
+      else if (n.type === 'contentControl') { const r = rPrOf(marks); items.push({ xml: controlXml(n.attrs || {}, r.rpr), ins: r.ins, del: r.del }); }
+      else if (n.type === 'field') { const r = rPrOf(marks); items.push({ xml: fieldXml(n.attrs || {}, r.rpr), ins: r.ins, del: r.del }); }
+      else if (n.type === 'diagram') {
+        const a = n.attrs || {};
+        const r = a.src && imageRid(a.src);
+        if (r) items.push({ xml: `<w:r>${drawingXml({ width: a.width, height: a.height, alt: a.source || '', title: `hostwerk-diagram:${a.kind || 'mermaid'}` }, r, r.size)}</w:r>` });
+        else if (a.source) items.push({ xml: textRuns(a.source, '', false) });
+      }
       else if (n.type === 'image') {
         const a = n.attrs || {};
         if (patch && a.ox && a.ox.xml && a.ox.src === (a.src || '').length && a.ox.width === a.width) items.push({ xml: a.ox.xml });
@@ -291,16 +347,35 @@ export async function writeDocx(model, { ext = 'docx' } = {}) {
         items.push({ xml: `<w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:footnoteReference w:id="${id}"/></w:r>` });
       } else if (n.type === 'equation') {
         const a = n.attrs || {};
-        items.push({ xml: a.omml && a.ommlLatex === a.latex ? a.omml : equationOmml(a.latex || '') });
+        // unchanged Word maths stays byte-identical; edited/new: MathML (temml) → OMML, else the simple converter
+        let x = a.omml && a.ommlLatex === a.latex ? a.omml : a.mathml ? mathmlToOmml(a.mathml) : equationOmml(a.latex || '');
+        if (a.display && !/^<m:oMathPara/.test(x)) x = `<m:oMathPara>${x}</m:oMathPara>`;
+        if (!a.display && /^<m:oMathPara/.test(x)) x = x.replace(/^<m:oMathPara>(?:<m:oMathParaPr>[\s\S]*?<\/m:oMathParaPr>)?/, '').replace(/<\/m:oMathPara>$/, '');
+        items.push({ xml: x });
       } else if (n.type === 'preserved') {
         const a = n.attrs || {};
-        if (patch && a.format === 'docx' && a.xml) items.push({ xml: a.xml });
+        if (patch && a.format === 'docx' && a.xml && a.textEdited) items.push({ xml: textboxEdited(a.xml, a.text || '') });
+        else if (patch && a.format === 'docx' && a.xml) items.push({ xml: a.xml });
         else if (a.src && imageRid(a.src)) { const r = imageRid(a.src); items.push({ xml: `<w:r>${drawingXml({ width: a.width }, r, r.size)}</w:r>` }); }
         else if (a.text) items.push({ xml: textRuns(a.text, '', false) });
       }
       for (const c of endsAt.get(at) || []) items.push({ marker: true, xml: `<w:commentRangeEnd w:id="${c.wid}"/>${c.replyIds.map((r) => `<w:commentRangeEnd w:id="${r}"/>`).join('')}<w:r><w:commentReference w:id="${c.wid}"/></w:r>${c.replyIds.map((r) => `<w:r><w:commentReference w:id="${r}"/></w:r>`).join('')}` });
     }
-    // group: hyperlink > ins/del > runs
+    // group: content control (w:sdt) > hyperlink > ins/del > runs
+    let s = '';
+    let k = 0;
+    const nextSdt = (j) => { while (j < items.length && items[j].marker) j++; return j < items.length ? items[j].sdt : null; };
+    while (k < items.length) {
+      const sd = items[k].marker ? null : items[k].sdt;
+      if (!sd) { const inner = []; while (k < items.length && !(items[k].sdt && !items[k].marker)) inner.push(items[k++]); s += linkGroups(inner); continue; }
+      const inner = [];
+      // comment markers between two runs of the same control stay inside it
+      while (k < items.length && ((!items[k].marker && items[k].sdt && items[k].sdt.id === sd.id) || (items[k].marker && (nextSdt(k) || {}).id === sd.id))) inner.push(items[k++]);
+      s += `<w:sdt>${sd.pr || '<w:sdtPr/>'}${sd.end || ''}<w:sdtContent>${linkGroups(inner)}</w:sdtContent></w:sdt>`;
+    }
+    return s;
+  };
+  const linkGroups = (items) => {
     let s = '';
     let k = 0;
     while (k < items.length) {
@@ -353,10 +428,18 @@ export async function writeDocx(model, { ext = 'docx' } = {}) {
     if (left || a.firstLine) map.set('w:ind', `<w:ind w:left="${Math.round(left)}"${a.firstLine < 0 ? ` w:hanging="${Math.round(-a.firstLine * 20)}"` : a.firstLine ? ` w:firstLine="${Math.round(a.firstLine * 20)}"` : ''}/>`);
     if (a.textAlign && a.textAlign !== 'left') map.set('w:jc', `<w:jc w:val="${a.textAlign === 'justify' ? 'both' : a.textAlign}"/>`);
     for (const [k, v] of Object.entries(opts.extra || {})) map.set(k, v);
+    // tracked paragraph mark (Enter / joined paragraphs) and tracked paragraph formatting
+    if (a.pmark && (a.pmark.type === 'ins' || a.pmark.type === 'del')) {
+      const rev = `<w:${a.pmark.type} w:id="${revN++}" w:author="${escAttr(a.pmark.author || 'Unknown')}"${a.pmark.date ? ` w:date="${escAttr(a.pmark.date)}"` : ''}/>`;
+      const old = map.get('w:rPr');
+      map.set('w:rPr', old ? old.replace(/^<w:rPr>/, `<w:rPr>${rev}`).replace(/^<w:rPr\/>$/, `<w:rPr>${rev}</w:rPr>`) : `<w:rPr>${rev}</w:rPr>`);
+    }
+    if (a.pchange) map.set('w:pPrChange', `<w:pPrChange w:id="${revN++}" w:author="${escAttr(a.pchange.author || 'Unknown')}"${a.pchange.date ? ` w:date="${escAttr(a.pchange.date)}"` : ''}>${a.pchange.old || '<w:pPr/>'}</w:pPrChange>`);
     return map.size ? `<w:pPr>${ordered(map, PPR_ORDER)}</w:pPr>` : '';
   };
-  const out = [];
-  const usable = () => { const b = pageBox(model.page); return mmToTwip(b.width - model.page.margins.left - model.page.margins.right); };
+  let out = [];
+  let curPage = null; // page setup of the section being written (tables/boxes take its text width)
+  const usable = () => { const pg = curPage || model.page; const b = pageBox(pg); const mg = pg.margins || model.page.margins; return mmToTwip(b.width - mg.left - mg.right); };
 
   const block = (n, ctx = {}) => {
     const a = n.attrs || {};
@@ -370,7 +453,7 @@ export async function writeDocx(model, { ext = 'docx' } = {}) {
         const hIndex = headingN++;
         const mark = tocTargets.has(hIndex) ? { id: bookmarkN++, name: tocBookmark(hIndex) } : null;
         const inner = inlineXml(n.content);
-        out.push(`<w:p>${pPrOf(a, { style: styleId(`heading ${Math.min(6, a.level || 1)}`), num: ctx.num })}${mark ? `<w:bookmarkStart w:id="${mark.id}" w:name="${mark.name}"/>${inner}<w:bookmarkEnd w:id="${mark.id}"/>` : inner}</w:p>`);
+        out.push(`<w:p>${pPrOf(a, { style: styleId(`heading ${Math.min(6, a.level || 1)}`), num: ctx.num, extra: ctx.pextra })}${mark ? `<w:bookmarkStart w:id="${mark.id}" w:name="${mark.name}"/>${inner}<w:bookmarkEnd w:id="${mark.id}"/>` : inner}</w:p>`);
         break;
       }
       case 'blockquote': for (const c of n.content || []) block(c, { ...ctx, quote: true }); break;
@@ -434,6 +517,15 @@ export async function writeDocx(model, { ext = 'docx' } = {}) {
         break;
       }
       case 'table': table(n); break;
+      case 'controlBlock': {
+        out.push(`<w:sdt>${a.pr || `<w:sdtPr>${a.alias ? `<w:alias w:val="${escAttr(a.alias)}"/>` : ''}<w:id w:val="${sdtId++}"/></w:sdtPr>`}${a.end || ''}<w:sdtContent>`);
+        const inner = n.content && n.content.length ? n.content : [{ type: 'paragraph' }];
+        for (const c of inner) block(c, ctx);
+        out.push('</w:sdtContent></w:sdt>');
+        break;
+      }
+      // a section break whose paragraph could not carry it (after a table, a list …): an empty paragraph with the sectPr
+      case 'sectionBreak': if (!ctx.top) break; out.push(`<w:p><w:pPr>${sectionOf(a)}</w:pPr></w:p>`); break;
       default: for (const c of n.content || []) block(c, ctx);
     }
   };
@@ -467,7 +559,9 @@ export async function writeDocx(model, { ext = 'docx' } = {}) {
     out.push(`<w:tbl>${tblPr}<w:tblGrid>${W2.map((w) => `<w:gridCol w:w="${w}"/>`).join('')}</w:tblGrid>`);
     grid.forEach((r, ri) => {
       const isHeader = (rows[ri] && rows[ri].content || []).length && (rows[ri].content || []).every((c) => c.type === 'tableHeader');
-      out.push(`<w:tr>${isHeader ? '<w:trPr><w:tblHeader/></w:trPr>' : ''}`);
+      const rc = rows[ri] && rows[ri].attrs && rows[ri].attrs.change;
+      const rcx = rc && (rc.type === 'ins' || rc.type === 'del') ? `<w:${rc.type} w:id="${revN++}" w:author="${escAttr(rc.author || 'Unknown')}"${rc.date ? ` w:date="${escAttr(rc.date)}"` : ''}/>` : '';
+      out.push(`<w:tr>${isHeader || rcx ? `<w:trPr>${isHeader ? '<w:tblHeader/>' : ''}${rcx}</w:trPr>` : ''}`);
       for (let k = 0; k < cols; k++) {
         const g = r[k];
         if (g && g.covered) continue;
@@ -487,46 +581,85 @@ export async function writeDocx(model, { ext = 'docx' } = {}) {
     out.push('</w:tbl>');
   };
 
-  for (const n of (model.doc && model.doc.content) || []) block(n);
+  /* ============ sections: page setup per section, header/footer references ============ */
+  function sectionXml(a, refs = null) {
+    const page = a.page || model.page;
+    const box = pageBox(page); const mg = page.margins || model.page.margins;
+    const sect = new Map();
+    let parsed = null;
+    if (a.sectPr) { parsed = parseXml(a.sectPr); for (const c of kids(parsed, '*')) { const arr = sect.get(c.n) || []; arr.push(serialize(c)); sect.set(c.n, arr); } }
+    // header/footer references are only valid inside their original package
+    if (!patch) { sect.delete('w:headerReference'); sect.delete('w:footerReference'); }
+    if (refs) for (const [tg, list] of Object.entries(refs)) { if (list.length) sect.set(tg, list); else sect.delete(tg); }
+    sect.set('w:pgSz', [`<w:pgSz w:w="${mmToTwip(box.width)}" w:h="${mmToTwip(box.height)}"${page.orientation === 'landscape' ? ' w:orient="landscape"' : ''}/>`]);
+    const oldMar = parsed && kids(parsed, 'w:pgMar')[0];
+    sect.set('w:pgMar', [`<w:pgMar w:top="${mmToTwip(mg.top)}" w:right="${mmToTwip(mg.right)}" w:bottom="${mmToTwip(mg.bottom)}" w:left="${mmToTwip(mg.left)}" w:header="${(oldMar && oldMar.a['w:header']) || 708}" w:footer="${(oldMar && oldMar.a['w:footer']) || 708}" w:gutter="${(oldMar && oldMar.a['w:gutter']) || 0}"/>`]);
+    const oldCols = parsed && kids(parsed, 'w:cols')[0];
+    if ((page.columns || 1) > 1) sect.set('w:cols', [`<w:cols w:num="${page.columns}" w:space="708"/>`]);
+    else if (!oldCols || Number(oldCols.a['w:num'] || 1) > 1) sect.set('w:cols', ['<w:cols w:space="708"/>']);
+    if (a.titlePage) sect.set('w:titlePg', ['<w:titlePg/>']); else sect.delete('w:titlePg');
+    if (a.type && a.type !== 'nextPage') sect.set('w:type', [`<w:type w:val="${escAttr(a.type)}"/>`]); else sect.delete('w:type');
+    if (!sect.has('w:docGrid') && !patch) sect.set('w:docGrid', ['<w:docGrid w:linePitch="360"/>']);
+    return `<w:sectPr>${ordered(sect, SECT_ORDER)}</w:sectPr>`;
+  }
+  // headers/footers (default, first page, even pages): rich content from their own document, written into their own
+  // parts with their own relationships; unchanged ones keep their original part
+  const hfPlainXml = (x) => {
+    const fld = (instr, res) => `<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> ${instr} </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r>${t(res)}</w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>`;
+    const body = String(x.text || '').split(/(\{page\}|\{pages\}|\{date\})/).filter(Boolean).map((p) => (p === '{page}' ? fld('PAGE', '1') : p === '{pages}' ? fld('NUMPAGES', '1') : p === '{date}' ? fld('DATE', new Date().toLocaleDateString()) : `<w:r><w:rPr><w:sz w:val="18"/></w:rPr>${t(fillFields(p, { title: (model.meta && model.meta.title) || '' }))}</w:r>`)).join('');
+    return `<w:p><w:pPr>${x.align && x.align !== 'left' ? `<w:jc w:val="${x.align}"/>` : ''}</w:pPr>${body}</w:p>`;
+  };
+  const writeHfPart = (x, kind) => {
+    const tg = kind === 'header' ? 'w:hdr' : 'w:ftr';
+    let part; let k = 1; do { part = `of_${kind}${k++}.xml`; } while (zip.file(dir + part));
+    scope = { rels: [], n: 1, part };
+    let body = ''; let rels = [];
+    try {
+      if (x.doc && x.doc.content && x.doc.content.length) {
+        const saved = out; out = [];
+        for (const c of x.doc.content) block(c, {});
+        body = out.join(''); out = saved;
+        if (!/<\/w:p>$/.test(body)) body += '<w:p/>';
+      } else body = hfPlainXml(x);
+    } finally { rels = scope.rels; scope = null; }
+    zip.file(dir + part, `${XMLH}<${tg} ${Object.entries(NS).map(([p, u]) => `xmlns:${p}="${u}"`).join(' ')} mc:Ignorable="w14 w15">${body}</${tg}>`);
+    if (rels.length) zip.file(`${dir}_rels/${part}.rels`, `${XMLH}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels.map((r) => `<Relationship Id="${r.id}" Type="${r.type}" Target="${escAttr(r.target)}"${r.mode ? ` TargetMode="${r.mode}"` : ''}/>`).join('')}</Relationships>`);
+    ensureOverride(dir + part, CT[kind]);
+    return addRel(RT[kind], part);
+  };
+  const hfRefs = { 'w:headerReference': [], 'w:footerReference': [] };
+  if (patch && keep.sectPr) for (const c of kids(parseXml(keep.sectPr), '*')) if (hfRefs[c.n]) hfRefs[c.n].push(serialize(c));
+  {
+    // header content must not take comment ranges, TOC bookmarks or footnotes of the body
+    const savedIx = ix.n; const savedHeading = headingN; const savedNotes = footnotes.length;
+    ix.n = -1e9;
+    for (const [key, type] of [['header', 'default'], ['footer', 'default'], ['headerFirst', 'first'], ['footerFirst', 'first'], ['headerEven', 'even'], ['footerEven', 'even']]) {
+      const kind = key.startsWith('header') ? 'header' : 'footer';
+      const refTag = `w:${kind}Reference`;
+      const x = model[key];
+      const orig = patch ? ((keep.hf && keep.hf[key]) || (keep[key] && key.length === 6 ? hfKey(keep[key]) : '')) : null;
+      if (patch && hfKey(x) === (orig || '')) continue;
+      hfRefs[refTag] = hfRefs[refTag].filter((r) => { const ty = (/w:type="([^"]+)"/.exec(r) || [null, 'default'])[1]; return ty !== type; });
+      if (hfHas(x)) hfRefs[refTag].push(`<${refTag} w:type="${type}" r:id="${writeHfPart(x, kind)}"/>`);
+    }
+    ix.n = savedIx; headingN = savedHeading; footnotes.length = savedNotes;
+  }
+  // a section break made here (no sectPr of its own) shows the same headers as the last section – Word would show none
+  const sectionOf = (a) => sectionXml(a.sectPr ? a : { ...a, sectPr: null }, a.sectPr ? null : hfRefs);
+
+  const top = (model.doc && model.doc.content) || [];
+  const secPageAt = []; { let pg = model.page; for (let k = top.length - 1; k >= 0; k--) { if (top[k].type === 'sectionBreak' && top[k].attrs && top[k].attrs.page) pg = top[k].attrs.page; secPageAt[k] = pg; } }
+  for (let k = 0; k < top.length; k++) {
+    const n = top[k]; const nx = top[k + 1];
+    curPage = secPageAt[k];
+    // Word keeps a section's properties in its last paragraph
+    if (nx && nx.type === 'sectionBreak' && (n.type === 'paragraph' || n.type === 'heading')) { block(n, { pextra: { 'w:sectPr': sectionOf(nx.attrs || {}) } }); k++; continue; }
+    block(n, { top: true });
+  }
   if (!out.length) out.push('<w:p/>');
 
-  /* ============ section properties, header/footer ============ */
-  const box = pageBox(model.page);
-  const mg = model.page.margins;
-  const sect = new Map();
-  let sectParsed = null;
-  if (patch && keep.sectPr) { sectParsed = parseXml(keep.sectPr); for (const c of kids(sectParsed, '*')) { const arr = sect.get(c.n) || []; arr.push(serialize(c)); sect.set(c.n, arr); } }
-  sect.set('w:pgSz', [`<w:pgSz w:w="${mmToTwip(box.width)}" w:h="${mmToTwip(box.height)}"${model.page.orientation === 'landscape' ? ' w:orient="landscape"' : ''}/>`]);
-  const oldMar = sectParsed && kids(sectParsed, 'w:pgMar')[0];
-  sect.set('w:pgMar', [`<w:pgMar w:top="${mmToTwip(mg.top)}" w:right="${mmToTwip(mg.right)}" w:bottom="${mmToTwip(mg.bottom)}" w:left="${mmToTwip(mg.left)}" w:header="${(oldMar && oldMar.a['w:header']) || 708}" w:footer="${(oldMar && oldMar.a['w:footer']) || 708}" w:gutter="${(oldMar && oldMar.a['w:gutter']) || 0}"/>`]);
-  const oldCols = sectParsed && kids(sectParsed, 'w:cols')[0];
-  if ((model.page.columns || 1) > 1) sect.set('w:cols', [`<w:cols w:num="${model.page.columns}" w:space="708"/>`]);
-  else if (!oldCols || Number(oldCols.a['w:num'] || 1) > 1) sect.set('w:cols', ['<w:cols w:space="708"/>']);
-  if (model.titlePage) sect.set('w:titlePg', ['<w:titlePg/>']); else sect.delete('w:titlePg');
-  if (!sect.has('w:docGrid') && !patch) sect.set('w:docGrid', ['<w:docGrid w:linePitch="360"/>']);
-  const hfXml = (x, kind) => {
-    const tag = kind === 'header' ? 'w:hdr' : 'w:ftr';
-    const fld = (instr, res) => `<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> ${instr} </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r>${t(res)}</w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>`;
-    const body = String(x.text).split(/(\{page\}|\{pages\}|\{date\})/).filter(Boolean).map((p) => (p === '{page}' ? fld('PAGE', '1') : p === '{pages}' ? fld('NUMPAGES', '1') : p === '{date}' ? fld('DATE', new Date().toLocaleDateString()) : `<w:r><w:rPr><w:sz w:val="18"/></w:rPr>${t(fillFields(p, { title: (model.meta && model.meta.title) || '' }))}</w:r>`)).join('');
-    return `${XMLH}<${tag} xmlns:w="${NS.w}" xmlns:r="${NS.r}"><w:p><w:pPr>${x.align && x.align !== 'left' ? `<w:jc w:val="${x.align}"/>` : ''}</w:pPr>${body}</w:p></${tag}>`;
-  };
-  for (const kind of ['header', 'footer']) {
-    const x = model[kind] || {};
-    const orig = patch && keep[kind];
-    const changed = !orig || orig.text !== (x.text || '') || (x.text && orig.align !== x.align);
-    if (!changed) continue;
-    const refTag = kind === 'header' ? 'w:headerReference' : 'w:footerReference';
-    const refs = (sect.get(refTag) || []).filter((r) => !/w:type="default"/.test(r) && /w:type=/.test(r));
-    if (x.text) {
-      let part; let k = 1; do { part = `of_${kind}${k++}.xml`; } while (zip.file(dir + part));
-      zip.file(dir + part, hfXml(x, kind));
-      ensureOverride(dir + part, CT[kind]);
-      const rid = addRel(RT[kind], part);
-      refs.unshift(`<${refTag} w:type="default" r:id="${rid}"/>`);
-    }
-    if (refs.length) sect.set(refTag, refs); else sect.delete(refTag);
-  }
-  const sectXml = `<w:sectPr>${ordered(sect, SECT_ORDER)}</w:sectPr>`;
+  /* ============ final section (headers/footers were written before the body) ============ */
+  const sectXml = sectionXml({ page: model.page, titlePage: model.titlePage, type: null, sectPr: patch ? keep.sectPr : null }, hfRefs);
 
   /* ============ document.xml ============ */
   let rootTag = (patch && keep.rootTag) || `<w:document ${Object.entries(NS).map(([p, u]) => `xmlns:${p}="${u}"`).join(' ')} mc:Ignorable="w14 w15">`;
@@ -582,24 +715,44 @@ export async function writeDocx(model, { ext = 'docx' } = {}) {
   /* ============ comments (+ replies, resolved) ============ */
   const cRel = relOf(RT.comments);
   const exRel = relOf(RT.commentsExtended);
-  // durable-id parts describe the old comments – drop them, they are optional
-  for (const r of [...relList]) if (/commentsIds$|commentsExtensible$/.test(r.type)) { const p = partOf(r); zip.remove(p); dropOverride(p); removeRel(r); }
+  // durable ids (commentsIds) and UTC dates (commentsExtensible) are rewritten for the comments we write – the ids of
+  // comments read from the file stay the same (Word/Teams follow a comment thread by its durable id)
+  const idsRel = relList.find((r) => /commentsIds$/.test(r.type)); const cexRel = relList.find((r) => /commentsExtensible$/.test(r.type));
+  for (const r of [idsRel, cexRel]) if (r) { const p = partOf(r); zip.remove(p); dropOverride(p); removeRel(r); }
   if (used.length || cRel) {
     let pid = 0x10000001;
     const para = () => (pid++).toString(16).toUpperCase().padStart(8, '0');
-    const exs = [];
-    const one = (wid, author, date, text, parentPara, done) => {
+    const exs = []; const cids = []; const cexs = [];
+    const takenDurable = new Set();
+    const durableOf = (want, seed) => {
+      let d = want && /^[0-9A-F]{8}$/i.test(want) && parseInt(want, 16) < 0x7fffffff && !takenDurable.has(want.toUpperCase()) ? want.toUpperCase() : null;
+      if (!d) { let h = 0x2a5f3c1; for (const ch of String(seed)) h = (Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0); do { d = ((h >>> 1) || 1).toString(16).toUpperCase().padStart(8, '0'); h = (Math.imul(h, 2654435761) + 7) >>> 0; } while (takenDurable.has(d)); }
+      takenDurable.add(d);
+      return d;
+    };
+    const one = (wid, author, date, text, parentPara, done, durable) => {
       const lines = String(text || '').split('\n');
       let last = '';
       const ps = lines.map((line, k) => { const id = para(); last = id; return `<w:p w14:paraId="${id}" w14:textId="77777777"><w:pPr><w:spacing w:after="0"/></w:pPr>${k === 0 ? '<w:r><w:annotationRef/></w:r>' : ''}<w:r>${t(line)}</w:r></w:p>`; }).join('');
       exs.push(`<w15:commentEx w15:paraId="${last}"${parentPara ? ` w15:paraIdParent="${parentPara}"` : ''} w15:done="${done ? 1 : 0}"/>`);
+      const d = durableOf(durable, `${wid}|${author}|${date}|${text}`);
+      cids.push(`<w16cid:commentId w16cid:paraId="${last}" w16cid:durableId="${d}"/>`);
+      if (date) cexs.push(`<w16cex:commentExtensible w16cex:durableId="${d}" w16cex:dateUtc="${escAttr(new Date(date).toISOString().replace(/\.\d+Z$/, 'Z'))}"/>`);
       return { xml: `<w:comment w:id="${wid}" w:author="${escAttr(author || 'Unknown')}"${date ? ` w:date="${escAttr(date)}"` : ''} w:initials="${escAttr(initials(author))}">${ps}</w:comment>`, para: last };
     };
     let xml = '';
     for (const c of used) {
-      const main = one(c.wid, c.author, c.date, c.text, null, c.resolved);
+      const main = one(c.wid, c.author, c.date, c.text, null, c.resolved, c.durableId);
       xml += main.xml;
-      (c.replies || []).forEach((r, k) => { xml += one(c.replyIds[k], r.author, r.date, r.text, main.para, c.resolved).xml; });
+      (c.replies || []).forEach((r, k) => { xml += one(c.replyIds[k], r.author, r.date, r.text, main.para, c.resolved, r.durableId).xml; });
+    }
+    if (used.length) {
+      const W16CID = 'http://schemas.microsoft.com/office/word/2016/wordml/cid'; const W16CEX = 'http://schemas.microsoft.com/office/word/2018/wordml/cex';
+      const idsPath = `${dir}commentsIds.xml`; const cexPath = `${dir}commentsExtensible.xml`;
+      zip.file(idsPath, `${XMLH}<w16cid:commentsIds xmlns:mc="${NS.mc}" xmlns:w16cid="${W16CID}" mc:Ignorable="w16cid">${cids.join('')}</w16cid:commentsIds>`);
+      addRel('http://schemas.microsoft.com/office/2016/09/relationships/commentsIds', 'commentsIds.xml'); ensureOverride(idsPath, 'application/vnd.openxmlformats-officedocument.wordprocessingml.commentsIds+xml');
+      zip.file(cexPath, `${XMLH}<w16cex:commentsExtensible xmlns:mc="${NS.mc}" xmlns:w16cex="${W16CEX}" mc:Ignorable="w16cex">${cexs.join('')}</w16cex:commentsExtensible>`);
+      addRel('http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible', 'commentsExtensible.xml'); ensureOverride(cexPath, 'application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtensible+xml');
     }
     const cPath = cRel ? partOf(cRel) : `${dir}comments.xml`;
     zip.file(cPath, `${XMLH}<w:comments xmlns:w="${NS.w}" xmlns:r="${NS.r}" xmlns:w14="${NS.w14}" xmlns:mc="${NS.mc}" mc:Ignorable="w14">${xml}</w:comments>`);
@@ -669,6 +822,8 @@ export async function writeDocx(model, { ext = 'docx' } = {}) {
   sx = sx.replace(/<w:updateFields\b[^>]*\/>/g, '');
   sx = sx.replace(/<w:trackRevisions\b[^>]*\/>/g, '');
   if (model.trackChanges) sx = before(sx, ['w:doNotTrackMoves', 'w:doNotTrackFormatting', 'w:documentProtection', 'w:autoFormatOverride', 'w:styleLockTheme', 'w:styleLockQFSet', 'w:defaultTabStop', 'w:autoHyphenation', 'w:hyphenationZone', 'w:characterSpacingControl', 'w:compat', 'w:rsids', 'm:mathPr', 'w:themeFontLang', 'w:clrSchemeMapping', 'w:shapeDefaults', 'w:decimalSymbol', 'w:listSeparator', 'w14:', 'w15:'], '<w:trackRevisions/>');
+  sx = sx.replace(/<w:evenAndOddHeaders\b[^>]*\/>/g, '');
+  if (model.evenOdd) sx = before(sx, ['w:bookFoldRevPrinting', 'w:bookFoldPrinting', 'w:bookFoldPrintingSheets', 'w:drawingGridHorizontalSpacing', 'w:drawingGridVerticalSpacing', 'w:displayHorizontalDrawingGridEvery', 'w:displayVerticalDrawingGridEvery', 'w:doNotUseMarginsForDrawingGridOrigin', 'w:drawingGridHorizontalOrigin', 'w:drawingGridVerticalOrigin', 'w:doNotShadeFormData', 'w:noPunctuationKerning', 'w:characterSpacingControl', 'w:printTwoOnOne', 'w:strictFirstAndLastChars', 'w:noLineBreaksAfter', 'w:noLineBreaksBefore', 'w:savePreviewPicture', 'w:doNotValidateAgainstSchema', 'w:saveInvalidXml', 'w:ignoreMixedContent', 'w:alwaysShowPlaceholderText', 'w:doNotDemarcateInvalidXml', 'w:saveXmlDataOnly', 'w:useXSLTWhenSaving', 'w:saveThroughXslt', 'w:showXMLTags', 'w:alwaysMergeEmptyNamespace', 'w:updateFields', 'w:hdrShapeDefaults', 'w:footnotePr', 'w:endnotePr', 'w:compat', 'w:docVars', 'w:rsids', 'm:mathPr', 'w:attachedSchema', 'w:themeFontLang', 'w:clrSchemeMapping', 'w:doNotIncludeSubdocsInStats', 'w:doNotAutoCompressPictures', 'w:forceUpgrade', 'w:captions', 'w:readModeInkLockDown', 'w:smartTagType', 'sl:schemaLibrary', 'w:shapeDefaults', 'w:doNotEmbedSmartTags', 'w:decimalSymbol', 'w:listSeparator', 'w14:', 'w15:'], '<w:evenAndOddHeaders/>');
   if (model.page.color && !/<w:displayBackgroundShape\b/.test(sx)) sx = before(sx, ['w:printPostScriptOverText', 'w:printFractionalCharacterWidth', 'w:printFormsData', 'w:embedTrueTypeFonts', 'w:embedSystemFonts', 'w:saveSubsetFonts', 'w:saveFormsData', 'w:mirrorMargins', 'w:alignBordersAndEdges', 'w:bordersDoNotSurroundHeader', 'w:bordersDoNotSurroundFooter', 'w:gutterAtTop', 'w:hideSpellingErrors', 'w:hideGrammaticalErrors', 'w:activeWritingStyle', 'w:proofState', 'w:formsDesign', 'w:attachedTemplate', 'w:linkStyles', 'w:stylePaneFormatFilter', 'w:stylePaneSortMethod', 'w:documentType', 'w:mailMerge', 'w:revisionView', 'w:trackRevisions', 'w:doNotTrackMoves', 'w:defaultTabStop'], '<w:displayBackgroundShape/>');
   zip.file(sRel ? partOf(sRel) : `${dir}settings.xml`, sx);
 

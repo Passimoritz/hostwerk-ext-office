@@ -17,7 +17,7 @@
  * it so they appear upright the way the user saw them. (x, y) is then the bottom-left corner in that turned frame.
  */
 import {
-  rgb, degrees, PDFName, PDFHexString, PDFString, PDFNumber,
+  rgb, degrees, PDFName, PDFHexString, PDFString, PDFNumber, PDFDict, PDFArray, PDFRef,
   drawRectangle, drawEllipse, drawLine, drawSvgPath, drawText, drawImage,
   pushGraphicsState, popGraphicsState, setGraphicsState, LineCapStyle,
 } from 'pdf-lib';
@@ -58,7 +58,8 @@ function boxCorners(a) {
 
 export function textLines(a) { return String(a.text || '').split(/\r?\n/); }
 /** rough text width (Helvetica average) – the exact width comes from the font when saving */
-export const approxWidth = (s, size) => String(s).length * size * 0.52;
+/** rough text width (Helvetica average; CJK and other full-width characters count one em) */
+export const approxWidth = (s, size) => { let w = 0; for (const ch of String(s)) w += /[ᄀ-ᅟ⺀-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦]/.test(ch) || ch.codePointAt(0) > 0xffff ? 1 : 0.52; return w * size; };
 export function textBoxSize(a) {
   const lines = textLines(a);
   return { w: Math.max(...lines.map((l) => approxWidth(l, a.size)), a.size), h: lines.length * a.size * 1.2 };
@@ -164,9 +165,12 @@ export function encodeSafe(font, s) {
 }
 function safeWidth(font, s, size) { try { return font.widthOfTextAtSize(s, size); } catch { return approxWidth(s, size); } }
 
+/** res.pick(text) → { font, name } (Unicode fonts) or the single res.font/res.fontName (Helvetica) */
+const pickFont = (res, text) => (res.pick ? res.pick(text) : { font: res.font, name: res.fontName });
+
 /**
  * Drawing operators for one annotation in page space.
- * res: { font (PDFFont), fontName, gs (graphics state name for opacity or null), img (XObject name) }
+ * res: { pick(text) → { font, name } | font (PDFFont) + fontName, gs (graphics state name for opacity or null), img (XObject name) }
  */
 export function operatorsFor(a, res) {
   const c = col(a.color);
@@ -195,9 +199,16 @@ export function operatorsFor(a, res) {
     }
     case 'text': {
       const lh = a.size * 1.2;
+      if (a.raster && res.img) {
+        // characters no embedded font has: the text as a picture (drawn with the system fonts), the text itself stays in /Contents
+        const { w, h } = textBoxSize(a);
+        const [ox, oy] = turn(0, a.size * 0.95 - h, a.rot || 0);
+        return drawImage(res.img, { x: a.x + ox, y: a.y + oy, width: w, height: h, rotate: degrees(a.rot || 0), xSkew: degrees(0), ySkew: degrees(0) });
+      }
       return textLines(a).flatMap((line, i) => {
         const [ox, oy] = turn(0, -i * lh, a.rot || 0);
-        return drawText(encodeSafe(res.font, line), { x: a.x + ox, y: a.y + oy, size: a.size, font: res.fontName, color: c, rotate: degrees(a.rot || 0), xSkew: degrees(0), ySkew: degrees(0) });
+        const f = pickFont(res, line);
+        return drawText(encodeSafe(f.font, line), { x: a.x + ox, y: a.y + oy, size: a.size, font: f.name, color: c, rotate: degrees(a.rot || 0), xSkew: degrees(0), ySkew: degrees(0) });
       });
     }
     case 'note': {
@@ -210,9 +221,10 @@ export function operatorsFor(a, res) {
       const [ix, iy] = turn(bw / 2, bw / 2, a.rot || 0);
       const ops = drawRectangle({ x: a.x + ix, y: a.y + iy, width: a.w - bw, height: a.h - bw, borderColor: c, borderWidth: bw, rotate: degrees(a.rot || 0), xSkew: degrees(0), ySkew: degrees(0), graphicsState: res.gs || undefined });
       const size = a.h * 0.5;
-      const tw = safeWidth(res.font, a.text, size);
+      const f = pickFont(res, a.text);
+      const tw = safeWidth(f.font, a.text, size);
       const [tx, ty] = turn((a.w - tw) / 2, a.h * 0.3, a.rot || 0);
-      ops.push(...drawText(encodeSafe(res.font, a.text), { x: a.x + tx, y: a.y + ty, size, font: res.fontName, color: c, rotate: degrees(a.rot || 0), xSkew: degrees(0), ySkew: degrees(0), graphicsState: res.gs || undefined }));
+      ops.push(...drawText(encodeSafe(f.font, a.text), { x: a.x + tx, y: a.y + ty, size, font: f.name, color: c, rotate: degrees(a.rot || 0), xSkew: degrees(0), ySkew: degrees(0), graphicsState: res.gs || undefined }));
       return ops;
     }
     case 'image':
@@ -223,25 +235,54 @@ export function operatorsFor(a, res) {
 
 const opacityOf = (a) => (a.type === 'highlight' ? 0.4 : a.opacity != null ? a.opacity : null);
 
+/** private key of our annotations: the editable model as JSON (other apps ignore it, we read it back) */
+export const MODEL_KEY = 'HWOffice';
+const EDITABLE = new Set(['highlight', 'underline', 'strike', 'ink', 'rect', 'ellipse', 'line', 'arrow', 'text', 'note', 'stamp']);
+const utf8Hex = (s) => PDFHexString.of(Array.from(new TextEncoder().encode(s), (b) => b.toString(16).padStart(2, '0')).join(''));
+
+/**
+ * fonts: { pick(text) → { font, ref, key } } – the PDF font for a text (Helvetica, or an embedded Unicode font);
+ * nameFor(f) → its resource name inside the current resources
+ */
+function fontUser(fonts, nameFor) {
+  const used = new Map();
+  return {
+    used,
+    pick: (text) => {
+      const f = fonts.pick(text);
+      if (!used.has(f.key)) used.set(f.key, { ref: f.ref, name: nameFor(f) });
+      return { font: f.font, name: used.get(f.key).name };
+    },
+  };
+}
+/** the old single-font call (font = PDFFont) still works */
+const asFonts = (font, fonts) => fonts || { pick: () => ({ font, ref: font.ref, key: 'OfHelv' }) };
+
 /**
  * Writes the annotations of one page. mode 'burn' = into the page content (everyone sees them, nobody can edit them),
  * 'annot' = real PDF annotations with an appearance stream (other apps can show, move and delete them; images and
- * signatures are always burned in so they cannot be removed by accident).
+ * signatures are always burned in so they cannot be removed by accident). Annotations carry our model under
+ * /HWOffice, so the editor makes them editable again when the file is opened later (readOwnAnnotations).
+ * Returns the number of editable annotations written.
  */
-export async function writeAnnotations(doc, page, list, { mode = 'annot', font, author = '' } = {}) {
-  if (!list || !list.length) return;
+export async function writeAnnotations(doc, page, list, { mode = 'annot', font, fonts, author = '' } = {}) {
+  if (!list || !list.length) return 0;
   const ctx = doc.context;
-  const fontName = page.node.newFontDictionary('OfHelv', font.ref);
+  const F = asFonts(font, fonts);
+  const pageNames = new Map();
+  let written = 0;
   for (const a of list) {
     let imgRef = null;
     if (a.type === 'image') imgRef = (await doc.embedPng(a.png)).ref;
+    else if (a.raster && a.raster.png) imgRef = (await doc.embedPng(a.raster.png)).ref;
     const op = opacityOf(a);
     const gsRef = op != null ? ctx.register(ctx.obj({ Type: 'ExtGState', ca: op, CA: op, ...(a.type === 'highlight' ? { BM: 'Multiply' } : {}) })) : null;
     const asAnnot = mode === 'annot' && a.type !== 'image';
     if (!asAnnot) {
       const gs = gsRef ? page.node.newExtGState('OfGS', gsRef) : null;
       const img = imgRef ? page.node.newXObject('OfImg', imgRef) : null;
-      const ops = operatorsFor(a, { font, fontName, gs, img });
+      const fu = fontUser(F, (f) => { if (!pageNames.has(f.key)) pageNames.set(f.key, page.node.newFontDictionary(f.key, f.ref)); return pageNames.get(f.key); });
+      const ops = operatorsFor(a, { pick: fu.pick, gs, img });
       page.pushOperators(pushGraphicsState(), ...(gs ? [setGraphicsState(gs)] : []), ...ops, popGraphicsState());
       continue;
     }
@@ -249,9 +290,12 @@ export async function writeAnnotations(doc, page, list, { mode = 'annot', font, 
     const b = bbox(a);
     const pad = 2;
     const rect = [b.x - pad, b.y - pad, b.x + b.w + pad, b.y + b.h + pad];
-    const resDict = { Font: { OfHelv: font.ref } };
+    const fu = fontUser(F, (f) => f.key);
+    const ops = operatorsFor(a, { pick: fu.pick, gs: gsRef ? 'OfGS' : null, img: imgRef ? 'OfImg' : null });
+    const resDict = {};
+    if (imgRef) resDict.XObject = { OfImg: imgRef };
+    if (fu.used.size) { resDict.Font = {}; for (const [k, v] of fu.used) resDict.Font[k] = v.ref; }
     if (gsRef) resDict.ExtGState = { OfGS: gsRef };
-    const ops = operatorsFor(a, { font, fontName: 'OfHelv', gs: gsRef ? 'OfGS' : null });
     const ap = ctx.register(ctx.formXObject([pushGraphicsState(), ...(gsRef ? [setGraphicsState('OfGS')] : []), ...ops, popGraphicsState()], { BBox: rect, Resources: resDict }));
     const [r, g, bl] = hexToRgb(a.color || '#000000');
     const dict = {
@@ -283,6 +327,60 @@ export async function writeAnnotations(doc, page, list, { mode = 'annot', font, 
     if (author) annot.set(PDFName.of('T'), PDFHexString.fromText(author));
     if (a.type === 'stamp') annot.set(PDFName.of('Name'), PDFName.of(String(a.text || 'Draft').replace(/[^A-Za-z0-9]/g, '') || 'Draft'));
     if (a.rot && a.type === 'text') annot.set(PDFName.of('Rotate'), PDFNumber.of(a.rot));
+    if (EDITABLE.has(a.type)) { const { id, raster, ...m } = a; // eslint-disable-line no-unused-vars
+      annot.set(PDFName.of(MODEL_KEY), utf8Hex(JSON.stringify({ v: 1, id, ...m }))); written++; }
     page.node.addAnnot(ctx.register(annot));
   }
+  return written;
+}
+
+/** marker in the catalog – a stream, so its dictionary never sits inside a compressed object stream (quick byte scan) */
+export const MARKER = 'HWOfficeAnnots';
+export function markDocument(doc) {
+  const ctx = doc.context;
+  const s = ctx.stream(new TextEncoder().encode('Hostwerk Office: the annotations of this file stay editable in Hostwerk.'), { Type: MARKER });
+  doc.catalog.set(PDFName.of(MARKER), ctx.register(s));
+}
+export function hasMarker(bytes) {
+  const pat = Array.from(`/${MARKER}`, (c) => c.charCodeAt(0));
+  outer: for (let i = 0, n = bytes.length - pat.length; i <= n; i++) {
+    if (bytes[i] !== 47) continue;
+    for (let k = 1; k < pat.length; k++) if (bytes[i + k] !== pat[k]) continue outer;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Takes our annotations out of the document again (pdf-lib PDFDocument, changed in place) → [[model …] per page
+ * index]. One that another app moved (its Rect no longer matches our model) stays an ordinary annotation.
+ */
+export function readOwnAnnotations(doc) {
+  const out = [];
+  doc.getPages().forEach((page, i) => {
+    out[i] = [];
+    const annots = page.node.lookup(PDFName.of('Annots'));
+    if (!(annots instanceof PDFArray)) return;
+    const keep = [];
+    for (let k = 0; k < annots.size(); k++) {
+      const ref = annots.get(k);
+      const d = ref instanceof PDFRef ? doc.context.lookup(ref) : ref;
+      const raw = d instanceof PDFDict ? d.get(PDFName.of(MODEL_KEY)) : null;
+      let m = null;
+      if (raw && raw.asBytes) { try { m = JSON.parse(new TextDecoder().decode(raw.asBytes())); } catch { m = null; } }
+      if (!m || m.v !== 1 || !EDITABLE.has(m.type)) { keep.push(ref); continue; }
+      const rect = d.lookup(PDFName.of('Rect'));
+      if (rect instanceof PDFArray && m.type !== 'note') {
+        const b = bbox(m); const r = rect.asArray().map((x) => (x.asNumber ? x.asNumber() : 0));
+        if (Math.abs(r[0] - (b.x - 2)) > 1.5 || Math.abs(r[1] - (b.y - 2)) > 1.5) { keep.push(ref); continue; }
+      }
+      const { v, ...model } = m; // eslint-disable-line no-unused-vars
+      out[i].push({ ...model, id: model.id || newId() });
+      if (ref instanceof PDFRef) doc.context.delete(ref);
+    }
+    if (keep.length === annots.size()) return;
+    if (keep.length) page.node.set(PDFName.of('Annots'), doc.context.obj(keep));
+    else page.node.delete(PDFName.of('Annots'));
+  });
+  return out;
 }

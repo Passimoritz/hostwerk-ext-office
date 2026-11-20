@@ -20,6 +20,7 @@ const NS = {
   xlink: 'http://www.w3.org/1999/xlink', dc: 'http://purl.org/dc/elements/1.1/', meta: 'urn:oasis:names:tc:opendocument:xmlns:meta:1.0',
   number: 'urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0', svg: 'urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0',
   loext: 'urn:org:documentfoundation:names:experimental:office:xmlns:loext:1.0', officeooo: 'http://openoffice.org/2009/office',
+  math: 'http://www.w3.org/1998/Math/MathML',
 };
 const nsAttrs = (list) => list.map((p) => `xmlns:${p}="${NS[p]}"`).join(' ');
 const ALL = Object.keys(NS);
@@ -187,7 +188,10 @@ export async function writeOdt(model, { ext = 'odt' } = {}) {
       } else if (n.type === 'hardBreak') s += '<text:line-break/>';
       else if (n.type === 'image') s += imageXml(n.attrs || {});
       else if (n.type === 'footnote') { footN++; s += `<text:note text:id="ftn${footN}" text:note-class="footnote"><text:note-citation>${footN}</text:note-citation><text:note-body><text:p text:style-name="Footnote">${textXml((n.attrs && n.attrs.text) || '')}</text:p></text:note-body></text:note>`; }
-      else if (n.type === 'equation') s += `<text:span text:style-name="OfEq">${esc(equationText((n.attrs && n.attrs.latex) || ''))}</text:span>`;
+      else if (n.type === 'equation') s += equationXml(n.attrs || {});
+      else if (n.type === 'contentControl') { const a = n.attrs || {}; s += textXml(a.kind === 'checkbox' ? (a.checked ? '☒' : '☐') : a.value || ''); }
+      else if (n.type === 'field') s += fieldXml(n.attrs || {});
+      else if (n.type === 'diagram') { const a = n.attrs || {}; s += imageXml({ src: a.src, width: a.width, height: a.height, alt: a.source || '', title: `hostwerk-diagram:${a.kind || 'mermaid'}` }); }
       else if (n.type === 'preserved') {
         const a = n.attrs || {};
         if (patch && a.format === 'odt' && a.xml) s += a.xml;
@@ -213,7 +217,36 @@ export async function writeOdt(model, { ext = 'odt' } = {}) {
     const centered = a.align === 'center' && !floated;
     const gstyle = autoStyle('Fr', 'graphic', `<style:graphic-properties style:wrap="${floated ? 'parallel' : 'none'}" style:vertical-pos="top" style:vertical-rel="${floated || centered ? 'paragraph' : 'baseline'}" style:horizontal-pos="${floated ? a.align : centered ? 'center' : 'from-left'}" style:horizontal-rel="paragraph" fo:margin-left="0.2cm" fo:margin-right="0.2cm" style:mirror="none" fo:clip="rect(0cm, 0cm, 0cm, 0cm)" draw:luminance="0%" draw:contrast="0%" draw:red="0%" draw:green="0%" draw:blue="0%" draw:gamma="100%" draw:color-inversion="false" draw:image-opacity="100%" draw:color-mode="standard"/>`, ' style:parent-style-name="Graphics"');
     const inner = flat && p.data ? `<draw:image><office:binary-data>${b64(p.data.bytes)}</office:binary-data></draw:image>` : `<draw:image xlink:href="${escAttr(p.href)}" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/>`;
-    return `<draw:frame draw:style-name="${gstyle}" draw:name="Image${imgN}_${frN}" text:anchor-type="${floated || centered ? 'paragraph' : 'as-char'}" svg:width="${cm((w * 25.4) / 96)}" svg:height="${cm((h * 25.4) / 96)}" draw:z-index="0">${inner}${a.alt ? `<svg:desc>${esc(a.alt)}</svg:desc>` : ''}</draw:frame>`;
+    return `<draw:frame draw:style-name="${gstyle}" draw:name="Image${imgN}_${frN}" text:anchor-type="${floated || centered ? 'paragraph' : 'as-char'}" svg:width="${cm((w * 25.4) / 96)}" svg:height="${cm((h * 25.4) / 96)}" draw:z-index="0">${inner}${a.title ? `<svg:title>${esc(a.title)}</svg:title>` : ''}${a.alt ? `<svg:desc>${esc(a.alt)}</svg:desc>` : ''}</draw:frame>`;
+  };
+  // formulas: MathML as an embedded formula object (LibreOffice's own way); without MathML the linear text
+  let objN = 0;
+  const equationXml = (a) => {
+    if (!a.mathml) return `<text:span text:style-name="OfEq">${esc(equationText(a.latex || ''))}</text:span>`;
+    const math = String(a.mathml).replace(/^[\s\S]*?(<math\b)/, '$1').replace(/<math\b[^>]*>/, `<math xmlns="http://www.w3.org/1998/Math/MathML"${a.display ? ' display="block"' : ''}>`);
+    const len = Math.max(1, (a.latex || '').replace(/\\[a-z]+|[{}^_ ]/gi, '').length);
+    const w = Math.min(160, 2.4 * len + 4); const h = /\\frac|\\sum|\\int|\\begin|\\prod/.test(a.latex || '') ? 11 : 6;
+    objN++;
+    const style = autoStyle('Fr', 'graphic', '<style:graphic-properties style:vertical-pos="middle" style:vertical-rel="text" fo:margin-left="0.1cm" fo:margin-right="0.1cm"/>', '');
+    const frameOpen = `<draw:frame draw:style-name="${style}" draw:name="Formula${objN}" text:anchor-type="as-char" svg:width="${cm(w)}" svg:height="${cm(h)}" draw:z-index="0">`;
+    if (flat) return `${frameOpen}<draw:object>${math.replace(/<(\/?)([a-z][\w-]*)/g, '<$1math:$2').replace(' xmlns="http://www.w3.org/1998/Math/MathML"', '')}</draw:object><svg:desc>${esc(a.latex || '')}</svg:desc></draw:frame>`;
+    let dir; let k = objN; do { dir = `Object ${k++}`; } while (pictures.some((p) => p.path.startsWith(`${dir}/`)) || zip.file(`${dir}/content.xml`));
+    pictures.push({ path: `${dir}/content.xml`, bytes: new TextEncoder().encode(`${XMLH}${math}`), mime: 'text/xml' });
+    pictures.push({ path: `${dir}/`, bytes: null, mime: 'application/vnd.oasis.opendocument.formula', dir: true });
+    return `${frameOpen}<draw:object xlink:href="./${dir}" xlink:type="simple" xlink:show="embed" xlink:actuate="onLoad"/><svg:desc>${esc(a.latex || '')}</svg:desc></draw:frame>`;
+  };
+  const fieldXml = (a) => {
+    const v = textXml(a.value || '');
+    switch (a.kind) {
+      case 'page': return `<text:page-number text:select-page="current">${v}</text:page-number>`;
+      case 'pages': return `<text:page-count>${v}</text:page-count>`;
+      case 'date': return `<text:date>${v}</text:date>`;
+      case 'time': return `<text:time>${v}</text:time>`;
+      case 'author': return `<text:author-name>${v}</text:author-name>`;
+      case 'title': return `<text:title>${v}</text:title>`;
+      case 'filename': return `<text:file-name>${v}</text:file-name>`;
+      default: return v;
+    }
   };
 
   // ---------- blocks ----------
@@ -278,6 +311,7 @@ export async function writeOdt(model, { ext = 'odt' } = {}) {
       }
       case 'horizontalRule': out.push('<text:p text:style-name="Horizontal_20_Line"/>'); break;
       case 'pageBreak': pendingBreak = true; break;
+      case 'sectionBreak': if (a.type !== 'continuous') pendingBreak = true; break;
       case 'toc': {
         const es = a.entries || [];
         out.push(`<text:table-of-content text:style-name="OfSect1" text:protected="true" text:name="Table of Contents1"><text:table-of-content-source text:outline-level="3"><text:index-title-template text:style-name="Contents_20_Heading">${esc(a.title || '')}</text:index-title-template>${[1, 2, 3].map((l) => `<text:table-of-content-entry-template text:outline-level="${l}" text:style-name="Contents_20_${l}"><text:index-entry-link-start text:style-name="Index_20_Link"/><text:index-entry-chapter/><text:index-entry-text/><text:index-entry-tab-stop style:type="right" style:leader-char="."/><text:index-entry-page-number/><text:index-entry-link-end/></text:table-of-content-entry-template>`).join('')}</text:table-of-content-source><text:index-body>${a.title ? `<text:index-title text:style-name="OfSect1" text:name="Table of Contents1_Head"><text:p text:style-name="Contents_20_Heading">${esc(a.title)}</text:p></text:index-title>` : ''}${es.map((e) => `<text:p text:style-name="Contents_20_${Math.min(3, e.level || 1)}">${esc(e.text)}</text:p>`).join('')}</text:index-body></text:table-of-content>`);
@@ -470,7 +504,7 @@ export async function writeOdt(model, { ext = 'odt' } = {}) {
     if (meta.title) metaXml = /<dc:title>/.test(metaXml) ? metaXml.replace(/<dc:title>[^<]*<\/dc:title>/, `<dc:title>${esc(meta.title)}</dc:title>`) : metaXml.replace('</office:meta>', `<dc:title>${esc(meta.title)}</dc:title></office:meta>`);
   } else metaXml = `${XMLH}<office:document-meta ${nsAttrs(['office', 'meta', 'dc', 'xlink'])} office:version="1.3"><office:meta>${metaBody}</office:meta></office:document-meta>`;
   zip.file('meta.xml', metaXml);
-  for (const p of pictures) zip.file(p.path, p.bytes);
+  for (const p of pictures) if (!p.dir) zip.file(p.path, p.bytes);
   // manifest
   let man = patch && zip.file('META-INF/manifest.xml') ? await zip.file('META-INF/manifest.xml').async('string') : `${XMLH}<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.3"><manifest:file-entry manifest:full-path="/" manifest:version="1.3" manifest:media-type="${mime}"/><manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/><manifest:file-entry manifest:full-path="styles.xml" manifest:media-type="text/xml"/><manifest:file-entry manifest:full-path="meta.xml" manifest:media-type="text/xml"/></manifest:manifest>`;
   man = man.replace(/(manifest:full-path="\/"[^>]*manifest:media-type=")[^"]*(")/, `$1${mime}$2`).replace(/(manifest:media-type=")[^"]*("[^>]*manifest:full-path="\/")/, `$1${mime}$2`);

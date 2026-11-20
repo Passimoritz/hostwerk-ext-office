@@ -9,15 +9,33 @@ import { ColorPop, Num } from './controls.jsx';
 import { PaintBucket, PenLine } from 'lucide-react';
 import { Raw } from '../_shared/keep.jsx';
 
+/* ---------------------------------------------------------------- lazy slide picture (thumbnails, sorter) */
+// One shared IntersectionObserver: a slide is rendered when it comes near the visible area (200-slide decks open fast)
+let IO = null; const IO_CB = new Map();
+function observe(el, cb) {
+  if (typeof IntersectionObserver === 'undefined') { cb(); return () => {}; }
+  if (!IO) IO = new IntersectionObserver((list) => { for (const x of list) if (x.isIntersecting) { const f = IO_CB.get(x.target); if (f) { IO_CB.delete(x.target); IO.unobserve(x.target); f(); } } }, { rootMargin: '600px 0px' });
+  IO_CB.set(el, cb); IO.observe(el);
+  return () => { IO_CB.delete(el); if (IO) IO.unobserve(el); };
+}
+export function LazySlide({ eager, w, h: hh, children }) {
+  const ref = useRef(null);
+  const [on, setOn] = useState(!!eager);
+  useEffect(() => { if (on || !ref.current) return undefined; return observe(ref.current, () => setOn(true)); }, [on]);
+  return on ? children : <div ref={ref} className="of-slides-thumbph" style={{ width: w, height: hh }} />;
+}
+
 /* ---------------------------------------------------------------- thumbnails */
 export function Thumbs({ doc, curId, selSlides, onSelect, onReorder, onContext, onAdd, onSectionContext, collapsed, setCollapsed, width = 168 }) {
   const W = S(doc.size.w); const H = S(doc.size.h);
   const scale = (width - 34) / W;
   const [dropAt, setDropAt] = useState(null);
+  const [dragIds, setDragIds] = useState(null);
   const groups = sectionGroups(doc);
   const listRef = useRef(null);
+  const curIdx = doc.slides.findIndex((s) => s.id === curId);
   useEffect(() => { const el = listRef.current && listRef.current.querySelector(`[data-slide="${curId}"]`); if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' }); }, [curId]);
-  const onDrop = (e) => { e.preventDefault(); const ids = (e.dataTransfer.getData('text/x-of-slides') || '').split(',').filter(Boolean); if (ids.length && dropAt != null) onReorder(ids, dropAt); setDropAt(null); };
+  const onDrop = (e) => { e.preventDefault(); const ids = (e.dataTransfer.getData('text/x-of-slides') || '').split(',').filter(Boolean); if (ids.length && dropAt != null) onReorder(ids, dropAt); setDropAt(null); setDragIds(null); };
   return (
     <div className="of-slides-thumbs" ref={listRef} role="listbox" aria-label={t('Slides')} aria-multiselectable="true" onDragOver={(e) => e.preventDefault()} onDrop={onDrop} onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDropAt(null); }}>
       {groups.map((g, gi) => (
@@ -33,12 +51,12 @@ export function Thumbs({ doc, curId, selSlides, onSelect, onReorder, onContext, 
             const selected = selSlides.includes(s.id);
             return (
               <div key={s.id} data-slide={s.id} role="option" aria-selected={selected} tabIndex={s.id === curId ? 0 : -1}
-                className={`of-slides-thumb ${s.id === curId ? 'cur' : ''} ${selected ? 'sel' : ''} ${s.hidden ? 'hidden' : ''} ${dropAt === i ? 'drop-before' : ''} ${dropAt === i + 1 && i === doc.slides.length - 1 ? 'drop-after' : ''}`}
-                draggable onDragStart={(e) => { const ids = selected ? selSlides : [s.id]; e.dataTransfer.setData('text/x-of-slides', ids.join(',')); e.dataTransfer.effectAllowed = 'move'; }}
+                className={`of-slides-thumb ${s.id === curId ? 'cur' : ''} ${selected ? 'sel' : ''} ${s.hidden ? 'hidden' : ''} ${dropAt === i ? 'drop-before' : ''} ${dropAt === i + 1 && i === doc.slides.length - 1 ? 'drop-after' : ''} ${dragIds && dragIds.includes(s.id) ? 'dragging' : ''}`}
+                draggable onDragStart={(e) => { const ids = selected ? selSlides : [s.id]; e.dataTransfer.setData('text/x-of-slides', ids.join(',')); e.dataTransfer.effectAllowed = 'move'; setDragIds(ids); }} onDragEnd={() => { setDragIds(null); setDropAt(null); }}
                 onDragOver={(e) => { e.preventDefault(); const r = e.currentTarget.getBoundingClientRect(); setDropAt(e.clientY < r.top + r.height / 2 ? i : i + 1); }}
                 onClick={(e) => onSelect(s.id, e)} onContextMenu={(e) => onContext(e, s.id)}>
                 <span className="of-slides-thumbnum">{i + 1}{s.hidden && <EyeOff size={11} aria-label={t('Hidden')} />}{(s.animations || []).length > 0 && <Star size={10} aria-label={t('Animations')} />}</span>
-                <Raw as="div" className="of-slides-thumbimg" style={{ width: W * scale, height: H * scale }} title={slideTitle(s) || undefined}><SlideView doc={doc} slide={s} index={i} scale={scale} mode="thumb" /></Raw>
+                <Raw as="div" className="of-slides-thumbimg" style={{ width: W * scale, height: H * scale }} title={slideTitle(s) || undefined}><LazySlide eager={Math.abs(i - curIdx) < 12} w={W * scale} h={H * scale}><SlideView doc={doc} slide={s} index={i} scale={scale} mode="thumb" /></LazySlide></Raw>
               </div>
             );
           })}
@@ -68,7 +86,7 @@ export function Sorter({ doc, curId, selSlides, onSelect, onOpen, onReorder, onC
                   onDragStart={(e) => e.dataTransfer.setData('text/x-of-slides', (selSlides.includes(s.id) ? selSlides : [s.id]).join(','))}
                   onDragOver={(e) => { e.preventDefault(); const r = e.currentTarget.getBoundingClientRect(); setDropAt(e.clientX < r.left + r.width / 2 ? i : i + 1); }}
                   onClick={(e) => onSelect(s.id, e)} onDoubleClick={() => onOpen(s.id)} onContextMenu={(e) => onContext(e, s.id)}>
-                  <div className="of-slides-sortimg" style={{ width: W * scale, height: H * scale }}><SlideView doc={doc} slide={s} index={i} scale={scale} mode="thumb" /></div>
+                  <div className="of-slides-sortimg" style={{ width: W * scale, height: H * scale }}><LazySlide eager={i < 24} w={W * scale} h={H * scale}><SlideView doc={doc} slide={s} index={i} scale={scale} mode="thumb" /></LazySlide></div>
                   <div className="small row-tight"><b>{i + 1}</b>{s.hidden && <EyeOff size={12} />}{s.transition && s.transition.type !== 'none' && <Sparkles size={12} aria-label={t('Transition')} />}{s.transition && s.transition.advanceAfter ? <span className="muted">{Math.round(s.transition.advanceAfter / 100) / 10}s</span> : null}</div>
                 </div>
               );

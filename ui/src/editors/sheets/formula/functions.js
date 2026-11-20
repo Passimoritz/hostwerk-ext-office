@@ -6,7 +6,7 @@
  */
 import * as FJ from '@formulajs/formulajs';
 import { ERR, isErr, errOf, ERROR_TYPE } from './errors.js';
-import { Ref, isRef, isMat, scalar, toNum, toStr, toBool, compare, refValues, toMatrix, clip, evaluate, clean, textToNumber } from './eval.js';
+import { Ref, isRef, isMat, scalar, toNum, toStr, toBool, compare, refValues, toMatrix, clip, evaluate, clean, textToNumber, Lambda, isLambda, callLambda, OMITTED } from './eval.js';
 import { parseRange, colName, quoteSheet, MAXR, MAXC } from './refs.js';
 import { formatValue } from '../format/numfmt.js';
 import { parseInput } from '../format/parse.js';
@@ -190,6 +190,49 @@ lazy('LET', (n, ctx) => {
   for (let i = 0; i + 1 < n.length; i += 2) { if (n[i].t !== 'name') return ERR.VALUE; locals.set(n[i].v.toUpperCase(), evaluate(n[i + 1], c2)); }
   return evaluate(n[n.length - 1], c2);
 });
+
+/* ---------------- LAMBDA helpers ---------------- */
+lazy('LAMBDA', (n, ctx) => {
+  if (!n.length) return ERR.VALUE;
+  const params = [];
+  for (let i = 0; i < n.length - 1; i++) { const p = n[i].t === 'name' ? n[i].v : n[i].t === 'sref' && !n[i].table && n[i].c1 && !n[i].specials.length ? n[i].c1 : null; if (!p) return ERR.VALUE; params.push(p.toUpperCase()); } // [y] = optional
+  if (new Set(params).size !== params.length) return ERR.VALUE;
+  return new Lambda(params, n[n.length - 1], ctx.locals || null);
+});
+lazy('ISOMITTED', (n, ctx) => (n[0] && n[0].t === 'name' && ctx.locals ? ctx.locals.get(n[0].v.toUpperCase()) === OMITTED : false));
+const lamArg = (v) => (isLambda(v) ? v : null);
+const callV = (f, args, ctx) => { const r = callLambda(f, args, ctx); return isRef(r) ? (r.single ? ctx.get(r.sheet, r.r1, r.c1) : refValues(r, ctx)) : r; };
+const one = (v, ctx) => { if (isMat(v)) return v.length === 1 && v[0].length === 1 ? v[0][0] : ERR.CALC; return v; };
+def('MAP', (a, ctx) => {
+  const f = lamArg(a[a.length - 1]); if (!f || a.length < 2) return ERR.VALUE;
+  const ms = a.slice(0, -1).map((x) => toMatrix(x, ctx));
+  const R = Math.max(...ms.map((m) => m.length)); const C = Math.max(...ms.map((m) => m[0].length));
+  const out = [];
+  for (let r = 0; r < R; r++) { const row = []; for (let c = 0; c < C; c++) { const args = ms.map((m) => (m.length === 1 && m[0].length === 1 ? m[0][0] : m[r] && m[r][c] !== undefined ? m[r][c] : ERR.NA)); row.push(one(callV(f, args, ctx), ctx)); } out.push(row); }
+  return out;
+});
+def('REDUCE', (a, ctx) => {
+  const f = lamArg(a[2]); if (!f) return ERR.VALUE;
+  let acc = a[0] === undefined ? null : isRef(a[0]) ? scalar(a[0], ctx) : a[0];
+  for (const row of toMatrix(a[1], ctx)) for (const v of row) { acc = callV(f, [acc, v], ctx); }
+  return acc;
+});
+def('SCAN', (a, ctx) => {
+  const f = lamArg(a[2]); if (!f) return ERR.VALUE;
+  let acc = isRef(a[0]) ? scalar(a[0], ctx) : a[0];
+  return toMatrix(a[1], ctx).map((row) => row.map((v) => { acc = one(callV(f, [acc, v], ctx), ctx); return acc; }));
+});
+def('MAKEARRAY', (a, ctx) => {
+  const rows = toNum(scalar(a[0], ctx), ctx.loc); const cols = toNum(scalar(a[1], ctx), ctx.loc); const f = lamArg(a[2]);
+  if (isErr(rows)) return rows; if (isErr(cols)) return cols; if (!f) return ERR.VALUE;
+  const R = Math.trunc(rows); const C = Math.trunc(cols);
+  if (R < 1 || C < 1 || R * C > 1e6) return ERR.VALUE;
+  const out = [];
+  for (let r = 1; r <= R; r++) { const row = []; for (let c = 1; c <= C; c++) row.push(one(callV(f, [r, c], ctx), ctx)); out.push(row); }
+  return out;
+});
+def('BYROW', (a, ctx) => { const f = lamArg(a[1]); if (!f) return ERR.VALUE; return toMatrix(a[0], ctx).map((row) => [one(callV(f, [[row]], ctx), ctx)]); });
+def('BYCOL', (a, ctx) => { const f = lamArg(a[1]); if (!f) return ERR.VALUE; const m = toMatrix(a[0], ctx); return [m[0].map((_, c) => one(callV(f, [m.map((row) => [row[c]])], ctx), ctx))]; });
 
 /* ---------------- criteria (COUNTIF …) ---------------- */
 const wildRe = (s) => new RegExp(`^${s.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/~\*/g, '\u0001').replace(/~\?/g, '\u0002').replace(/\*/g, '[\\s\\S]*').replace(/\?/g, '[\\s\\S]').replace(/\u0001/g, '\\*').replace(/\u0002/g, '\\?')}$`, 'i');

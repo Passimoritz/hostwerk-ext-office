@@ -567,6 +567,9 @@ export function writeRtf(model) {
       else if (n.type === 'image') s += pictOf(n.attrs);
       else if (n.type === 'footnote') s += `{\\super\\chftn}{\\footnote\\pard\\plain\\fs20{\\super\\chftn} ${rtfEsc(n.attrs.text || '')}}`;
       else if (n.type === 'equation') s += `{\\i\\f${fontIdx('Cambria Math')} ${rtfEsc(equationText(n.attrs.latex || ''))}}`;
+      else if (n.type === 'field') { const a = n.attrs || {}; const ins = { page: 'PAGE', pages: 'NUMPAGES', date: 'DATE', time: 'TIME', author: 'AUTHOR', title: 'TITLE' }[a.kind]; s += ins ? `{\\field{\\*\\fldinst ${ins}}{\\fldrslt ${rtfEsc(a.value || '')}}}` : rtfEsc(a.value || ''); }
+      else if (n.type === 'contentControl') { const a = n.attrs || {}; s += rtfEsc(a.kind === 'checkbox' ? (a.checked ? '☒' : '☐') : a.value || ''); }
+      else if (n.type === 'diagram') { const a = n.attrs || {}; if (a.src) s += pictOf({ src: a.src, width: a.width, height: a.height, alt: a.source }); }
       // close comments that do not continue in the next node
       const next = list[idx + 1];
       const nextIds = next && next.type === 'text' ? (next.marks || []).filter((m) => m.type === 'comment').map((m) => String(m.attrs.id)) : [];
@@ -602,6 +605,7 @@ export function writeRtf(model) {
       case 'bulletList': case 'orderedList': case 'taskList': list(n, ctx, 0); break;
       case 'horizontalRule': out.push(`\\pard\\plain${intbl}\\brdrb\\brdrs\\brdrw10\\brsp20\\sa120${base}\\par`); break;
       case 'pageBreak': out.push('\\pard\\plain\\page'); break;
+      case 'sectionBreak': if (!a.type || a.type !== 'continuous') out.push('\\pard\\plain\\page'); break;
       case 'toc':
         if (a.title) out.push(`\\pard\\plain\\sa120${base}\\b\\fs28\\cf${colorIdx('#2F5496')} ${rtfEsc(a.title)}\\par`);
         for (const e of a.entries || []) out.push(`\\pard\\plain\\li${((e.level || 1) - 1) * 360}\\sa60${base} ${rtfEsc(e.text)}\\par`);

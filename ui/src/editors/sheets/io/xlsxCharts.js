@@ -98,6 +98,7 @@ function parseChart(raw) {
   if (grouping === 'stacked') chart.stacked = 'stacked'; else if (grouping === 'percentStacked') chart.stacked = 'percent';
   const title = el(outside, 'title');
   if (title) chart.title = richText(title.body);
+  { const gl = g.body.replace(/<c:ser>[\s\S]*?<\/c:ser>/g, ''); const dl = el(gl, 'dLbls'); if (dl && /<(?:c:)?showVal val="1"/.test(dl.body)) chart.labels = true; }
   const leg = el(outside, 'legend');
   if (leg) chart.legend = ({ r: 'right', b: 'bottom', t: 'top', l: 'left', tr: 'right' })[val(leg.body, 'legendPos') || 'r'] || 'right';
   // axis titles
@@ -112,6 +113,8 @@ function parseChart(raw) {
     const own = s.body.replace(/<dPt>[\s\S]*?<\/dPt>/g, '').replace(/<dLbls>[\s\S]*?<\/dLbls>/g, '').replace(/<marker>[\s\S]*?<\/marker>/g, '').replace(/<trendline>[\s\S]*?<\/trendline>/g, '');
     const tx = el(own, 'tx'); const cat = el(own, 'cat') || el(own, 'xVal'); const v = el(own, 'val') || el(own, 'yVal');
     const ser = { name: '', nameRef: null, catRef: refOf(cat && cat.body), valRef: refOf(v && v.body), color: null };
+    const dl = el(s.body, 'dLbls'); if (dl && /<(?:c:)?showVal val="1"/.test(dl.body)) ser.labels = true;
+    const tl = el(s.body, 'trendline'); if (tl) ser.trendline = val(tl.body, 'trendlineType') || 'linear';
     if (tx) { ser.nameRef = refOf(tx.body); ser.name = richText(tx.body); }
     const sp = el(own, 'spPr');
     if (sp && chart.type !== 'pie' && chart.type !== 'doughnut') {
@@ -169,6 +172,13 @@ const numCache = (arr) => `<c:numCache><c:formatCode>General</c:formatCode><c:pt
 const numSrc = (ref, arr) => (ref ? `<c:numRef><c:f>${esc(ref)}</c:f>${numCache(arr)}</c:numRef>` : `<c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="${arr.length}"/>${arr.map((v, i) => (typeof v === 'number' && Number.isFinite(v) ? `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>` : '')).join('')}</c:numLit>`);
 const strSrc = (ref, arr) => (ref ? `<c:strRef><c:f>${esc(ref)}</c:f>${strCache(arr)}</c:strRef>` : `<c:strLit><c:ptCount val="${arr.length}"/>${arr.map((v, i) => `<c:pt idx="${i}"><c:v>${esc(v ?? '')}</c:v></c:pt>`).join('')}</c:strLit>`);
 const serTx = (s) => (s.refs && s.refs.name ? `<c:tx><c:strRef><c:f>${esc(s.refs.name)}</c:f>${strCache([s.name])}</c:strRef></c:tx>` : `<c:tx><c:v>${esc(s.name)}</c:v></c:tx>`);
+/** series extras: data labels and trendline (they go right before <c:cat> in every series type) */
+const serExtras = (chart, s, i) => {
+  const src = chart.series && chart.series[i];
+  const lbl = chart.labels || (src && src.labels);
+  const tr = chart.trend || (src && src.trendline);
+  return `${lbl ? '<c:dLbls><c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr><c:showLegendKey val="0"/><c:showVal val="1"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbls>' : ''}${tr ? `<c:trendline><c:spPr><a:ln w="19050" cap="rnd"><a:solidFill><a:srgbClr val="${hex(s.color, i)}"/></a:solidFill><a:prstDash val="sysDash"/></a:ln></c:spPr><c:trendlineType val="${typeof tr === 'string' ? tr : 'linear'}"/><c:dispRSqr val="0"/><c:dispEq val="0"/></c:trendline>` : ''}`;
+};
 const noLbls = '<c:dLbls><c:showLegendKey val="0"/><c:showVal val="0"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbls>';
 
 function axis(kind, id, cross, pos, title, opts = {}) {
@@ -194,15 +204,15 @@ export function chartXml(chart, data) {
   const A1 = 111111111; const A2 = 222222222;
   const pie = type === 'pie' || type === 'doughnut';
   if (type === 'column' || type === 'bar') {
-    const sers = S.map((s, i) => `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${serTx(s)}<c:spPr>${fill(hex(s.color, i))}</c:spPr><c:invertIfNegative val="0"/>${catXml(s)}${valXml(s)}</c:ser>`).join('');
+    const sers = S.map((s, i) => `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${serTx(s)}<c:spPr>${fill(hex(s.color, i))}</c:spPr><c:invertIfNegative val="0"/>${serExtras(chart, s, i)}${catXml(s)}${valXml(s)}</c:ser>`).join('');
     group = `<c:barChart><c:barDir val="${type === 'bar' ? 'bar' : 'col'}"/><c:grouping val="${grouping || 'clustered'}"/><c:varyColors val="0"/>${sers}${noLbls}<c:gapWidth val="150"/>${grouping ? '<c:overlap val="100"/>' : ''}<c:axId val="${A1}"/><c:axId val="${A2}"/></c:barChart>`;
     axes = axis('cat', A1, A2, type === 'bar' ? 'l' : 'b', chart.xTitle) + axis('val', A2, A1, type === 'bar' ? 'b' : 'l', chart.yTitle, { grid: true, pct: chart.stacked === 'percent' });
   } else if (type === 'line') {
-    const sers = S.map((s, i) => { const c = hex(s.color, i); return `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${serTx(s)}<c:spPr><a:ln w="28575" cap="rnd">${fill(c)}<a:round/></a:ln></c:spPr><c:marker><c:symbol val="circle"/><c:size val="5"/><c:spPr>${fill('FFFFFF')}<a:ln w="12700">${fill(c)}</a:ln></c:spPr></c:marker>${catXml(s)}${valXml(s)}<c:smooth val="0"/></c:ser>`; }).join('');
+    const sers = S.map((s, i) => { const c = hex(s.color, i); return `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${serTx(s)}<c:spPr><a:ln w="28575" cap="rnd">${fill(c)}<a:round/></a:ln></c:spPr><c:marker><c:symbol val="circle"/><c:size val="5"/><c:spPr>${fill('FFFFFF')}<a:ln w="12700">${fill(c)}</a:ln></c:spPr></c:marker>${serExtras(chart, s, i)}${catXml(s)}${valXml(s)}<c:smooth val="0"/></c:ser>`; }).join('');
     group = `<c:lineChart><c:grouping val="standard"/><c:varyColors val="0"/>${sers}${noLbls}<c:marker val="1"/><c:axId val="${A1}"/><c:axId val="${A2}"/></c:lineChart>`;
     axes = axis('cat', A1, A2, 'b', chart.xTitle) + axis('val', A2, A1, 'l', chart.yTitle, { grid: true });
   } else if (type === 'area') {
-    const sers = S.map((s, i) => `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${serTx(s)}<c:spPr>${fill(hex(s.color, i))}</c:spPr>${catXml(s)}${valXml(s)}</c:ser>`).join('');
+    const sers = S.map((s, i) => `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${serTx(s)}<c:spPr>${fill(hex(s.color, i))}</c:spPr>${serExtras(chart, { ...s, }, i).replace(/<c:trendline>[\s\S]*<\/c:trendline>/, '')}${catXml(s)}${valXml(s)}</c:ser>`).join('');
     group = `<c:areaChart><c:grouping val="${grouping || 'standard'}"/><c:varyColors val="0"/>${sers}${noLbls}<c:axId val="${A1}"/><c:axId val="${A2}"/></c:areaChart>`;
     axes = axis('cat', A1, A2, 'b', chart.xTitle) + axis('val', A2, A1, 'l', chart.yTitle, { grid: true, pct: chart.stacked === 'percent', between: 'midCat' });
   } else if (pie) {

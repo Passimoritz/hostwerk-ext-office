@@ -41,8 +41,12 @@ function tooOld() {
   return Object.assign(new Error('This Word 6/95 document is too old for the built-in reader. The Office engine opens it – set it up once with “Set up the Office engine …” and open the file again, or use the desktop app.'), { code: DOC_TOO_OLD, needsEngine: true });
 }
 
+export const ENCRYPTED = 'ENCRYPTED';
+export function encrypted() { return Object.assign(new Error('This document is password-protected.'), { code: ENCRYPTED }); }
 export function readDoc(input, settings) {
   const cfb = readCfb(input);
+  // a password-protected Word 2007+ file is a compound file with the encrypted package inside
+  if (cfb.streams.get('EncryptedPackage') || cfb.streams.get('EncryptionInfo')) throw encrypted();
   const wd = cfb.streams.get('WordDocument');
   if (!wd) throw new Error('This is not a Word document.');
   const dv = new DataView(wd.buffer, wd.byteOffset, wd.byteLength);
@@ -53,7 +57,7 @@ export function readDoc(input, settings) {
   if ([0xa59b, 0xa59c, 0xa5db, 0xa5dc].includes(wIdent) || (wIdent === 0xa5ec && nFib < 0xc0)) throw tooOld();
   if (wIdent !== 0xa5ec) throw new Error('This is not a Word 97–2003 document.');
   const flags = U16(0x0a);
-  if (flags & 0x0100) throw new Error('This Word document is password-protected – it can only be opened with the desktop app.');
+  if (flags & 0x0100) throw encrypted();
   const table = cfb.streams.get(flags & 0x0200 ? '1Table' : '0Table');
   if (!table) throw new Error('This Word document is damaged (no table stream).');
   const data = cfb.streams.get('Data') || new Uint8Array(0);

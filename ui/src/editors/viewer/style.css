@@ -147,3 +147,19 @@
   .of-view-list { width: auto; max-height: 38%; border-right: 0; border-bottom: 1px solid var(--line); }
   .of-view-split > :not(.of-view-list) { min-height: 240px; }
 }
+
+/* 1.1 polish: every view gets the same toolbar card with the coloured file-type icon */
+.of-view-toolbar { gap: var(--sp-2); min-height: 48px; box-shadow: 0 1px 0 var(--line); position: relative; z-index: 1; }
+.of-view-toolbar .btn { transition: background 140ms, color 140ms; }
+.of-view-title { font-weight: 650; letter-spacing: -0.01em; }
+.of-view-title .of-fi, .of-view-tname .of-fi, .of-view-subject .of-fi { flex: none; }
+.of-view-tname { display: inline-flex; align-items: center; gap: var(--sp-2); min-width: 0; max-width: 40%; margin-right: var(--sp-2); }
+.of-view-info.card, .of-view-mailhead.card { box-shadow: var(--shadow); border-radius: var(--r-xl); }
+.of-view-actions { box-shadow: 0 -1px 0 var(--line); }
+.of-view-item { transition: background 120ms; }
+.of-view-att { transition: border-color 140ms, box-shadow 140ms; }
+.of-view-att:hover:not(:disabled) { box-shadow: 0 0 0 3px var(--accent-soft); }
+.of-view-picon { display: inline-flex; }
+.of-view-rtftable { border-collapse: collapse; }
+.of-view-rtftable td { border: 1px solid #ccc; padding: 2px 6px; }
+@media (prefers-reduced-motion: reduce) { .of-view-root * { transition: none !important; } }

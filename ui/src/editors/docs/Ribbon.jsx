@@ -11,8 +11,8 @@ import {
   SpellCheck, Search, Replace, Check, X, ChevronLeft, ChevronRight, Ruler, PanelLeft, PanelRight, ZoomIn, ZoomOut, Focus, Printer,
   TableCellsMerge, TableCellsSplit, Trash2, BetweenHorizontalStart, BetweenHorizontalEnd, BetweenVerticalStart, BetweenVerticalEnd,
   AArrowUp, AArrowDown, FilePen, FileDigit, Languages, Code, Unlink, ImageUp, Type, Maximize, SquareCode,
+  Workflow, Braces, RefreshCw, CheckSquare, Sparkles, GitCompare, Users, LayoutGrid, ChevronUp, Save, SquareSplitVertical, ChevronsUpDown, Wand2,
 } from 'lucide-react';
-import { Tabs } from '@hostwerk/ui';
 import { t } from '@hostwerk/i18n';
 import { RB, Drop, MenuItem, ColorGrid, Group, HIGHLIGHTS } from './ui.jsx';
 import { TableGrid, EmojiGrid, dateFormats } from './dialogs.jsx';
@@ -45,7 +45,7 @@ export function currentStyle(editor) {
   return ps || 'normal';
 }
 
-export function Ribbon({ editor, readOnly, tab, setTab, s, act }) {
+export function Ribbon({ editor, readOnly, tab, setTab, s, act, host = {} }) {
   const e = editor;
   const c = () => e.chain().focus();
   const inTable = e.isActive('table');
@@ -58,8 +58,8 @@ export function Ribbon({ editor, readOnly, tab, setTab, s, act }) {
     ...(readOnly ? [] : [{ id: 'insert', label: 'Insert' }, { id: 'layout', label: 'Layout' }]),
     { id: 'review', label: 'Review' },
     { id: 'view', label: 'View' },
-    ...(!readOnly && inTable ? [{ id: 'table', label: 'Table' }] : []),
-    ...(!readOnly && img ? [{ id: 'picture', label: 'Picture' }] : []),
+    ...(!readOnly && inTable ? [{ id: 'table', label: 'Table', ctx: true }] : []),
+    ...(!readOnly && img ? [{ id: 'picture', label: 'Picture', ctx: true }] : []),
   ];
   const cur = tabs.some((x) => x.id === tab) ? tab : 'home';
   const style = currentStyle(e);
@@ -68,8 +68,6 @@ export function Ribbon({ editor, readOnly, tab, setTab, s, act }) {
   const home = (
     <>
       <Group label="Clipboard">
-        {!readOnly && <RB icon={Undo2} title="Undo" keys="Ctrl+Z" disabled={!e.can().undo()} onClick={() => c().undo().run()} />}
-        {!readOnly && <RB icon={Redo2} title="Redo" keys="Ctrl+Y" disabled={!e.can().redo()} onClick={() => c().redo().run()} />}
         {!readOnly && <RB icon={Scissors} title="Cut" keys="Ctrl+X" onClick={() => act.clipboard('cut')} />}
         <RB icon={Copy} title="Copy" keys="Ctrl+C" onClick={() => act.clipboard('copy')} />
         {!readOnly && <RB icon={ClipboardPaste} title="Paste" keys="Ctrl+V" onClick={() => act.paste(false)} />}
@@ -156,6 +154,12 @@ export function Ribbon({ editor, readOnly, tab, setTab, s, act }) {
         {!readOnly && <RB icon={Replace} title="Replace" keys="Ctrl+H" wide label="Replace" onClick={() => act.find('replace')} />}
         <RB icon={Printer} title="Print" keys="Ctrl+P" onClick={act.print} />
       </Group>
+      {!readOnly && s.ai && (
+        <Group label="AI">
+          <RB icon={Sparkles} title="Write with AI – or type “/ai” in the text" wide label="Write" onClick={() => act.ai('write')} />
+          <RB icon={Wand2} title="Rewrite the selection with AI" wide label="Rewrite" disabled={e.state.selection.empty} onClick={() => act.ai('rewrite')} />
+        </Group>
+      )}
     </>
   );
 
@@ -163,6 +167,12 @@ export function Ribbon({ editor, readOnly, tab, setTab, s, act }) {
     <>
       <Group label="Pages">
         <RB icon={SeparatorHorizontal} title="Page break" keys="Ctrl+Enter" wide label="Page break" onClick={() => c().setPageBreak().run()} />
+        <Drop icon={SquareSplitVertical} title="Section break – pages with their own size, orientation and margins" wide label="Section">{(close) => (
+          <>
+            <MenuItem icon={SquareSplitVertical} onClick={() => { close(); act.sectionBreak('nextPage'); }}>Section break, next page</MenuItem>
+            <MenuItem icon={ChevronsUpDown} onClick={() => { close(); act.sectionBreak('continuous'); }}>Section break, continuous</MenuItem>
+          </>
+        )}</Drop>
       </Group>
       <Group label="Tables">
         <Drop icon={Table} title="Table" wide label="Table" panelClass="of-pop-table">{(close) => <TableGrid onPick={(r, col) => { c().insertTable({ rows: r, cols: col, withHeaderRow: true }).run(); close(); }} onCustom={() => { close(); act.customTable(); }} />}</Drop>
@@ -196,9 +206,31 @@ export function Ribbon({ editor, readOnly, tab, setTab, s, act }) {
         <RB icon={Minus} title="Horizontal line" onClick={() => c().setHorizontalRule().run()} />
         <RB icon={Omega} title="Symbol" onClick={act.symbols} />
         <Drop icon={Smile} title="Emoji" panelClass="of-pop-emoji">{(close) => <EmojiGrid onPick={(em) => { c().insertContent(em).run(); close(); }} />}</Drop>
-        <Drop icon={CalendarClock} title="Date and time">{(close) => dateFormats(document.documentElement.lang).map((d) => <MenuItem key={d} onClick={() => { c().insertContent(d).run(); close(); }}>{d}</MenuItem>)}</Drop>
-        <RB icon={Sigma} title="Equation" onClick={() => act.equation()} />
+        <Drop icon={CalendarClock} title="Date and time">{(close) => (
+          <>
+            <MenuItem icon={RefreshCw} onClick={() => { close(); act.quickField('date'); }}>Date that updates itself</MenuItem>
+            <hr />
+            {dateFormats(document.documentElement.lang).map((d) => <MenuItem key={d} onClick={() => { c().insertContent(d).run(); close(); }}>{d}</MenuItem>)}
+          </>
+        )}</Drop>
       </Group>
+      <Group label="Formulas & diagrams">
+        <RB icon={Sigma} title="Formula (LaTeX) – or type $…$ in the text" wide label="Formula" onClick={() => act.equation()} />
+        <RB icon={Workflow} title="Diagram from text (flowchart, sequence, Gantt …)" wide label="Diagram" onClick={() => act.diagram()} />
+      </Group>
+      <Group label="Fields">
+        <RB icon={Braces} title="Live field: date, page number, a Hostwerk value or a cell of a spreadsheet" wide label="Field" onClick={() => act.field()} />
+        <RB icon={RefreshCw} title="Update all fields" keys="F9" onClick={act.refreshFields} />
+        <Drop icon={CheckSquare} title="Form controls (Word content controls)" wide label="Form">{(close) => (
+          <>
+            <MenuItem icon={CheckSquare} onClick={() => { close(); act.control('checkbox'); }}>Check box</MenuItem>
+            <MenuItem icon={ListOrdered} onClick={() => { close(); act.control('dropdown'); }}>Drop-down list</MenuItem>
+            <MenuItem icon={CalendarClock} onClick={() => { close(); act.control('date'); }}>Date picker</MenuItem>
+            <MenuItem icon={Type} onClick={() => { close(); act.control('text'); }}>Text field</MenuItem>
+          </>
+        )}</Drop>
+      </Group>
+      {s.ai && <Group label="AI"><RB icon={Sparkles} title="Write with AI" wide label="AI" onClick={() => act.ai('write')} /></Group>}
     </>
   );
 
@@ -220,7 +252,14 @@ export function Ribbon({ editor, readOnly, tab, setTab, s, act }) {
             <MenuItem onClick={() => { close(); act.marginsDialog(); }}>Custom margins …</MenuItem>
           </>
         )}</Drop>
-        <Drop icon={Columns2} title="Columns – shown as columns in web layout and in exports" wide label="Columns">{(close) => [1, 2, 3].map((n) => <MenuItem key={n} active={(p.columns || 1) === n} onClick={() => { act.page({ columns: n }); close(); }}>{n === 1 ? t('One') : n === 2 ? t('Two') : t('Three')}</MenuItem>)}</Drop>
+        <Drop icon={SquareSplitVertical} title="Breaks" wide label="Breaks">{(close) => (
+          <>
+            <MenuItem icon={SeparatorHorizontal} keys="Ctrl+Enter" onClick={() => { close(); act.pageBreak(); }}>Page break</MenuItem>
+            <MenuItem icon={SquareSplitVertical} onClick={() => { close(); act.sectionBreak('nextPage'); }}>Section break, next page</MenuItem>
+            <MenuItem icon={ChevronsUpDown} onClick={() => { close(); act.sectionBreak('continuous'); }}>Section break, continuous</MenuItem>
+          </>
+        )}</Drop>
+        <Drop icon={Columns2} title="Columns – the text flows in columns (pages break in one column here, exports are exact)" wide label="Columns">{(close) => [1, 2, 3].map((n) => <MenuItem key={n} active={(p.columns || 1) === n} onClick={() => { act.page({ columns: n }); close(); }}>{n === 1 ? t('One') : n === 2 ? t('Two') : t('Three')}</MenuItem>)}</Drop>
       </Group>
       <Group label="Page background">
         <Drop icon={PaintBucket} title="Page colour" wide label="Page colour" panelClass="of-pop-colors">{(close) => <ColorGrid close={close} noneLabel="No colour" onPick={(col) => act.page({ color: col })} />}</Drop>
@@ -258,6 +297,10 @@ export function Ribbon({ editor, readOnly, tab, setTab, s, act }) {
         )}</Drop>}
         <RB icon={PanelRight} title="Show changes" onClick={() => act.side('changes')} />
       </Group>
+      <Group label="Compare & share">
+        <RB icon={GitCompare} title="Compare with an older version or another file" wide label="Compare" onClick={act.compare} />
+        {s.canCollab && <RB icon={Users} title={s.collab ? 'Stop editing together' : 'Edit together – everyone who opens the file edits live with you'} active={s.collab} disabled={s.joining} wide label={s.collab ? 'Together' : 'Edit together'} onClick={act.collab} />}
+      </Group>
       {s.hasMacros && <Group label="Macros"><RB icon={SquareCode} title="Show the macros of this file (read only)" wide label="Macros" onClick={act.macros} /></Group>}
     </>
   );
@@ -273,7 +316,9 @@ export function Ribbon({ editor, readOnly, tab, setTab, s, act }) {
         <RB icon={Ruler} title="Ruler" active={s.ruler} wide label="Ruler" onClick={act.toggleRuler} />
         <RB icon={PanelLeft} title="Navigation pane" active={s.nav} wide label="Navigation" onClick={act.toggleNav} />
         <RB icon={PanelRight} title="Comments and changes" active={s.comments} wide label="Comments" onClick={() => act.side('comments')} />
+        <RB icon={LayoutGrid} title="Page thumbnails" active={s.thumbs} wide label="Pages" onClick={act.thumbs} />
         <RB icon={Pilcrow} title="Formatting marks" active={s.marks} onClick={act.toggleMarks} />
+        <RB icon={ChevronUp} title="Small ribbon (one line)" active={s.mini} onClick={act.toggleMini} />
       </Group>
       <Group label="Zoom">
         <RB icon={ZoomOut} title="Zoom out" onClick={() => act.zoom(s.zoom - 10)} />
@@ -293,7 +338,7 @@ export function Ribbon({ editor, readOnly, tab, setTab, s, act }) {
         <RB icon={BetweenVerticalEnd} title="Insert column right" onClick={() => c().addColumnAfter().run()} />
         <Drop icon={Trash2} title="Delete">{(close) => (
           <>
-            <MenuItem onClick={() => { c().deleteRow().run(); close(); }}>Delete row</MenuItem>
+            <MenuItem onClick={() => { act.deleteRow(); close(); }}>Delete row</MenuItem>
             <MenuItem onClick={() => { c().deleteColumn().run(); close(); }}>Delete column</MenuItem>
             <MenuItem onClick={() => { c().deleteTable().run(); close(); }}>Delete table</MenuItem>
           </>
@@ -333,13 +378,35 @@ export function Ribbon({ editor, readOnly, tab, setTab, s, act }) {
   );
 
   const link = !readOnly && e.isActive('link');
+  const onTabKey = (ev) => {
+    if (ev.key !== 'ArrowRight' && ev.key !== 'ArrowLeft') return;
+    const k = tabs.findIndex((x) => x.id === cur);
+    const n = tabs[(k + (ev.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+    setTab(n.id);
+    const el = ev.currentTarget.querySelector(`[data-tab="${n.id}"]`); if (el) el.focus();
+  };
   return (
-    <div className="of-docs-ribbon">
+    <div className={`of-docs-ribbon ${s.mini ? 'of-mini' : ''}`}>
       <div className="of-docs-tabsrow">
-        <Tabs tabs={tabs} value={cur} onChange={setTab} />
+        {!readOnly && (
+          <div className="of-docs-qat" role="toolbar" aria-label={t('Quick access')}>
+            <RB icon={Undo2} title="Undo" keys="Ctrl+Z" disabled={!e.can().undo()} onClick={() => c().undo().run()} />
+            <RB icon={Redo2} title="Redo" keys="Ctrl+Y" disabled={!e.can().redo()} onClick={() => c().redo().run()} />
+            {host.save && <RB icon={Save} title="Save" keys="Ctrl+S" onClick={() => host.save()} />}
+            <RB icon={Printer} title="Print" keys="Ctrl+P" onClick={act.print} />
+          </div>
+        )}
+        <div className="of-docs-tabs" role="tablist" aria-label={t('Ribbon')} onKeyDown={onTabKey}>
+          {tabs.map((x) => (
+            <button key={x.id} type="button" role="tab" data-tab={x.id} aria-selected={cur === x.id} tabIndex={cur === x.id ? 0 : -1} className={`of-docs-tab ${cur === x.id ? 'of-on' : ''} ${x.ctx ? 'of-ctx-tab' : ''}`}
+              onMouseDown={(ev) => ev.preventDefault()} onClick={() => setTab(x.id)} onDoubleClick={act.toggleMini}>{x.label}</button>
+          ))}
+        </div>
+        <span className="grow" />
         {link && <div className="of-docs-linkbar small"><Link size={13} /><span className="mono of-docs-linkurl">{e.getAttributes('link').href}</span><RB icon={Link} title="Edit link" onClick={act.link} /><RB icon={Unlink} title="Remove link" onClick={() => c().extendMarkRange('link').unsetLink().run()} /></div>}
+        <RB icon={ChevronUp} className={`of-docs-minbtn ${s.mini ? 'of-flip' : ''}`} title={s.mini ? 'Show the full ribbon' : 'Small ribbon (one line) – double-click a tab does the same'} onClick={act.toggleMini} />
       </div>
-      <div className="of-docs-groups">
+      <div className="of-docs-groups" key={cur}>
         {cur === 'home' && home}
         {cur === 'insert' && insert}
         {cur === 'layout' && layout}

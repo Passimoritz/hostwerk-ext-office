@@ -2,23 +2,25 @@
  * Sidebar: page thumbnails (select, drag to reorder, rotate/delete), outline (bookmarks), attachments, digital
  * signatures (information only).
  */
-import { useEffect, useRef, useState, memo } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, memo } from 'react';
 import { RotateCcw, RotateCw, Trash2, ChevronRight, ChevronDown, Paperclip, Download, Bookmark, FileSignature, Image as ImageIcon } from 'lucide-react';
 import { Seg, TileEmpty } from '@hostwerk/ui';
 import { t } from '@hostwerk/i18n';
 import { pageRotation } from './Viewer.jsx';
 import { Keep, Raw } from '../_shared/keep.jsx';
 
-const Thumb = memo(function Thumb({ mp, n, proxy, active, selected, editable, onClick, onRotate, onDelete, dragProps }) {
+const Thumb = memo(function Thumb({ mp, n, proxy, needProxy, defaultSize, active, selected, dragging, editable, onClick, onRotate, onDelete, dragProps }) {
   const canvas = useRef(null);
   const box = useRef(null);
   const [seen, setSeen] = useState(false);
+  const [ready, setReady] = useState(false);
   const rot = pageRotation(proxy, mp, 0);
   useEffect(() => {
     const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) setSeen(true); }, { rootMargin: '200px' });
     io.observe(box.current);
     return () => io.disconnect();
   }, []);
+  useEffect(() => { if (seen && !proxy && needProxy) needProxy(mp); }, [seen, proxy]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!seen || !proxy) return undefined;
     let task = null; let gone = false;
@@ -27,12 +29,13 @@ const Thumb = memo(function Thumb({ mp, n, proxy, active, selected, editable, on
     const c = canvas.current;
     c.width = Math.floor(vp.width); c.height = Math.floor(vp.height);
     task = proxy.render({ canvasContext: c.getContext('2d'), viewport: vp, background: '#ffffff' });
-    task.promise.catch(() => {});
+    task.promise.then(() => { if (!gone) setReady(true); }).catch(() => {});
     return () => { gone = true; try { task.cancel(); } catch { /* done */ } return gone; };
   }, [seen, proxy, rot]);
-  const base = proxy ? proxy.getViewport({ scale: 1, rotation: rot }) : { width: 595, height: 842 };
+  const turned = ((mp.rot || 0) % 180) !== 0;
+  const base = proxy ? proxy.getViewport({ scale: 1, rotation: rot }) : { width: (defaultSize || [595, 842])[turned ? 1 : 0], height: (defaultSize || [595, 842])[turned ? 0 : 1] };
   return (
-    <div ref={box} className={`of-pdf-thumb${active ? ' active' : ''}${selected ? ' selected' : ''}`} {...dragProps}>
+    <div ref={box} data-tid={mp.id} className={`of-pdf-thumb${active ? ' active' : ''}${selected ? ' selected' : ''}${dragging ? ' dragging' : ''}${ready ? ' ready' : ''}`} {...dragProps}>
       <button type="button" className="of-pdf-thumb-img" onClick={onClick} title={t('Page {n}', { n })} aria-label={t('Page {n}', { n })} aria-current={active || undefined}>
         <canvas ref={canvas} style={{ aspectRatio: `${base.width} / ${base.height}` }} />
       </button>
@@ -65,11 +68,28 @@ function OutlineItem({ item, onGo, depth = 0 }) {
 }
 
 export default function Sidebar({
-  tab, onTab, pages, proxies, current, selection, onSelect, editable, onMove, onRotate, onDelete, outline, onOutline,
+  tab, onTab, pages, proxies, needProxy, defaultSize, current, selection, onSelect, editable, onMove, onRotate, onDelete, outline, onOutline,
   attachments, onAttachment, signatures,
 }) {
   const [drag, setDrag] = useState(null);
   const [over, setOver] = useState(null);
+  // FLIP: thumbnails glide to their new place after a move
+  const list = useRef(null); const rects = useRef(new Map());
+  const order = pages.map((p) => p.id).join(',');
+  useLayoutEffect(() => {
+    const el = list.current; if (!el) return;
+    const reduce = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const next = new Map();
+    for (const n of el.querySelectorAll('[data-tid]')) {
+      const r = { top: n.offsetTop }; next.set(n.dataset.tid, r.top);
+      const old = rects.current.get(n.dataset.tid);
+      if (!reduce && old != null && Math.abs(old - r.top) > 2 && Math.abs(old - r.top) < 3000) {
+        n.style.transition = 'none'; n.style.transform = `translateY(${old - r.top}px)`;
+        requestAnimationFrame(() => { n.style.transition = 'transform 180ms cubic-bezier(.2,.7,.3,1)'; n.style.transform = ''; });
+      }
+    }
+    rects.current = next;
+  }, [order]);
   const tabs = [{ id: 'pages', label: t('Pages'), icon: ImageIcon }, { id: 'outline', label: t('Bookmarks'), icon: Bookmark }];
   if (attachments && attachments.length) tabs.push({ id: 'files', label: t('Attachments'), icon: Paperclip });
   if (signatures && signatures.length) tabs.push({ id: 'sign', label: t('Signatures'), icon: FileSignature });
@@ -87,9 +107,9 @@ export default function Sidebar({
       <div className="of-pdf-side-head"><Seg options={tabs.map((x) => ({ id: x.id, label: x.label, title: x.label }))} value={tabs.some((x) => x.id === tab) ? tab : 'pages'} onChange={onTab} /></div>
       <div className="of-pdf-side-body">
         {(tab === 'pages' || !tabs.some((x) => x.id === tab)) && (
-          <div className="of-pdf-thumbs" role="list">
+          <div className="of-pdf-thumbs" role="list" ref={list}>
             {pages.map((mp, i) => (
-              <Thumb key={mp.id} mp={mp} n={i + 1} proxy={proxies.get(`${mp.src}:${mp.index}`)} active={mp.id === current} selected={selection.has(mp.id) && selection.size > 1}
+              <Thumb key={mp.id} mp={mp} n={i + 1} proxy={proxies.get(`${mp.src}:${mp.index}`)} needProxy={needProxy} defaultSize={defaultSize} active={mp.id === current} selected={selection.has(mp.id) && selection.size > 1} dragging={!!drag && (drag === mp.id || (selection.has(drag) && selection.has(mp.id)))}
                 editable={editable} onClick={(e) => click(mp, e)} onRotate={(d) => onRotate([mp.id], d)} onDelete={() => onDelete([mp.id])}
                 dragProps={editable ? {
                   draggable: true, role: 'listitem',

@@ -37,8 +37,11 @@ missing, write it under "Known limits".
 chunk per editor: `ui/src/editors/<kind>/index.jsx` → `ui/assets/<kind>.js` (+ `.css` if the chunk imports CSS).
 `node tools/build.js <kind>` builds one chunk. Chunks can import `react`, `@hostwerk/api|ui|kit|i18n` (shared with
 Hostwerk, not bundled) and any installed npm package (bundled). **Rules:** no `eval(` anywhere in the output
-(catalog check fails – if a library has it, find another way), whole package ≤ 10 MB (ui/src counts too), no remote
-scripts/fonts, everything works offline. Prefer dynamic-free code; if a library needs a Web Worker (pdf.js), create
+(catalog check fails – if a library has it, find another way), the **shipped package** ≤ 10 MB (Office budget 9.8 MB –
+the release zip's content, see "Integration 1.1": ui/src, tests and tools are not shipped), no remote scripts/fonts,
+everything works offline (heavy optional parts are components on demand). `node tools/build.js --sizes` prints the chunk
+sizes and the shipped size, `--analyze` the packages bundled into more than one chunk; `node tools/package.js --dir|--zip`
+builds the release package exactly like the CI. Prefer dynamic-free code; if a library needs a Web Worker (pdf.js), create
 the worker from a Blob of a bundled string or run it without a worker.
 
 ## Design rules (all UI)
@@ -238,7 +241,7 @@ The parts were built in parallel against this contract; their deviations are now
   their minimum the same way (`>=3.0.0`, `>=3.1.0`). Should the core release as 3.3.0 instead, `>=3.2.2` is still
   right, and `sdkVersion` refuses the install on any Hostwerk without SDK 3.15 anyway. `contributes.new` = `new-docs`
   (icon file), `new-sheets` (table), `new-slides` (tv) – so the backend does not call `host.setNewEntries`.
-  `data.folders` = `data/office-data`, `data/office-engine`, `data/office` (only "Remove completely" offers them,
+  `data.folders` = `data/office-data`, `data/office-engine`, `data/office`, `data/office-components` (1.1) (only "Remove completely" offers them,
   each listed with its size). Synergies: file-share, team, passwords, ai-media. Category `other`, permission `native`.
   Settings are the native `settings.tabs` slot; shortcuts come from the ui module (`ext:office:open` = Ctrl+Alt+O,
   new document/spreadsheet/presentation/search without default keys) – no manifest shortcuts needed.
@@ -417,49 +420,376 @@ Remaining differences are expected, not defects: the report template's callout b
 2); Word's HTML import has no footnotes and counts the callout icon as a picture; Word's ODT import ignores ODF tracked
 changes (`rt-word-src-docx.odt`: our insertion/deletion are valid ODF 1.2 – not verified against LibreOffice here).
 
+## Office 1.1 – expansion contract (binding for all agents of the 1.1 round – done; kept as the contract of the parts)
+
+User's order: close every gap in "Known limits" below where it is technically possible, make everything visibly nicer,
+smoother, faster and easier to use (coloured file icons, thumbnails, motion), and build every "Tipp" idea of the user's
+roadmap: live fields, "/" commands, LaTeX formulas, diagrams from text, compare versions, live data from Hostwerk,
+database tables as sheets, Kanban/calendar/gallery views, forms from sheets, rules & notifications, presentation from
+a document, phone as remote control, OCR, real redaction, co-editing, search by meaning, encryption with the Hostwerk
+vault, clean before sharing, publish as web page, scheduled reports, backup with time machine. Version → **1.1.0**.
+
+**Ownership (6 parallel agents – never edit another agent's files; ask the integrator via your final report):**
+
+| Agent | Owns |
+|---|---|
+| core | `../../hostwerk/**` (never `server/core/download.js`, `server/core/proc.js`, `server/services/db/engines.js` – foreign uncommitted work) |
+| shell | `server/**`, `ui/src/index.jsx`, `ui/src/shell/**`, `ui/src/style.css`, `ui/src/lib/**`, `tests/server-*`, `tests/shell-*`, `tools/**`, `manifest.json` |
+| docs | `ui/src/editors/docs/**`, `tests/docs-*` |
+| sheets | `ui/src/editors/sheets/**`, `tests/sheets-*` |
+| slides | `ui/src/editors/slides/**`, `tests/slides-*` |
+| pdfview | `ui/src/editors/pdf/**`, `ui/src/editors/viewer/**`, `ui/src/editors/pdfworker/**`, `tests/pdf-*`, `tests/viewer-*` |
+
+`ui/src/editors/_shared/**`: add NEW files freely; change an existing shared file only if you created it this round.
+**Texts:** new German translations go ONLY into `locales/parts/<agent>.json` (`{ "English": "Deutsch" }`); the
+integrator merges them into `locales/de.json` at the end – never edit `locales/de.json` this round.
+
+**Shared server contracts (shell implements, editors call through `ui/src/lib/api.js` helpers the shell adds – until
+they exist, call `fetch('/api/office/…')` directly with the same shapes):**
+- Live data: `GET /office/data/sources` → `[{ id, label, kind: 'table'|'value', params: [...] }]` (Hostwerk services,
+  resources, Minecraft players, backups, tasks, websites, databases …); `GET /office/data/query?source=&…` →
+  `{ columns: [{ id, label, type }], rows: [[…]], value?, updatedAt }`; live updates via Hostwerk's websocket broadcast
+  `{ type: 'office-data', source, … }`.
+- Databases: `GET /office/db/servers` → Hostwerk DB servers; `GET /office/db/tables?server=&db=`;
+  `GET /office/db/rows?server=&db=&table=&offset=&limit=&sort=&filter=` → `{ columns, rows, total, primaryKey }`;
+  `POST /office/db/rows {server, db, table, changes: [{ op: 'update'|'insert'|'delete', key, values }]}` (transaction,
+  confirm dialog in the UI before writing; read-only when no primary key).
+- Live fields in documents/slides: `GET /office/fields` (catalog of fields), `GET /office/fields/value?id=&params=`.
+- Forms: `POST /office/forms {path|root+path, sheet, columns, title, public: { enabled, expires, password }}` →
+  `{ id, url }`; public submit page via `host.publicRouter` appends a row to the sheet (server-side xlsx append with the
+  sheets' own writer logic exposed as a pure module, or a queue the editor applies when the file is open).
+- Rules & notifications: `GET/PUT /office/rules?path=` – `[{ id, when: { sheet, cell|range, op, value }, then: { notify:
+  { channel: 'hostwerk'|'discord'|'ntfy'|'mail', text } } }]`, evaluated by the server on save and on schedule; uses
+  Hostwerk's notification API (`host.notifications`).
+- Co-editing: websocket `/api/office/collab?path=…` (via `host.on('upgrade')`) relaying Yjs updates + awareness
+  (cursor, name, colour); the server keeps a Y.Doc per open file in memory and writes the file through the normal
+  saver of the first editor ("leader") – docs (y-prosemirror), sheets (cell map), slides (element map). Login: Hostwerk
+  session or a share link with edit right.
+- Remote control: `/api/office/remote` websocket + a QR code in the slide show; the phone page (public, token) shows
+  next/previous, notes, timer, laser.
+- AI (search by meaning, presentation from a document, "/ai" command): through `host.ai` / Hostwerk's AI with the user's
+  configured provider; never a fixed cloud.
+- Components on demand (heavy things that don't fit into the 10 MB package: OCR engine + language data, Mermaid,
+  CJK PDF fonts/CMaps): `GET /office/components` (state), `POST /office/components/install {id}` – downloaded once from
+  pinned URLs with **pinned SHA-256** into `<data>/office-components/<id>/`, served by `GET /office/components/<id>/<file>`;
+  the UI asks once (size shown) like the Office engine. Never execute a download without matching hash.
+
+**Design direction:** each app has its colour like in Microsoft Office / LibreOffice, from Hostwerk tokens where
+possible: documents blue, spreadsheets green, presentations orange, PDF red, other files neutral. Use it for file
+icons (everywhere: Dateien list/grid, Office section, recent, search, tabs), the active ribbon tab underline, the
+primary editor accents – but keep Hostwerk's look (cards, spacing, typography, light/dark). Motion: short (120–200 ms),
+purposeful, `prefers-reduced-motion` respected. Performance budget: opening a 1 MB docx/xlsx/pptx < 1.5 s, typing/
+scrolling at 60 fps, no long tasks > 100 ms on interaction; chunk size growth ≤ 200 KB per editor (lazy-load sub-features).
+**Package budget: ≤ 9.8 MB total** – check with `node tools/build.js`; anything heavier is a component on demand.
+
+Every agent: live-check its work in a throwaway Hostwerk (never the user's real data; see `../tools/shots.js` and
+`C:\Users\Pasca\Documents\Hostwerk\office-check\live-test\hw-run.js`), keep `node --test tests/*.test.js` and
+`node ../../hostwerk/server/extensions/sdk/check.js . --strict` green, don't npm install without listing the package in
+your report (the integrator installs), don't commit.
+
+### Host object 1.1 (shell → editor chunks; written by the shell agent – code against this)
+
+Every 1.0 member of `host` stays. New members are **always present** (feature-detect only the server behind them: a
+call throws `Error` with `status` 404/501 and a German/English message when the server route is missing). Client helpers
+for the same routes are in `ui/src/lib/api.js` (`office.data.*`, `office.db.*`, `office.fields.*` …) – chunks may import
+them, but prefer `host.*` (the host adds dialogs, confirmations and the file location).
+
+| member | meaning |
+|---|---|
+| `host.file` | `{ name, path, root?, ext }` of the open file (same object as the `file` prop, kept current after rename/save-as) |
+| `host.data.sources()` | → `[{ id, label, kind: 'table'\|'value', params: [{ id, label, type, options? }] }]` |
+| `host.data.query(source, params?)` | → `{ columns: [{ id, label, type }], rows: [[…]], value?, updatedAt }` |
+| `host.data.subscribe(source, params, cb)` | `cb(result)` at once and on every websocket broadcast `{ type: 'office-data', source }` (fallback: poll every 30 s while visible) → `unsubscribe()` |
+| `host.data.pick({ kind? })` | shell dialog "Insert live data" (source + params + preview) → `{ source, params, label }` or `null` |
+| `host.db.servers()` · `host.db.tables(server, db?)` | Hostwerk's database servers / `[{ db, table, rows?, primaryKey? }]` |
+| `host.db.rows({ server, db, table, offset, limit, sort, filter })` | → `{ columns, rows, total, primaryKey }` (`primaryKey` null = read-only) |
+| `host.db.write({ server, db, table, changes })` | shell **confirm dialog** (n changes, first rows listed) then `POST /office/db/rows` → result, or `null` when the user cancels |
+| `host.db.pick()` | shell dialog "Open a database table" → `{ server, db, table }` or `null` |
+| `host.fields.list()` · `host.fields.value(id, params?)` | live-field catalog `[{ id, label, group, params? }]` / `{ value, text, updatedAt }` |
+| `host.fields.pick()` | shell dialog "Insert field" (catalog, search, preview of the value) → `{ id, params, label }` or `null` |
+| `host.forms.list()` · `host.forms.create({ sheet, columns, title, public })` · `host.forms.open(id?)` | forms of THIS file / new form → `{ id, url }` / shell dialog with link, QR code, responses, delete |
+| `host.rules.get()` · `host.rules.set(rules)` · `host.rules.open({ sheet?, range? })` | rules of THIS file (contract shape) / shell rules editor dialog (prefilled with the selection) |
+| `host.collab.connect({ doc, awareness?, user? })` | needs `yjs` (see "Yjs" below). Connects `doc` (a `Y.Doc` of the shared `yjs`) to `/api/office/collab?path=…` → provider `{ doc, awareness, synced: Promise, status: 'connecting'\|'connected'\|'offline', on(evt, fn), off(evt, fn), destroy() }` (events `status`, `synced`, `peers`). Awareness local state is set to `{ user: { name, color, id } }`; the top bar shows the co-editors' avatars. `host.collab.available()` → bool (server route answers) |
+| `host.remote.start({ notes?, title })` | starts remote control for the slide show → `{ token, url, qr: dataUrl, on(evt, fn), send(msg), stop() }` (events `next`, `prev`, `goto`, `laser`, `peers`); `host.remote.dialog()` shows the QR dialog |
+| `host.ai.ready()` · `host.ai.quick(task, text, { context })` · `host.ai.ask({ prompt, text?, system?, json? })` · `host.ai.panel(question, context)` | Hostwerk's AI with the user's provider (`ready` false = hide AI entries). `quick` = core `/ai/quick/<translate\|explain\|summarize\|describe>`; `ask` = `POST /office/ai` → `{ text, json? }`; `panel` opens Hostwerk's AI side panel (Ctrl+J) |
+| `host.components.ensure(id, { reason })` | component on demand (ids `ocr`, `mermaid`, `cjk-fonts`; aliases `ocr-deu`, `pdf-cmaps` … work too): installed (`state: 'ready'`) → `{ id, base, files: [names] }` at once; else ONE dialog (size, progress) like the engine dialog → `{ id, base }` or `null` (declined). `base` = `/api/office/components/<id>/` (absolute URL for `fetch`/`import`). `host.components.state()` → list |
+| `host.compare(a, b?)` | opens the compare view. `a`/`b` = `{ id }` (version id), `'current'` (unsaved editor state via the saver) or `{ bytes, label }`. Calls the chunk's `Compare` component (see below) in a full-size shell sheet; `b` defaults to `'current'` |
+| `host.palette.register(commands)` | commands for the command palette (**Alt+Q** like Office's "Tell me"/search box, and Ctrl+Shift+P when the chunk did not use that key itself – both are free in Hostwerk): `[{ id, title, group?, keys?, icon?, run, when?() }]`, replaces the chunk's previous list → `unregister()` |
+| `host.insertFiles(cb)` | `cb([{ name, ext, mime, size, bytes(): Promise<Uint8Array>, path?, root? }], { x, y })` when files from Dateien or the desktop are dropped on the editor (the shell shows the drop overlay) → `unregister()`; a chunk without it gets nothing (the shell only opens dropped office files as tabs/new editors) |
+| `host.toast(text, { kind, action: { label, run }, undo })` | toast with an action (undo toasts) |
+| `host.perf(mark)` | `'interactive'` – call once when the document is usable (the shell measures open → interactive per kind) |
+
+**Optional chunk exports (1.1):** `reportsInteractive: true` (the chunk calls `host.perf('interactive')` itself – otherwise
+the first painted frame after mounting counts), `Compare({ a: { bytes, label }, b: { bytes, label }, ext, host })` – side-by-side/inline
+diff view (docs/sheets/slides each their own); `commands` (static palette entries, same shape as above);
+`thumbnail({ bytes, ext }) → Promise<Blob|HTMLCanvasElement|null>` – if a chunk can paint its first page faster/better
+than the generic DOM rasteriser (pdf/slides), the thumbnail queue uses it.
+
+**Yjs:** `yjs`, `y-protocols/sync`, `y-protocols/awareness` are a **shared library chunk** (`ui/assets/lib-yjs.js`, like
+lib-jszip) – `import * as Y from 'yjs'` in a chunk (also inside `y-prosemirror`) resolves to that one instance, the
+same the shell's provider uses (two Yjs copies would break `instanceof`). The provider class is `ui/src/lib/collab.js`.
+
+**Thumbnails (shell):** `PUT /office/thumb?path=|root=&path=&mtime=` raw `image/webp` (≤ 256 KB, 320 px wide) stores a
+generated first-page thumbnail in the data folder (keyed like metadata, dropped when the file's mtime changes);
+`GET /office/thumb?…&v=` serves it, else the embedded one, else 404; `Entry.thumb` = either exists. The shell renders
+missing ones lazily in idle time (`ui/src/lib/thumbs.js`, one at a time, offscreen) with the chunk's `thumbnail()` or
+its `Preview` rasterised, then uploads them.
+
+**File-level routes the shell UI calls (server agent: same shapes, or tell the shell agent):**
+`GET /office/vault` → `{ available, unlocked }` · `POST /office/vault/encrypt {loc}` / `POST /office/vault/decrypt {loc}` → Entry ·
+`POST /office/clean/preview {loc}` → `{ items: [{ id, label, count?, detail? }] }` · `POST /office/clean {loc, remove: [ids], copy}` → Entry ·
+`GET /office/publish/targets` → `[{ id, label, url? }]` (`host.sites`) · `GET /office/publish?path=` → `[{ id, target, url, updatedAt }]` ·
+`POST /office/publish {loc, target, title, path?}` → `{ id, url }` · `DELETE /office/publish/:id` ·
+`GET /office/reports?path=` → `[{ id, schedule: { every: 'day'|'week'|'month', at: 'HH:MM', weekday?, day? }, format, recipients: [{ channel, to }], lastRun?, nextRun? }]` ·
+`POST /office/reports {loc, …}` (with `id` = update) · `DELETE /office/reports/:id` · `POST /office/reports/:id/run` ·
+`GET /office/forms?path=` → `[{ id, url, title, sheet, columns, public, responses? }]` · `DELETE /office/forms/:id` ·
+`GET /office/search?q=&semantic=1` → hits with `score` · `GET /office/backups?path=` → `[{ id, time, size, label? }]` (Hostwerk's
+backup center) · `GET /office/backups/raw?path=&id=` raw · `POST /office/backups/restore {loc, id}` ·
+`GET /office/components` → `[{ id, label, size, installed, progress? }]` · `POST /office/components/install {id}` ·
+`GET /office/collab/state?path=` → `{ peers }` (200 = co-editing available) – websocket `/api/office/collab?path=|root=&path=`,
+binary frames exactly like y-websocket (0 = sync step 1/2/update, 1 = awareness, 3 = query awareness) ·
+`POST /office/remote {loc, title}` → `{ token, url, qr }` · websocket `/api/office/remote?token=&role=presenter|phone`, JSON
+`{ type: 'next'|'prev'|'goto'|'laser'|'notes'|'slide'|'peers', value }` relayed between both roles · `DELETE /office/remote/:token` ·
+`POST /office/ai {task?, prompt, text?, system?, json?, lang, loc}` → `{ text, json? }` · `GET /office/qr?text=` → `image/svg+xml`
+(Hostwerk's `qrcode` via `host.lib`); forms/remote responses may carry `qr` (SVG markup) directly.
+
+**Shell 1.1 – decisions (shell agent)**
+- Icons: `ui/src/lib/fileIcons.jsx` (`<FileTypeIcon name|entry|ext size caption showExt />`, `iconSvg()`), families/colours
+  in `ui/src/lib/fileTypes.js` (pure, `tests/shell-icons.test.js`). ≤ 20 px = coloured tile with a white glyph, ≥ 24 px =
+  paper (Hostwerk's `--surface`) with the tile. Files slots (SDK 3.16, ignored by older Hostwerk): `files.icon`
+  `{ id, match, Component({ name, size, entry }), info(name) → { color, family, label } }` and `files.thumb`
+  `{ id, match, thumb({ root, path, name, mtime, size }) → Promise<url|null> }` (also prefetches the editor chunk).
+- Thumbnails: `ui/src/lib/thumbs.js` queue (idle time, one at a time), renderer `shell/thumbHost.jsx` (React portal into a
+  hidden 820 px stage; mounted by the dialog host, the editor host and the New-dialog screen). The DOM is rasterised
+  with inlined computed styles through an SVG `foreignObject` (Chromium/Electron: canvas stays clean); pdf.js canvases are
+  copied directly. Built-in template thumbnails are cached as data URLs in localStorage (`office:tpl-thumbs`, per chunk
+  version and language). Without `PUT /office/thumb` the pictures live for the session only.
+- Speed: `loader.js` `prefetchEditor` (modulepreload of chunk + shared libs on hover/focus), `warmEditor` (load in idle
+  time: click on a file, Office root opened); chunks stay loaded. `lib/perf.js` measures `office:open:<kind>`
+  (click → interactive) – numbers in `performance` and `localStorage['office:perf']`; `office:perf-log = 1` logs them.
+  The chunk's editor is memoised (`ChunkView`), so status/save-state updates never re-render the document.
+- Editor menus are the shell's own drop-down (`shell/menu.jsx`): Hostwerk's `contextMenu` has no host on screens
+  (`#/office-edit`), so the 1.0 "More" and "Download as" menus did nothing there. (Core could mount `ContextMenuHost` in
+  `app-bare` screens too.)
+- Command palette (`shell/palette.jsx`, ranking `shell/paletteModel.js`, tested): Alt+Q, or Ctrl+Shift+P when the editor
+  did not use it; the chunk's commands + every file action; recently used first (`localStorage['office:palette-recent']`).
+- Feature dialogs (`shell/features.jsx`, `askFeature(type, props)`) – one bus, shown by the `FeatureHost` mounted last
+  (dialog host in `sidebar.footer` and every editor host); the file actions themselves are one list
+  (`shell/fileFeatures.js`) for Files' right-click, the Office section, the editor's menu and the palette.
+- View transitions: `ops.viewTransition(update, 'office-open'|'office-close')` (types, 140–180 ms, off with reduced
+  motion); the editor host fires `office:view` when mounted.
+- The Office section hides Files' own "No file opened" below it (`.fb-folder-pane:has(.of-shell-fsec) > .empty`) – remove
+  once the core does it itself.
+
+### Server 1.1 (server agent – the routes as built; JSON, lists wrapped `{ <key>: [...] }` – `list()` in api.js unwraps)
+
+Modules: `server/v11.js` (wiring) · `routes11.js` (registered before the error handler) · `datasources.js` · `dbsheets.js` ·
+`fields.js` · `forms.js` · `rules.js` · `notify.js` · `collab.js` · `remote.js` · `components.js` · `semantic.js` · `encrypt.js` +
+`cfbwrite.js` · `clean.js` · `sheet.js` (xlsx/ods/csv read + row append) · `zippatch.js` (raw-copy zip patcher) · `extras.js`
+(thumbs, publish store, reports, library snapshots). Tests: `tests/server-v11.test.js`. Every library write fires `onWrite`
+(rules, publish "stale", collab "saved"), renames `onRekey` (rules/forms/publish/reports/rooms follow). `loc` = top-level
+`{ path }` or `{ root, path }` (the vault routes also take `{ loc: {…} }`).
+
+**Websockets – IMPORTANT for the shell:** Hostwerk's core hands only `/ws/*` upgrades of logged-in users to extensions and
+destroys every other upgrade *before* extensions see it (`hostwerk/server/index.js` `onUpgrade`). Connect to
+**`/ws/office/collab?path=|root=&path=`** and **`/ws/office/remote?token=&role=presenter|phone`** (`/api/office/…` is matched
+too but never arrives with today's core – `office.wsUrl()` maps `/api/office/` → `/ws/office/`). A phone without a
+Hostwerk login cannot use a websocket at all: it uses the public token page (SSE + POST) below.
+
+| Route | Shape |
+|---|---|
+| `GET /office/data/sources` | `{ sources: [{ id, label, kind, params: [{ id, label, options? }] }] }` – services, service, resources, system, disks, minecraft, players, playerCount, backups, tasks, websites, databases, certificates, uptime, hostwerk |
+| `GET /office/data/query?source=&<param>=…` (or `params=<json>`) | `{ columns: [{ id, label, type }], rows, value?, updatedAt }`; broadcast `{ type: 'office-data', source, updatedAt }` after matching core events (only for sources queried in the last 15 min, ≤ 1 per 3 s and source) |
+| `GET /office/db/servers` · `/office/db/databases?server=` · `/office/db/tables?server=&db=` | `{ servers: [{ id, name, type, kind: sql\|mongo, engine, running, readOnly }] }` · `{ databases: [{ name, system }] }` · `{ tables: [{ name, view, rows }] }` |
+| `GET /office/db/rows?server=&db=&table=&offset=&limit=(≤1000)&sort=&dir=&filter=<json [{ col, op, value }]>` | `{ columns: [{ id, label, type, key, nullable }], rows, total, primaryKey: [cols], readOnly, offset, limit }` (ops `= != < > <= >= contains LIKE NOT LIKE IS NULL IS NOT NULL`, through the core's own drivers) |
+| `POST /office/db/rows {server, db, table, changes: [{ op: update\|insert\|delete, key: { pk: v }, values }]}` | one transaction (MySQL/MariaDB/PostgreSQL/SQLite; MongoDB one by one, `atomic: false`); each update/delete must hit exactly one row, else rollback + 409 → `{ ok, applied, results }`; 403 read-only connection, 409 no primary key / view |
+| `GET /office/fields` · `GET /office/fields/value?id=&params=<json>` | `{ fields: [{ id, label, group, params }] }` – date, time, datetime, user, service, players, system, hostwerk, cell (`{ path\|root+path, sheet, cell }`), docprop (`{ path, prop }`) · `{ value, text, updatedAt, ttl }` |
+| `GET /office/forms[?loc]` · `POST /office/forms {loc, sheet, title, description, columns: [{ label, type: text\|textarea\|number\|email\|date\|choice\|checkbox\|tel\|url, required, options, help, min, max }], timestamp (default true), thanks, notify: channel?, public: { enabled, expires (days or ms), password }}` | `{ forms: [Form] }` / Form `{ id, title, path, root, sheet, columns, public: { enabled, expires, password: bool }, closed, responses, lastResponse, pending, url, urls, open }`; an empty sheet gets a header row |
+| `PUT /office/forms/:id` · `POST …/:id/close` · `DELETE …/:id` · `GET …/:id/pending` · `POST …/:id/pending/ack {count}` | answers arriving while the file is open (soft lock or co-editing room) wait in `pending` – written ≤ 30 s after the lock is gone, or the editor applies them and acks; broadcast `{ type: 'office-form', id, path, pending }` |
+| public `GET/POST /api/office/pub/form/:token` · `POST …/unlock {password}` | form page (own CSP, honeypot `website`, signed time stamp ≥ 2 s, 10 answers/10 min/address, 300/h/form, password cookie) → row appended through `Library.write` (version + mtime check like a save) |
+| `GET /office/rules?loc` · `PUT /office/rules?loc` (`{ rules }` or `[...]`) · `POST /office/rules/test {loc, rules?}` · `GET /office/rules/channels` | `{ rules: [rule + last: { met, at, value }] }`, rule `{ id, name, on, when: { sheet, cell \| range, op: > < >= <= = != contains notContains empty notEmpty changed, value, agg: any\|all\|sum\|count\|avg\|min\|max }, then: { notify: { channel: hostwerk\|discord\|ntfy\|mail\|all, text ({value} {cell} {file} {sheet} {rule}) } } }`; fires on "not met → met" (every change for `changed`) after saves/appends and every 2 min (stat first) · `{ channels: [{ id, label, ready }] }` |
+| `GET /office/collab/state?loc` · ws `/ws/office/collab?loc` | `{ key, peers: [{ id, user, leader }], ws, yjs }` · y-websocket framing (0 sync – step 1 is always answered with a step 2, 1 awareness, 3 query) + **type 100 = control JSON (varString)**: server → `{ type: 'hello', id, leader, peers, user, fresh, mtime }`, `{ type: 'leader', leader: true }` (hand-over), `{ type: 'peers', peers }`, `{ type: 'saved', mtime, by }` (any write of the file), `{ type: 'reset', reason, leader }` (log too big: leader saves, all reload); client → `{ type: 'saved', mtime }` (leader). The leader saves with the normal `PUT /office/raw`. The server keeps the update log (compacted with `Y.mergeUpdates` only where `yjs` is resolvable server-side – not in the package), ≤ 24 clients/room, 200 rooms, 48 MB log, rooms dropped 2 min after the last client; team members over remote access need the right for `PUT /office/raw` |
+| `POST /office/remote {loc?, title?}` · `DELETE /office/remote/:token` · ws `/ws/office/remote?token=&role=presenter\|phone` | `{ token, url, urls, qr (SVG markup), ws, expires (12 h), lan: { reachable, remote } }` (`reachable` false = only localhost URLs → ask to switch on remote access). Presenter → `{ type: 'slide', value: n \| { index, total, title, notes } }`, `{ type: 'notes', value }`, `{ type: 'timer', value: { running, elapsed, startedAt } }`, `{ type: 'blank', value }`, `{ type: 'state', … }`, `{ type: 'end' }`; server → presenter `{ type: next\|prev\|first\|last\|goto\|blank\|laser, value, cmd, n?, x?, y?, on? }`, `{ type: 'peers', value }`; phone (ws) sends `{ type: 'next' }` …, gets `{ type: 'state', slide, total, title, notes, blank, timer, presenter }` |
+| public `GET /api/office/pub/remote/:token` (+ `/app.js`, `/events` SSE, `POST /cmd {cmd, n, x, y, on}`) | the phone page behind the QR code (20 commands/s) |
+| `GET /office/components` · `POST /office/components/install {id}` · `DELETE /office/components/:id` · `GET /office/components/:id/<file>` | `{ components: [{ id, label, version, license, download, size, installed, state: missing\|installing\|ready\|error, progress, error, files, base, aliases }] }`, broadcast `{ type: 'office-component', id, state, progress }`; aliases `pdf-cmaps`/`cjk` → `cjk-fonts`, `ocr-deu`/`ocr-eng` → `ocr`. Files: ocr `tesseract.min.js`, `worker.min.js`, `core/tesseract-core-{simd-,}lstm{.wasm.js,.js,.wasm}`, `lang/{deu,eng}.traineddata` (plain, use `gzip: false`); mermaid `mermaid.min.js`; cjk-fonts `cmaps/*.bcmap`, `standard_fonts/*` (pdf.js `cMapUrl`/`standardFontDataUrl` = `<base>cmaps/` / `<base>standard_fonts/`). ETag + `immutable` |
+| `GET /office/search/meaning?q=&dir=` · `GET /office/search?q=&semantic=1` | `{ hits: [Entry + snippet, score], mode: embeddings\|ai-terms\|fulltext, … }` |
+| `GET /office/encrypt/state?loc` · `POST /office/encrypt {loc, password \| vault: true, saveToVault?, mode: inplace\|copy}` · `POST /office/decrypt {loc, password \| fromVault: true, mode: bytes (default – raw response, file stays encrypted) \| inplace \| copy}` · `PUT /office/encrypt/raw?loc&mtime=` (raw plain bytes; header `x-office-password` or vault) | `{ encrypted: ooxml\|odf\|null, supported, vault: { available, locked, hasEntry } }` · `{ ok, mtime, size, version, vaultSaved, generated, versionsWithPlainText }` (in place keeps a "Before encrypting" version – offer deleting old plain versions) · 403 wrong password · PDF → 501 |
+| `GET /office/vault` · `POST /office/vault/encrypt {loc}` · `POST /office/vault/decrypt {loc}` | `{ available, unlocked }` · Entry + `result` (generated password in the passwords extension's `passwordVault`, source `office`; 409 no vault, 423 locked) |
+| `POST /office/clean/preview {loc}` · `POST /office/clean {loc, remove: [ids], copy}` or `{loc, options: { id: false … }, mode: copy\|inplace\|download}` | `{ items: [{ id, label, count }], warnings: [{ id, label }] }` (ids author, comments, revisions, hidden, custom, thumbnail, rsid, exif, templates) · Entry + `report` (shell shape) / `{ ok, report, entry \| mtime }` |
+| `GET /office/publish/targets` · `GET /office/publish?loc` · `POST /office/publish {loc, target: id \| { web, vhost }, sub \| path, title, files?: { 'index.html': string, … ≤ 12, ≤ 2 MB, html/css/js/svg/json/txt }, auto}` · `PUT /office/publish/:id {files, auto}` · `DELETE /office/publish/:id` | `{ targets }` (`host.sites.targets()`) · `{ pages, publications }` with `url`, `site`, `stale` · without `files` a plain text page is published; after each save a page with `auto` is marked stale and `{ type: 'office-publish', id, path }` is broadcast – the open editor re-renders and PUTs (images as inline data: URIs – `host.sites` only takes text files) |
+| `GET /office/reports?loc` · `POST /office/reports {loc, schedule: { every: hourly\|daily\|weekly\|monthly (day/week/month too), time \| at: 'HH:MM', weekday, day }, channel \| recipients: [{ channel }], saveCopy, title, on}` (`id` = update) · `PUT/DELETE /office/reports/:id` · `POST …/:id/run` | PDF through the converter, sent to the channel (Discord as file, mail with attachment via Hostwerk's relay, else a Hostwerk notification), copy `<name> <date>.pdf` next to the file; own minute timer, missed runs run once |
+| `GET /office/library-backups` · `POST /office/library-backups` · `POST …/restore {id, paths?}` · `GET /office/backups?loc` · `GET /office/backups/raw?loc&id=` · `POST /office/backups/restore {loc, id}` | daily zip snapshot of the library (≤ 2 GB, keep 7) in Hostwerk's backup center ("Office library"); restore never deletes, overwritten files keep their content as a version |
+| `PUT /office/thumb?loc&mtime=` (raw PNG or WebP ≤ 2 MB) · `GET /office/thumb?loc` | per file key + mtime; GET: embedded first, then the rendered one (`x-thumb: rendered`), ETag/304; `Entry.thumb` true for both |
+| `GET /office/qr?text=` · `POST /office/ai {task?, prompt, text?, system?, json?, lang}` | `image/svg+xml` · `{ text, json? }` (ctx.ai: quick tasks or `chats.oneShot` with the user's provider) |
+| notifications | `host.notifications` event types `rule`, `form`, `report` (each with its switch in Hostwerk's settings) |
+
+**Server 1.1 limits:** merged into "Known limits" below.
+
+### Integration 1.1 (integrator's decisions – the round's parts put together)
+
+**Package, size, CI**
+- **What counts is the shipped package.** The catalog builds its entry from the release zip (`hostwerk-public/scripts/
+  build-extension-catalog.js`: download → unzip → `sdk/check.js --strict` on the unpacked folder) and Hostwerk runs
+  `checkPackage` on the unpacked package on install. The zip is made by the CI package step (`git ls-files` minus `.github/`,
+  `tests/`, `tools/`, `scripts/`, `ui/src/`, `node_modules/`, `package*.json`, `docs/*.md`, `ARCHITECTURE.md`). So the
+  repo CI now copies exactly those files into `$RUNNER_TEMP/pkg` and runs `check.js --strict` there (same filter as the
+  package step – keep both in sync with `tools/package.js`). 1.1.0: **7.47 MB unpacked, 2.83 MB zip, 73 files** (budget
+  9.8 MB, limit 10 MB); the full checkout is 11.75 MB (ui/src 3.8 MB, tests 0.4 MB) and fails `check.js .` on size only.
+- **Consequence:** installing from the *source folder* (developer mode "Ordner", HW_EXT_SOURCE, Hostwerk's
+  `scripts/ext-native-test.js`) runs the same size check on the whole checkout and refuses it. Developers install the
+  package folder (`node tools/package.js --dir <folder>`). The clean fix is in the core (size check without the paths the
+  release package excludes, or ext-native-test on the packaged files) – left to the core/user (not touched here).
+- **Dedupe check** (`node tools/build.js --analyze`, esbuild metafile): only small duplicates are left – lucide-react
+  icons spread over the chunks (≈ 100 KB in total), dompurify in docs + viewer (30 KB), diff-match-patch in pdf + docs-math
+  (19 KB); jszip, pdf.js and yjs are shared chunks, formula/numfmt code lives only in sheets. Not worth another shared chunk
+  at 76 % of the budget. CSS is minified by esbuild; the two PNG screenshots stay PNG (README tooling expects them).
+- **Manifest:** version 1.1.0, `data/office-components` added, **`sdkVersion` stays "3.15"** – nothing on the server needs
+  3.16 (`host.*` members used are all in 3.15), the SDK 3.16 parts are UI slots only (`files.icon`, `files.thumb`), which
+  older Hostwerk versions ignore. Released Hostwerk 3.2.2 installs 1.1.0; Files' coloured icons and thumbnails appear with
+  Hostwerk 3.2.3 / SDK 3.16. `files.icon` matches only the families Office opens (documents, spreadsheets, presentations,
+  PDF, mail, contacts, calendars, e-books, diagrams, OneNote, Publisher, Project, Google, iWork) – text, code, images,
+  archives, databases and folders keep Hostwerk's own icons.
+- **Update safety:** an update activates the new module while the old one shuts down; the old `deactivate()` used to stop
+  the *new* activation's state and remove the new "Office documents" root (seen live). Now every activation keeps its
+  own state (WeakMap by host), shutdown runs once, and 3 s after activation the root is added again (covers updates from
+  1.0.x, whose old code still removes it).
+
+**Translations:** `locales/parts/*.json` (server, shell, docs, sheets, slides, pdfview – 1102 new keys) merged into
+`locales/de.json` (3,928 keys) and deleted. Duplicates with different German resolved to the Office/Hostwerk wording: After
+→ Nachher, Collapse/Show the ribbon → Menüband reduzieren/anzeigen, Word count → Wörter zählen, Flowchart →
+Flussdiagramm, Try again → Erneut versuchen, Comment → Kommentar, Area → Fläche, Show → Anzeigen, Unlock → Entsperren,
+Bold → Fett, Stop → Stopp, Location → Ort, Symbols → Symbole, Table style options → Tabellenformatoptionen, Shape fill →
+Fülleffekt, Add to/Remove from favourites → Zu den Favoriten / Aus den Favoriten entfernen, Message → Meldung, Not now →
+Jetzt nicht, Fly in → Hineinfliegen, Process → Prozess, Icons → Piktogramme, Click to add text → Text durch Klicken
+hinzufügen, the msg/RTF sentence as before; "Kennwort" → "Passwort" everywhere (Hostwerk's word), "Backup" → "Sicherung"
+(glossary). Where the meaning differed the key was changed in the code: PDF permission "Add comments" (Kommentieren),
+PDF redaction mark "Marked area" (Markierter Bereich), signature pen "Thick" (Kräftig), sheets "Stop co-editing",
+sparkline "Location range" (Positionsbereich), docs field "Number of words" (Anzahl der Wörter). `i18n-scan` lists ≈ 850
+"texts" – code, XML, CSS, font/theme names, AI prompts (sent to the AI, not shown), German function-argument names and the
+built-in templates' own German; the real UI texts it found without German were added.
+
+**Cross-part fixes**
+- **Co-editing:** the provider (`lib/collab.js`) now reads the server's control channel (type 100): `hello` (leader,
+  `fresh`, the server-side user name), `leader`, `peers`, `saved`, `reset`; `reportSaved()`. The editor host learns every
+  save of the room (`onRemoteSaved` → its `mtime`), so a co-editor that later becomes the saver gets no false "changed on
+  disk" conflict. Docs seed the shared document only in a fresh room (server `hello.fresh`), otherwise wait for the content
+  (no duplicated text when two open at once). Co-editors without a browser name get the server's user name instead of
+  "Guest 23". Sheets' auto-join read `peers` as a number (the server sends a list) – fixed. Live: two isolated browser
+  contexts converge for docs (y-prosemirror, both edits in the saved docx, the second editor stays clean), sheets (cells +
+  formulas both ways) and slides (title text). Login-free co-editing via a share link needs a core decision (public `/ws`
+  upgrade) – co-editing is for logged-in users.
+- **Remote control:** the slides chunk sent `{ idx, pos, … }` as `slide` value (the server reads `index/slide`) – the
+  phone always showed slide 1. It now sends the server's `state` shape (position among shown slides, total, title,
+  notes, black, timer with elapsed time); `blank`/`first` commands are mapped. Live: phone page (no login, SSE + POST) ↔
+  presenter, prev/next both ways, the phone mirrors the slide.
+- **Components:** `host.components.ensure` matches ids *and* aliases (`ocr-deu` → `ocr`, `pdf-cmaps` → `cjk-fonts`),
+  treats `state: 'ready'` as installed and returns `{ id, base, files }`; the component dialog reads the server's numeric
+  progress, shows the download size and the install error. The server lists `files` as names (`fileCount` = number).
+  `cjk-fonts` now also brings static TrueType **Noto Sans SC/JP/KR** (weight 400, Google Fonts' versioned files – the
+  google/fonts repo only has variable fonts whose default instance is Thin) + OFL, all SHA-256-pinned (download ≈ 33 MB);
+  `tests/pdf-cjk-font.test.js` (runs with `OFFICE_CJK_FONTS=<folder>`) embeds Chinese, Japanese and Korean annotation text
+  as a subset (copyable). Live: all three components installed and verified in the throwaway instance.
+- **Signatures:** `GET/PUT /office/signatures` `{ signatures: [{ url, w, h, at }] }` – per Hostwerk user in
+  `office-data/signatures.json`, at most 8, PNG/JPEG/WebP data URLs ≤ 512 KB each, 2 MB together.
+- **Encrypted Office files:** the editor host checks after reading (OOXML ext + compound file, or any ODF file) with
+  `GET /office/encrypt/state`; encrypted → vault first (when it holds this file's password), else a password dialog (wrong
+  password asks again), `POST /office/decrypt` (mode bytes – the file stays encrypted), a calm banner; saving goes through
+  `PUT /office/encrypt/raw` with the same password (or the vault), "keep my version" in a conflict writes the copy
+  encrypted too, and no thumbnail is made of an encrypted file. Live: a docx encrypted by the server and an xlsx encrypted
+  by real Excel 16 open, edit, save, stay encrypted (and open in Word/Excel with the password – see the Office check).
+- **Toast error:** Hostwerk's translating `toast.error` (core `extNative.js`) copies errors with `Object.assign(Object.create
+  (proto), e, { message })`, which throws "Cannot set property message … which has only a getter" for DOMExceptions
+  (AbortError, NotAllowedError …). `ui/src/lib/toastfix.js` (imported first by the main module; chunks share the same toast
+  object) turns such errors into plain `Error`s first. (A core fix would be `new Error(tt(e.message))`.)
+- **Thumbnails:** the queue asks `GET /office/thumb?…&probe=1` – the server answers 204 when there is none (was a 404 in the
+  console for every new file). Text-only documents render with visible text (checked by pixels).
+- **Palette:** ranking also uses the chunks' `words` (docs' "/" commands).
+- Compare view of documents shows objects (diagram, field, formula, picture) as ◆ instead of a replacement box.
+- Hostwerk UI lint: the xlsx table part's XML root is no HTML table (built via a constant), slicer corners use `--r-sm`.
+- Obsolete `ui/src/editors/docs-collab/` deleted.
+
+**Live test (throwaway Hostwerk 3.2.2 working tree, package installed from the release zip, 2026-11-20, Chrome
+headless, two isolated contexts where needed):** create/edit/save docs, sheets, slides, PDF · command palette · thumbnails
+(grid in Files) · versions + compare · clean (copy) · encrypt/decrypt (server + Excel-made) · publish as web page (test web
+folder) · scheduled report "run now" (PDF via Microsoft Office COM, copy next to the file) · rules (test → met) · forms
+(public page in a second client, row arrives in the sheet) · live data table in a sheet · SQLite table as sheet (read,
+write-back with confirm via the route) · live field, LaTeX formula and Mermaid diagram in a doc (saved as field, OMML,
+picture) · co-editing docs/sheets/slides · remote control · OCR (scanned page → searchable text) · redaction (e-mail gone
+from the file, other text kept) · light/dark, de/en, 390/1440 px without horizontal scrolling · console free of errors
+except expected ones (403 for a wrong file password, 404 of Hostwerk's own `/api/mailservers`).
+
+### Office check 1.1 (real Microsoft Office 16, German, 2026-11-20 – combined final run)
+
+`../../office-check/final-1.1-2026-11-20/` (copy of the docs11 harness, `check.ps1` + password support): sheets files
+regenerated with the current code (`sheets-1.1/gen.mjs`), the docs and slides agents' 1.1 files (`docs11-2026-11-20/src`,
+`c11/files`) and files saved in the live test (co-edited doc, doc with diagram + field + formula, form rows, live data +
+database sheet, three-slide deck, and **encrypted** files: docx/xlsx/pptx encrypted by our server, an xlsx encrypted by
+real Excel and re-saved by our editor). One file per fresh Office process, no Office running before (the driver refuses
+otherwise) and none left after (only processes it started are killed – Word here stays open after Quit). `node
+scripts/drive.mjs results/jobs.json results/main.jsonl - --pdf --wordpdf` and `… jobs-strict.json strict.jsonl - --strict`.
+
+| Group | Files | Open (no repair) | Strict open (alerts on) | Facts |
+|---|---|---|---|---|
+| Sheets 1.1 (tables + structured refs, pivot, objects/sparklines/shapes, 1904 dates, chart + outline, LAMBDA family) + round trips | 12 | 12/12 | 12/12 | 46/46 checked values match; `lambda*.xlsx` 0/17 – this Excel build has no LAMBDA/LET/MAP (`#NAME?` also for formulas typed into it, sheets-1.1 probe) – formulas are kept as written |
+| Docs 1.1 (sections, headers, fields, OMML equations, content controls, compare result) docx/dotx/odt + round trips | 6 | 6/6 | 6/6 | 3 fields, 3 equations, 1 picture, 6 content controls (docx) as written |
+| Slides 1.1 (chart with workbook, morph, animations, custom geometry) pptx/pptm/odp + round trip | 4 | 4/4 | 4/4 | 4 slides, titles match |
+| Live-test files (co-edit, diagram/field/formula, forms, live data + DB sheet, decks) | 6 | 6/6 | 6/6 | text of both co-editors; 1 field, 1 equation, 1 picture; sheets Tabelle1 + kunden |
+| Encrypted (server: docx, xlsx, pptx; Excel-made xlsx re-saved by our editor) – opened with the password | 4 | 4/4 | 4/4 | content incl. the edit made in our editor ("VERSCHLUESSELT") |
+
+All 32 files: opened, nothing repaired, every PDF export worked (32/32).
+
+
 ## Known limits
 
 **Not verified for real** (no instance / software on the build machine): Electron-only paths (in-app web window,
-presenter view as a Hostwerk window, Google sign-in – the shell itself was tested live in a throwaway Hostwerk 3.2.1 in
-Chrome, light/dark, de/en, 390–1440 px), the ONLYOFFICE container (Docker not available; `host.docker.internal` must reach Hostwerk – with
-Hostwerk's own WSL engine set `integrations.hostUrl` to the LAN address if not), Visio conversion, engine installs on
-Linux (deb extract) and macOS (dmg), real-world .doc/.ppt files (only synthetic ones in the tests), .msg (no sample).
+presenter view as a Hostwerk window, Google sign-in, the packaged app's `--open-file` start), the ONLYOFFICE container
+(Docker not available; `host.docker.internal` must reach Hostwerk – with Hostwerk's own WSL engine set
+`integrations.hostUrl` to the LAN address if not), Visio conversion, engine installs on Linux (deb extract) and macOS (dmg),
+real-world .doc/.ppt files (only synthetic ones in the tests), .msg (no sample), ODF encryption against LibreOffice (Microsoft
+Office opens no password-protected ODF at all), the PDF "Compare" button (file picker – the diff itself is unit-tested),
+MariaDB/PostgreSQL/MongoDB as sheets (only SQLite was live-tested), the vault as password source (passwords extension not
+installed in the throwaway instance), real notification channels (Discord, ntfy, mail).
+
+**Package / core:** installing from the source folder (developer mode, `HW_EXT_SOURCE`, Hostwerk's
+`scripts/ext-native-test.js`) fails Hostwerk's 10 MB size check because the checkout carries ui/src and tests (11.75 MB) –
+install `node tools/package.js --dir` instead; a core change is needed for the source folder (see "Integration 1.1").
+Co-editing needs a Hostwerk login (no public websocket upgrade in the core; the phone remote works without login).
+Hostwerk's translating `toast.error` breaks on DOMExceptions (worked around in `lib/toastfix.js`).
 
 **Shell:** "Download as" uses the `<a download>` save dialog; own templates in the Templates view open the New dialog;
-dashboard tile only. A lock left by a crashed browser shows "open" for up to 5 minutes. The real `--open-file` start of the
-packaged desktop app was not run (the flow was checked with the core's `POST /files/open-path` and the editor screen).
+dashboard tile only; a lock left by a crashed browser shows "open" for up to 5 minutes; the docs palette lists the "/"
+commands and the file actions (no formatting commands); thumbnails of a one-line document look nearly empty (they are
+true to the page); a wrong file password shows one 403 in the browser console.
 
-**Backend:** .xls (BIFF) text is not in the search index; wps/wpd/wri/abw/lwp/hwp text only via the engine; iWork text
-is a heuristic; no ZIP64 (office files > 4 GB); the private engine needs ~1.5 GB on disk (download ≈ 360 MB); Google
-Drive needs the user's own OAuth client ("Desktop app") – Hostwerk ships none.
+**Backend:** .xls (BIFF) text is not in the search index; wps/wpd/wri/abw/lwp/hwp text only via the engine; iWork text is a
+heuristic; no ZIP64 (office files > 4 GB); the private engine needs ~1.5 GB on disk (download ≈ 360 MB); Google Drive needs
+the user's own OAuth client. PDF passwords are set by the PDF editor itself (AES-256) – the server's `/office/encrypt`
+answers 501 for PDF; PDF cleaning blanks Info/XMP in place (uncompressed parts only – object streams are reported); hidden
+text = Word runs with `w:vanish` and ODF hidden-text fields; accepting a deleted Word paragraph mark keeps the paragraph;
+the co-editing room keeps the Yjs update log uncompacted (no yjs on the server) – over 48 MB the leader saves and everyone
+reloads; the time machine only snapshots Hostwerk's settings – the library goes to the backup center (own daily zip);
+MongoDB writes are not atomic; reports go to Hostwerk's configured alert channel/address (no per-report recipients);
+the form time stamp lands in the sheet as text.
 
-**Docs:** print layout paginates by blocks (a block taller than a page runs over the gap); columns shown in web layout
-only; text boxes become call-out boxes; equations are linear text (docx: real OMML); header/footer editing is plain
-text with fields; content controls are unwrapped; several sections share one page setup in the editor; paragraph
-splits/joins, table structure and formatting edits are not recorded as tracked changes; Word 6/95 and encrypted .doc
-are not read; commentsIds/commentsExtensible are dropped; PDF export without engine uses the print dialog. Seen once in
-the live test, not reproducible: after inserting a table a mouse double-click selection was not taken over.
+**Docs:** print layout paginates by blocks (a block taller than a page runs over the gap); columns are shown in web layout
+only; Word 6/95 and encrypted *.doc* (binary) are not read (the engine opens 6/95); PDF export without the engine uses the
+print dialog; diagrams are pictures with their source in the alt text (Word shows the picture); seen once in the 1.0 live
+test, not reproducible: after inserting a table a mouse double-click selection was not taken over.
 
-**Sheets:** no LAMBDA helpers, structured table references, 3D references, intersection operator, R1C1 display,
-iterative calculation; 1904 dates not shifted; pivot tables, slicers, sparklines, icon sets,
-shapes, form controls, external links, what-if tables and Power Query are kept but not editable; edited Excel charts are
-rewritten in a simple form; no image insertion; ODS/XLS/XLSB without engine: values/formulas/number formats only (no
-styles, charts, images; .xls without formulas); old non-Western codepages of .xls/.dbf; no outline gutter; rich text in
-cells edited as plain text; the settings gridlines/headings/font are the defaults of new sheets (a file keeps its own);
-function names in other languages than English/German are not mapped.
+**Sheets:** form controls, external links, what-if tables and Power Query are kept but not editable; edited Excel charts
+are rewritten in a simple form; ODS/XLS/XLSB without the engine: values, formulas and number formats (no styles, charts,
+images); function names in languages other than English/German are not mapped; the settings gridlines/headings/font are
+the defaults of new sheets (a file keeps its own).
 
-**Slides:** charts written without embedded workbook; emoji icons only; outline view edits title + first body
-placeholder; comments without replies UI; no rulers; motion paths, emphasis/exit animations and morph kept but not
-editable; ppt: no old build lists, tables arrive as groups, no comments/sounds/encrypted files, EMF/WMF not displayed;
-odp: no form-control bindings, no change tracking, two-stop gradients; fodp import only; built-in PDF export is raster
-(exact with the engine); PNG export/print need `img-src data:` and system fonts.
+**Slides:** outline view edits title + first body placeholder; ppt: no old build lists, tables arrive as groups, no
+comments/sounds/encrypted files; odp: no form-control bindings, no change tracking; PNG export/print need `img-src data:`
+and system fonts.
 
-**PDF + viewer:** pdf.js CMaps and standard fonts are not bundled (rare CJK PDFs with non-embedded fonts); annotation
-texts are WinAnsi (other characters become "?"); after reopening, own annotations are ordinary PDF annotations; pages
-inserted from other PDFs lose their forms/outline; encrypted PDFs are read-only; signatures are kept only in this
-browser's localStorage; .msg bodies that are RTF only are not rendered; vsd/pub/one/mpp/accdb/mdb without engine show
-extracted text only; vsdx themes/gradients/connector routing/EMF images simplified.
+**PDF + viewer:** OCR languages German + English (component); redacted pages become pictures with an invisible text layer
+(annotations and form fields on those pages go); after reopening, own annotations are ordinary PDF annotations;
+vsd/pub/one/mpp/accdb/mdb without the engine show extracted text only; vsdx connector routing is simplified.
 
 **Bundles:** jszip's `setImmediate` polyfill and pdf.js' feature test contain `new Function` (never reached with our
-options; no `eval(` anywhere – the catalog check passes); chunk sizes: docs 817 KB, pdf 524 KB + worker 1.3 MB, sheets
-1.1 MB, slides 459 KB, viewer 172 KB, shared lib-jszip 96 KB + lib-pdfjs 324 KB; package ≈ 8.8 MB of 10 MB (six screenshots 0.58 MB).
+options; no `eval(` anywhere – the catalog check passes). 1.1.0 chunks (js + css): main 320 KB, docs 1041 KB (+ docs-math
+225 KB lazy), sheets 1302 KB, slides 620 KB (+ slides-extra 63 KB lazy), pdf 725 KB + worker 1293 KB, viewer 212 KB,
+shared lib-jszip 96 KB, lib-pdfjs 324 KB, lib-yjs 98 KB; shipped package 7.47 MB of 10 MB (six screenshots 0.58 MB).

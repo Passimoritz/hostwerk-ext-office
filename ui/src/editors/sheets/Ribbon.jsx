@@ -8,6 +8,8 @@ import {
   Filter, FilterX, Search, ArrowDownAZ, ArrowUpZA, ArrowDownWideNarrow, Link, StickyNote, MessageSquareX, Printer, Eye, Snowflake, ZoomIn, ZoomOut,
   ListChecks, SquareFunction, Calculator, Plus, Trash2, Palette, DecimalsArrowLeft, DecimalsArrowRight, AArrowUp, AArrowDown, Eraser, Group, Ungroup,
   RefreshCw, CodeXml, PanelTop, BetweenHorizontalStart, BetweenVerticalStart, Table, Columns3, Rows3, FileSpreadsheet, Type, Replace, Lock,
+  Image as ImageIcon, Shapes, TableProperties, ChartSpline, Radio, Database, ClipboardList, BellRing, Users, GitCompare, Sparkles, Settings2,
+  ChevronUp, Save, CalendarDays, LayoutGrid, Table2, Trash, Pin,
 } from 'lucide-react';
 import { DropBtn, SplitBtn, pickColor, anchorOf, showMenu } from './menus.jsx';
 import { CHART_TYPES } from './chartData.js';
@@ -27,10 +29,18 @@ const Tool = ({ icon: I, label, title, kbd, onClick, active, disabled, wide }) =
 const Group_ = ({ label, children }) => <div className="of-sheet-rgroup" role="group" aria-label={label}><div className="of-sheet-rgroup-body">{children}</div><div className="of-sheet-rgroup-label">{label}</div></div>;
 
 export function Ribbon({ run, cur, flags }) {
-  const [tab, setTab] = useState('home');
+  const [tab0, setTab] = useState('home');
+  const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem('of-sheet-ribbon') === 'min'; } catch { return false; } });
+  const [peek, setPeek] = useState(false);
+  const P = flags.plus || {};
+  const collapse = (v) => { setCollapsed(v); setPeek(false); try { localStorage.setItem('of-sheet-ribbon', v ? 'min' : ''); } catch { /* private mode */ } };
   const ro = flags.readOnly;
   const s = cur || {};
   const TABS = [['home', t('Home')], ['insert', t('Insert')], ['layout', t('Page layout')], ['formulas', t('Formulas')], ['data', t('Data')], ['review', t('Review')], ['view', t('View')]];
+  // contextual tabs (like Excel: they appear while a table, pivot table or object is selected)
+  const CTX = [P.inTable && ['ctx-table', t('Table design')], P.inPivot && ['ctx-pivot', t('PivotTable')], P.objSel && ['ctx-obj', P.objSel.kind === 'image' ? t('Picture') : t('Shape format')]].filter(Boolean);
+  const tab = tab0.startsWith('ctx-') && !CTX.some((x) => x[0] === tab0) ? 'home' : tab0;
+  const shapeItems = () => [['rect', 'Rectangle'], ['roundRect', 'Rounded rectangle'], ['ellipse', 'Oval'], ['triangle', 'Triangle'], ['diamond', 'Diamond'], ['rightArrow', 'Arrow'], ['star5', 'Star'], ['callout', 'Speech bubble'], ['line', 'Line'], '-', ['textbox', 'Text box']].map((x) => (x === '-' ? '-' : { label: t(x[1]), onClick: () => run('shape', x[0]) }));
   const numPresets = flags.formatPresets;
   const borderItems = () => [
     { label: t('Bottom border'), onClick: () => run('border', 'bottom') }, { label: t('Top border'), onClick: () => run('border', 'top') },
@@ -59,6 +69,7 @@ export function Ribbon({ run, cur, flags }) {
       { label: t('Green – yellow – red'), onClick: () => run('cfScale', ['#63BE7B', '#FFEB84', '#F8696B']) }, { label: t('Red – yellow – green'), onClick: () => run('cfScale', ['#F8696B', '#FFEB84', '#63BE7B']) },
       { label: t('White – green'), onClick: () => run('cfScale', ['#FFFFFF', '#63BE7B']) }, { label: t('White – red'), onClick: () => run('cfScale', ['#FFFFFF', '#F8696B']) }, { label: t('Blue – white – red'), onClick: () => run('cfScale', ['#5A8AC6', '#FFFFFF', '#F8696B']) },
     ] },
+    { label: t('Icon sets'), items: Object.entries({ '3Arrows': 'Arrows', '3TrafficLights1': 'Traffic lights', '3Flags': 'Flags', '3Symbols': 'Symbols', '3Triangles': 'Triangles', '3Stars': 'Stars', '4Rating': 'Rating', '5Quarters': 'Quarters', '5Arrows': 'Five arrows' }).map(([id, l]) => ({ label: t(l), onClick: () => run('iconSet', id) })) },
     '-',
     { label: t('New rule …'), onClick: () => run('cfNew') },
     { label: t('Clear rules from selected cells'), onClick: () => run('cfClear', 'sel') },
@@ -131,11 +142,18 @@ export function Ribbon({ run, cur, flags }) {
   return (
     <div className="of-sheet-ribbon">
       <div className="of-sheet-rtabs" role="tablist" aria-label={t('Ribbon')}>
-        {TABS.map(([id, label]) => <button key={id} type="button" role="tab" aria-selected={tab === id} className={`of-sheet-rtab${tab === id ? ' is-on' : ''}`} onClick={() => setTab(id)}>{label}</button>)}
+        <span className="of-sheet-qat" role="group" aria-label={t('Quick access')}>
+          <Tool icon={Save} label={t('Save')} kbd="Ctrl+S" disabled={ro} onClick={() => run('save')} />
+          <Tool icon={Undo2} label={t('Undo')} kbd="Ctrl+Z" disabled={ro} onClick={() => run('undo')} />
+          <Tool icon={Redo2} label={t('Redo')} kbd="Ctrl+Y" disabled={ro} onClick={() => run('redo')} />
+        </span>
+        {TABS.map(([id, label]) => <button key={id} type="button" role="tab" aria-selected={tab === id && (!collapsed || peek)} className={`of-sheet-rtab${tab === id && (!collapsed || peek) ? ' is-on' : ''}`} onClick={() => { if (collapsed) setPeek(!(peek && tab === id)); setTab(id); }} onDoubleClick={() => collapse(!collapsed)}>{label}</button>)}
+        {CTX.map(([id, label]) => <button key={id} type="button" role="tab" aria-selected={tab === id} className={`of-sheet-rtab is-ctx${tab === id ? ' is-on' : ''}`} onClick={() => { if (collapsed) setPeek(true); setTab(id); }}>{label}</button>)}
         <div className="grow" />
         <button type="button" className="btn ghost xs" onClick={() => run('commandSearch')} title={t('Search commands and functions')}><Search size={13} /><span className="muted">{t('Search')}</span></button>
+        <button type="button" className="btn ghost xs icon" onClick={() => collapse(!collapsed)} aria-label={collapsed ? t('Pin the ribbon') : t('Collapse the ribbon')} title={withKeys(collapsed ? t('Pin the ribbon') : t('Collapse the ribbon'), 'Ctrl+F1')}>{collapsed ? <Pin size={13} /> : <ChevronUp size={13} />}</button>
       </div>
-      <div className="of-sheet-rbody" role="toolbar" aria-label={TABS.find((x) => x[0] === tab)[1]}>
+      {(!collapsed || peek) && <div className={`of-sheet-rbody${collapsed ? ' is-peek' : ''}`} role="toolbar" aria-label={([...TABS, ...CTX].find((x) => x[0] === tab) || TABS[0])[1]}>
         {tab === 'home' && <>
           <Group_ label={t('Undo')}>
             <Tool icon={Undo2} label={t('Undo')} kbd="Ctrl+Z" disabled={ro || !flags.canUndo} onClick={() => run('undo')} />
@@ -197,6 +215,7 @@ export function Ribbon({ run, cur, flags }) {
           </Group_>
           <Group_ label={t('Styles')}>
             <DropBtn icon={ListChecks} label={t('Conditional formatting')} disabled={ro} items={cfItems} />
+            <Tool icon={Table} label={t('Format as table')} wide disabled={ro} onClick={() => run('tableStylesMenu')} />
             <DropBtn icon={Palette} label={t('Cell styles')} disabled={ro} items={styleItems} />
           </Group_>
           <Group_ label={t('Cells')}>
@@ -217,7 +236,21 @@ export function Ribbon({ run, cur, flags }) {
             {CHART_TYPES.map((c) => { const I = CHART_ICON[c.id] || ChartColumn; return <Tool key={c.id} icon={I} label={t(c.label)} title={t('Insert {type} chart', { type: t(c.label) })} disabled={ro} wide onClick={() => run('chart', c.id)} />; })}
           </Group_>
           <Group_ label={t('Tables')}>
+            <Tool icon={TableCellsMerge} label={t('PivotTable')} wide disabled={ro} onClick={() => run('pivotNew')} />
+            <Tool icon={Table} label={t('Table')} kbd="Ctrl+T" wide disabled={ro} onClick={() => run('table')} />
             <Tool icon={Filter} label={t('Filter')} wide onClick={() => run('filterToggle')} />
+          </Group_>
+          <Group_ label={t('Illustrations')}>
+            <Tool icon={ImageIcon} label={t('Pictures')} wide disabled={ro} onClick={() => run('image')} />
+            <DropBtn icon={Shapes} label={t('Shapes')} disabled={ro} items={shapeItems} />
+          </Group_>
+          <Group_ label={t('Sparklines')}>
+            <Tool icon={ChartSpline} label={t('Sparklines …')} wide disabled={ro} onClick={() => run('sparkline')} />
+            <Tool label={t('Clear')} wide disabled={ro} onClick={() => run('sparkClear')} />
+          </Group_>
+          <Group_ label={t('Hostwerk')}>
+            <Tool icon={Radio} label={t('Live data …')} wide disabled={ro} onClick={() => run('liveData')} />
+            <Tool icon={ClipboardList} label={t('Form …')} wide disabled={ro} onClick={() => run('form')} />
           </Group_>
           <Group_ label={t('Links')}>
             <Tool icon={Link} label={t('Link …')} wide disabled={ro} onClick={() => run('link')} />
@@ -259,7 +292,12 @@ export function Ribbon({ run, cur, flags }) {
           <Group_ label={t('Calculation')}>
             <DropBtn icon={Calculator} label={t('Calculation options')} items={() => [{ label: t('Automatic'), checked: flags.autoCalc, onClick: () => run('calcMode', true) }, { label: t('Manual'), checked: !flags.autoCalc, onClick: () => run('calcMode', false) }]} />
             <Tool icon={RefreshCw} label={t('Calculate now')} kbd="F9" wide onClick={() => run('calcNow')} />
+            <Tool icon={Settings2} label={t('Options …')} title={t('Iterative calculation, R1C1, 1904 dates')} wide onClick={() => run('calcOptions')} />
           </Group_>
+          {P.aiReady && <Group_ label={t('AI')}>
+            <Tool icon={Sparkles} label={t('Write a formula …')} wide disabled={ro} onClick={() => run('ai', 'write')} />
+            <Tool label={t('Explain formula')} wide onClick={() => run('ai', 'explain')} />
+          </Group_>}
         </>}
         {tab === 'data' && <>
           <Group_ label={t('Sort & filter')}>
@@ -277,6 +315,16 @@ export function Ribbon({ run, cur, flags }) {
             {flags.isCsv && <Tool icon={Type} label={t('Text import options …')} wide onClick={() => run('csvOptions')} />}
             <Tool label={t('Import CSV …')} wide disabled={ro} onClick={() => run('importCsv')} />
           </Group_>
+          <Group_ label={t('Hostwerk data')}>
+            <Tool icon={Radio} label={t('Live data …')} wide disabled={ro} onClick={() => run('liveData')} />
+            <Tool icon={Database} label={t('Database table …')} wide disabled={ro} onClick={() => run('dbOpen')} />
+            <Tool icon={RefreshCw} label={t('Refresh all')} kbd="Ctrl+Alt+F5" wide onClick={() => { run('pivotRefreshAll'); run('liveRefresh'); }} />
+          </Group_>
+          <Group_ label={t('Automate')}>
+            <Tool icon={ClipboardList} label={P.hasForm ? t('Form …') : t('Create form …')} wide disabled={ro} onClick={() => run(P.hasForm ? 'formOpen' : 'form')} />
+            <Tool icon={BellRing} label={t('Rules & notifications …')} wide onClick={() => run('rules')} />
+            {P.aiReady && <Tool icon={Sparkles} label={t('Clean up data …')} wide disabled={ro} onClick={() => run('ai', 'clean')} />}
+          </Group_>
           <Group_ label={t('Outline')}>
             <Tool icon={Group} label={t('Group')} disabled={ro} onClick={() => run('group', 1)} />
             <Tool icon={Ungroup} label={t('Ungroup')} disabled={ro} onClick={() => run('group', -1)} />
@@ -292,6 +340,10 @@ export function Ribbon({ run, cur, flags }) {
           </Group_>
           <Group_ label={t('Find')}>
             <Tool icon={Search} label={t('Find & replace')} kbd="Ctrl+H" wide onClick={() => run('replace')} />
+          </Group_>
+          <Group_ label={t('Together')}>
+            <Tool icon={Users} label={P.collabOn ? t('Stop co-editing') : t('Edit together')} active={P.collabOn} wide disabled={ro} onClick={() => run('collab')} />
+            <Tool icon={GitCompare} label={t('Compare versions …')} wide onClick={(e) => { const r = e && e.currentTarget ? e.currentTarget.getBoundingClientRect() : null; run('compare', r ? { left: r.left, below: r.bottom + 2 } : null); }} />
           </Group_>
           {flags.hasMacros && <Group_ label={t('Macros')}><Tool icon={Lock} label={t('View macros')} wide onClick={() => run('macros')} /></Group_>}
           <Group_ label={t('Workbook')}>
@@ -315,10 +367,46 @@ export function Ribbon({ run, cur, flags }) {
           </Group_>
           <Group_ label={t('Formulas')}>
             <Tool icon={CodeXml} label={t('Show formulas')} active={flags.showFormulas} wide onClick={() => run('showFormulas')} />
+            <Tool label={t('R1C1 reference style')} active={P.r1c1} wide onClick={() => run('r1c1')} />
             <Tool icon={PanelTop} label={t('Full screen grid')} active={flags.compact} wide onClick={() => run('compact')} />
           </Group_>
+          <Group_ label={t('Views')}>
+            <Tool icon={Table2} label={t('Grid')} active={P.view === 'grid'} wide onClick={() => run('view', 'grid')} />
+            <Tool icon={Columns3} label={t('Kanban')} active={P.view === 'kanban'} wide onClick={() => run('view', 'kanban')} />
+            <Tool icon={CalendarDays} label={t('Calendar')} active={P.view === 'calendar'} wide onClick={() => run('view', 'calendar')} />
+            <Tool icon={LayoutGrid} label={t('Gallery')} active={P.view === 'gallery'} wide onClick={() => run('view', 'gallery')} />
+          </Group_>
         </>}
-      </div>
+        {tab === 'ctx-table' && P.table && <>
+          <Group_ label={t('Properties')}>
+            <Tool icon={TableProperties} label={P.table.name} title={t('Rename table …')} wide onClick={() => run('tableName')} />
+            <Tool label={t('Convert to range')} wide disabled={ro} onClick={() => run('tableToRange')} />
+            <Tool icon={TableCellsMerge} label={t('Summarize with pivot table')} wide disabled={ro} onClick={() => run('pivotNew')} />
+          </Group_>
+          <Group_ label={t('Table style options')}>
+            <label className="check small"><input type="checkbox" checked={!!P.table.totals} disabled={ro} onChange={() => run('tableOpt', 'totals')} />{t('Total row')}</label>
+            <label className="check small"><input type="checkbox" checked={P.table.stripes !== false} disabled={ro} onChange={() => run('tableOpt', 'stripes')} />{t('Banded rows')}</label>
+            <label className="check small"><input type="checkbox" checked={!!P.table.colStripes} disabled={ro} onChange={() => run('tableOpt', 'colStripes')} />{t('Banded columns')}</label>
+            <label className="check small"><input type="checkbox" checked={!!P.table.firstCol} disabled={ro} onChange={() => run('tableOpt', 'firstCol')} />{t('First column')}</label>
+            <label className="check small"><input type="checkbox" checked={!!P.table.lastCol} disabled={ro} onChange={() => run('tableOpt', 'lastCol')} />{t('Last column')}</label>
+          </Group_>
+          <Group_ label={t('Table styles')}>
+            <Tool icon={Palette} label={t('Table styles …')} wide disabled={ro} onClick={() => run('tableStylesMenu')} />
+          </Group_>
+        </>}
+        {tab === 'ctx-pivot' && P.pivot && <>
+          <Group_ label={t('PivotTable')}>
+            <Tool icon={TableCellsMerge} label={t('Field list')} wide onClick={() => run('pivotEdit')} />
+            <Tool icon={RefreshCw} label={t('Refresh')} kbd="Alt+F5" wide disabled={ro || P.pivot.readOnly} onClick={() => run('pivotRefresh')} />
+            <Tool icon={RefreshCw} label={t('Refresh all')} kbd="Ctrl+Alt+F5" wide disabled={ro} onClick={() => run('pivotRefreshAll')} />
+          </Group_>
+        </>}
+        {tab === 'ctx-obj' && P.objSel && <>
+          <Group_ label={t('Arrange')}>
+            <Tool icon={Trash} label={t('Delete')} kbd="Del" wide disabled={ro} onClick={() => run('objDelete')} />
+          </Group_>
+        </>}
+      </div>}
     </div>
   );
 }

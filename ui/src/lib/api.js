@@ -12,8 +12,9 @@ export const url = (p, params) => `${BASE}${p}${params && q(params) ? `?${q(para
 async function check(res) {
   if (res.ok) return res;
   let msg = `${res.status} ${res.statusText}`;
-  try { const j = await res.json(); msg = j.error || j.message || msg; } catch { /* not json */ }
-  const e = new Error(msg); e.status = res.status; throw e;
+  let j = null;
+  try { j = await res.json(); msg = j.error || j.message || msg; } catch { /* not json */ }
+  const e = new Error(msg); e.status = res.status; if (j && j.mtime != null) e.mtime = j.mtime; throw e;
 }
 
 /** File location: { path } inside the library, or { root, path } for a file from Hostwerk's file browser. */
@@ -67,6 +68,18 @@ export const office = {
     const r = await check(await fetch(url('/raw', { ...loc(f), mtime, force: force ? 1 : undefined, label }), { method: 'PUT', credentials: 'same-origin', headers: { 'content-type': 'application/octet-stream' }, body: bytes }));
     return r.json(); // { ok, mtime, size, version }
   },
+  /** password-protected Office files (server/encrypt.js): state → { encrypted: 'ooxml'|'odf'|null, supported, vault: { available, locked, hasEntry } } */
+  encryptState: (f) => get(`/office/encrypt/state?${q(loc(f))}`),
+  /** the decrypted bytes for the editor (the file itself stays encrypted); 403 = wrong password */
+  async decryptBytes(f, { password = '', fromVault = false } = {}) {
+    const r = await check(await fetch(url('/decrypt'), { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...loc(f), ...(password ? { password } : { fromVault: !!fromVault }), mode: 'bytes' }) }));
+    return { bytes: new Uint8Array(await r.arrayBuffer()), mtime: Number(r.headers.get('x-mtime')) || null };
+  },
+  /** save an opened encrypted file: plain bytes in, the server encrypts again with the same password (or the vault's) */
+  async writeEncrypted(f, bytes, { mtime, force = false, password = '' } = {}) {
+    const r = await check(await fetch(url('/encrypt/raw', { ...loc(f), mtime, force: force ? 1 : undefined }), { method: 'PUT', credentials: 'same-origin', headers: { 'content-type': 'application/octet-stream', ...(password ? { 'x-office-password': encodeURIComponent(password) } : {}) }, body: bytes }));
+    return r.json(); // { ok, mtime, size, version }
+  },
   /** dir: library folder, or { root, dir } = a folder of Hostwerk's Files */
   async create(dir, name, bytes) {
     const where = dir && typeof dir === 'object' ? { root: dir.root, dir: dir.dir || '' } : { dir };
@@ -87,7 +100,79 @@ export const office = {
   downloadUrl: (f) => url('/raw', { ...loc(f), download: 1 }),
   zipUrl: (paths) => url('/zip', { paths: JSON.stringify(paths) }),
   assetUrl: (name) => url(`/assets/${name}`),
+
+  /* ---------------- 1.1 (ARCHITECTURE.md "Office 1.1 – expansion contract" / "Host object 1.1") ---------------- */
+  /** generated first-page thumbnail (image/webp or png) – stored next to the metadata, dropped when the file changes */
+  async putThumb(f, blob, mtime) {
+    const r = await check(await fetch(url('/thumb', { ...loc(f), mtime }), { method: 'PUT', credentials: 'same-origin', headers: { 'content-type': blob.type || 'image/webp' }, body: blob }));
+    return r.json().catch(() => ({ ok: true }));
+  },
+  thumbUrl: (f, v) => url('/thumb', { ...loc(f), v }),
+  /** search by meaning (AI embeddings on the server) – same hits as search() plus score */
+  semanticSearch: (text, params) => get(`/office/search?${q({ q: text, semantic: 1, ...params })}`),
+  data: {
+    sources: () => get('/office/data/sources').then(list('sources')),
+    query: (source, params) => get(`/office/data/query?${q({ source, ...(params || {}) })}`),
+  },
+  db: {
+    servers: () => get('/office/db/servers').then(list('servers')),
+    tables: (server, db) => get(`/office/db/tables?${q({ server, db })}`).then(list('tables')),
+    rows: ({ server, db, table, offset, limit, sort, filter }) => get(`/office/db/rows?${q({ server, db, table, offset, limit, sort, filter: filter && typeof filter === 'object' ? JSON.stringify(filter) : filter })}`),
+    write: ({ server, db, table, changes }) => post('/office/db/rows', { server, db, table, changes }),
+  },
+  fields: {
+    list: () => get('/office/fields').then(list('fields')),
+    value: (id, params) => get(`/office/fields/value?${q({ id, params: params ? JSON.stringify(params) : undefined })}`),
+  },
+  forms: {
+    list: (f) => get(`/office/forms?${q(loc(f))}`).then(list('forms')),
+    create: (f, form) => post('/office/forms', { ...loc(f), ...form }),
+    remove: (id) => del(`/office/forms/${encodeURIComponent(id)}`),
+  },
+  rules: {
+    get: (f) => get(`/office/rules?${q(loc(f))}`).then(list('rules')),
+    set: (f, rules) => put(`/office/rules?${q(loc(f))}`, { rules }),
+  },
+  components: {
+    list: () => get('/office/components').then(list('components')),
+    install: (id) => post('/office/components/install', { id }),
+    base: (id) => `${BASE}/components/${encodeURIComponent(id)}/`,
+  },
+  ai: (body) => post('/office/ai', body),
+  vault: {
+    state: () => get('/office/vault'),
+    encrypt: (f) => post('/office/vault/encrypt', loc(f)),
+    decrypt: (f) => post('/office/vault/decrypt', loc(f)),
+  },
+  clean: {
+    preview: (f) => post('/office/clean/preview', loc(f)),
+    run: (f, remove, { copy = true } = {}) => post('/office/clean', { ...loc(f), remove, copy }),
+  },
+  publish: {
+    targets: () => get('/office/publish/targets').then(list('targets')),
+    list: (f) => get(`/office/publish?${q(loc(f))}`).then(list('publications')),
+    run: (f, { target, title, path }) => post('/office/publish', { ...loc(f), target, title, path }),
+    remove: (id) => del(`/office/publish/${encodeURIComponent(id)}`),
+  },
+  reports: {
+    list: (f) => get(`/office/reports?${q(f ? loc(f) : {})}`).then(list('reports')),
+    save: (f, report) => post('/office/reports', { ...loc(f), ...report }),
+    remove: (id) => del(`/office/reports/${encodeURIComponent(id)}`),
+    run: (id) => post(`/office/reports/${encodeURIComponent(id)}/run`, {}),
+  },
+  backups: {
+    list: (f) => get(`/office/backups?${q(loc(f))}`).then(list('backups')),
+    async bytes(f, id) { const r = await check(await fetch(url('/backups/raw', { ...loc(f), id }), { credentials: 'same-origin' })); return new Uint8Array(await r.arrayBuffer()); },
+    restore: (f, id) => post('/office/backups/restore', { ...loc(f), id }),
+  },
+  /** websocket address of a server route (co-editing, remote control) – same host, ws/wss */
+  // Hostwerk hands logged-in websocket upgrades to extensions only under /ws/* (never /api/*) – server/collab.js, remote.js
+  wsUrl: (p, params) => { const u = new URL(url(p, params).replace(/^\/api\/office\//, '/ws/office/'), location.href); u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'; return u.href; },
 };
+/** list responses: the array itself or { <key>: [...] } (the server may wrap it) */
+function list(key) { return (r) => (Array.isArray(r) ? r : (r && Array.isArray(r[key]) ? r[key] : (r && Array.isArray(r.items) ? r.items : []))); }
+/** true when an error means "this server has no such route yet" (older Office server / feature not built) */
+export const isMissing = (e) => !!e && (e.status === 404 || e.status === 501 || /\b(404|501)\b/.test(String(e.message || '')));
 
 /** Save bytes as a download in the browser / Hostwerk window. */
 export function download(bytes, name, mime = 'application/octet-stream') {

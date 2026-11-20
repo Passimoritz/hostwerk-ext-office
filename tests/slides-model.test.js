@@ -163,7 +163,7 @@ test('templates: every template builds and survives pptx and odp', async () => {
   assert.equal(T.buildTemplate('lesson', { lang: 'de' }).slides.length, 6);
   assert.equal(io.saveFormat('pptm'), 'pptm');
   assert.equal(io.saveFormat('ppt'), 'pptx');
-  assert.equal(io.saveFormat('fodp'), 'odp');
+  assert.equal(io.saveFormat('fodp'), 'fodp'); // 1.1: flat ODF is written as flat ODF
 });
 
 test('table operations: insert, delete, merge, split', async () => {

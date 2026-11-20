@@ -12,6 +12,7 @@ import { docToText } from './model.js';
 import { S } from './units.js';
 import { t, pl } from '@hostwerk/i18n';
 import './style.css';
+import './style11.css';
 
 async function create({ ext = 'pptx', template = 'blank', settings = {} } = {}) {
   const ss = settings.slides || {};
@@ -43,7 +44,7 @@ function Preview({ bytes, ext }) {
   }, [bytes, ext]);
   useEffect(() => {
     if (!box.current) return undefined;
-    const m = () => setW(box.current.clientWidth || 320);
+    const m = () => { if (box.current) setW(box.current.clientWidth || 320); };
     m(); const ro = new ResizeObserver(m); ro.observe(box.current);
     return () => ro.disconnect();
   }, []);

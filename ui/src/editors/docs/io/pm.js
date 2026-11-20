@@ -105,7 +105,7 @@ export function walk(node, fn, parent = null, depth = 0) {
   for (const c of node.content || []) walk(c, fn, node, depth + 1);
 }
 
-export const BLOCKS = new Set(['paragraph', 'heading', 'blockquote', 'codeBlock', 'bulletList', 'orderedList', 'listItem', 'taskList', 'taskItem', 'horizontalRule', 'pageBreak', 'toc', 'callout', 'table', 'tableRow', 'tableCell', 'tableHeader']);
+export const BLOCKS = new Set(['sectionBreak', 'controlBlock', 'paragraph', 'heading', 'blockquote', 'codeBlock', 'bulletList', 'orderedList', 'listItem', 'taskList', 'taskItem', 'horizontalRule', 'pageBreak', 'toc', 'callout', 'table', 'tableRow', 'tableCell', 'tableHeader']);
 export const TEXTBLOCKS = new Set(['paragraph', 'heading', 'codeBlock']);
 
 /** plain text of an inline run (text, hard breaks, footnotes as [n] markers are left out) */
@@ -114,6 +114,8 @@ export function inlineText(node, { deleted = false } = {}) {
   for (const c of node.content || []) {
     if (c.type === 'text') { if (!deleted && (c.marks || []).some((m) => m.type === 'deletion')) continue; s += c.text; } else if (c.type === 'hardBreak') s += '\n';
     else if (c.type === 'equation') s += (c.attrs && c.attrs.latex) || '';
+    else if (c.type === 'field') s += (c.attrs && c.attrs.value) || '';
+    else if (c.type === 'contentControl') s += c.attrs && c.attrs.kind === 'checkbox' ? (c.attrs.checked ? '☒' : '☐') : (c.attrs && c.attrs.value) || '';
     else if (c.content) s += inlineText(c, { deleted });
   }
   return s;
@@ -130,6 +132,7 @@ export function docText(doc) {
       case 'table': for (const r of n.content || []) out.push(prefix + (r.content || []).map((c) => (c.content || []).map((p) => inlineText(p)).join(' ')).join('\t')); break;
       case 'horizontalRule': out.push(prefix + '———'); break;
       case 'pageBreak': out.push('\f'); break;
+      case 'sectionBreak': if (!n.attrs || n.attrs.type !== 'continuous') out.push('\f'); break;
       case 'toc': for (const e of (n.attrs && n.attrs.entries) || []) out.push(`${'  '.repeat(Math.max(0, (e.level || 1) - 1))}${e.text}`); break;
       default: for (const c of n.content || []) block(c, prefix);
     }
@@ -213,7 +216,7 @@ export function fixDoc(doc) {
     if (['listItem', 'taskItem'].includes(n.type)) {
       if (!n.content || !n.content.length || n.content[0].type !== 'paragraph') n.content = [{ type: 'paragraph' }, ...(n.content || [])];
     }
-    if (['tableCell', 'tableHeader', 'blockquote', 'callout'].includes(n.type) && (!n.content || !n.content.length)) n.content = [{ type: 'paragraph' }];
+    if (['tableCell', 'tableHeader', 'blockquote', 'callout', 'controlBlock'].includes(n.type) && (!n.content || !n.content.length)) n.content = [{ type: 'paragraph' }];
     if (['bulletList', 'orderedList', 'taskList', 'table', 'tableRow'].includes(n.type) && (!n.content || !n.content.length)) return null;
     if (n.type === 'table') {
       // every row needs the same number of columns – pad short rows (merged layouts from other apps)
@@ -231,7 +234,7 @@ export function fixDoc(doc) {
   const fixed = [];
   let run = null;
   for (const c of out.content) {
-    if (c.type === 'text' || c.type === 'hardBreak' || c.type === 'image' || c.type === 'footnote' || c.type === 'equation') { if (!run) { run = { type: 'paragraph', content: [] }; fixed.push(run); } run.content.push(c); } else { run = null; fixed.push(c); }
+    if (['text', 'hardBreak', 'image', 'footnote', 'equation', 'field', 'contentControl', 'diagram', 'preserved'].includes(c.type)) { if (!run) { run = { type: 'paragraph', content: [] }; fixed.push(run); } run.content.push(c); } else { run = null; fixed.push(c); }
   }
   out.content = fixed;
   return out;
@@ -307,3 +310,8 @@ export const escHtml = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) 
 export function fillFields(text, { page = '', pages = '', title = '', date = '' } = {}) {
   return String(text || '').replace(/\{page\}/g, page).replace(/\{pages\}/g, pages).replace(/\{title\}/g, title).replace(/\{date\}/g, date);
 }
+
+/** comparable key of a header/footer (changed → the writers rewrite that part) */
+export function hfKey(x) { return x ? JSON.stringify({ t: x.text || '', a: x.align || '', d: x.doc || null }) : ''; }
+/** does a header/footer have anything to show? */
+export function hfHas(x) { if (!x) return false; if (x.doc) { let any = false; walk(x.doc, (n) => { if (any) return false; if ((n.type === 'text' && n.text.trim()) || ['image', 'field', 'table', 'preserved', 'equation'].includes(n.type)) any = true; return undefined; }); return any; } return !!(x.text && x.text.trim()); }

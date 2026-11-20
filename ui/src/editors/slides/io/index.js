@@ -6,6 +6,7 @@ import { writeOdp } from './odp-write.js';
 import { readPpt } from './ppt-read.js';
 import { isZip } from './util.js';
 import { isCfb } from '../../_shared/cfb.js';
+import { toFlat } from './fodp.js';
 
 export const OOXML = ['pptx', 'pptm', 'ppsx', 'ppsm', 'potx', 'potm'];
 export const ODF = ['odp', 'otp', 'fodp'];
@@ -38,7 +39,7 @@ export async function readAny(bytes, ext) {
 /** native format a file is saved in: import-only formats write the nearest native one (macros keep pptm) */
 export function saveFormat(ext) {
   const e = String(ext || '').toLowerCase();
-  if (e === 'pptx' || e === 'odp') return e;
+  if (e === 'pptx' || e === 'odp' || e === 'fodp') return e;
   if (MACRO.includes(e)) return 'pptm';
   if (ODF.includes(e)) return 'odp';
   return 'pptx';
@@ -50,6 +51,7 @@ export function saveFormat(ext) {
  */
 export async function writeAny(doc, fmt, { original, originalFmt, chartImage } = {}) {
   const f = String(fmt || 'pptx').toLowerCase();
-  if (ODF.includes(f)) return writeOdp(doc, { ext: f === 'fodp' ? 'odp' : f, original: original && ['odp', 'otp'].includes(originalFmt) ? original : undefined, chartImage });
+  if (f === 'fodp') return toFlat(await writeOdp(doc, { ext: 'odp', chartImage }));
+  if (ODF.includes(f)) return writeOdp(doc, { ext: f, original: original && ['odp', 'otp'].includes(originalFmt) ? original : undefined, chartImage });
   return writePptx(doc, { ext: f, original: original && OOXML.includes(originalFmt) ? original : undefined });
 }

@@ -7,6 +7,7 @@ import { t } from '@hostwerk/i18n';
 import { ActionRow, fmtSize, fmtDate } from './common.jsx';
 import { FORMATS, extOf } from '../../lib/formats.js';
 import { Keep } from '../_shared/keep.jsx';
+import { FileTypeIcon } from '../../lib/fileIcons.jsx';
 
 export async function listZip(bytes) {
   const zip = await JSZip.loadAsync(bytes);
@@ -34,7 +35,7 @@ export default function ZipView({ file, bytes, host }) {
   return (
     <div className="of-view-zip">
       <div className="of-view-toolbar">
-        <h2 className="of-view-title"><Archive size={18} /> <Keep>{file.name}</Keep></h2>
+        <h2 className="of-view-title"><FileTypeIcon name={file.name} size={20} /> <Keep>{file.name}</Keep></h2>
         <span className="small muted">{t('{n} files', { n: state.entries.filter((e) => !e.dir).length })} · {fmtSize(total)} → {fmtSize(bytes.length)}</span>
         <span className="grow" />
         <span className="of-view-search"><Search size={14} /><input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search in archive" aria-label="Search in archive" /></span>

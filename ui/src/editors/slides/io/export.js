@@ -10,18 +10,37 @@ export async function nodeToCanvas(node, w, h, scale = 2) {
   clone.style.margin = '0';
   // media players can't be painted – keep their poster boxes
   clone.querySelectorAll('video,audio').forEach((m) => m.remove());
+  return paint(clone, w, h, scale, '#ffffff');
+}
+/** the SVG image of a DOM node – a blob: URL first (works without `img-src data:`), a data: URL as the fallback */
+async function paint(clone, w, h, scale, background) {
   const xml = new XMLSerializer().serializeToString(clone);
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w * scale}" height="${h * scale}" viewBox="0 0 ${w} ${h}"><foreignObject x="0" y="0" width="${w}" height="${h}">${xml}</foreignObject></svg>`;
-  const url = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-  const img = new Image();
-  img.decoding = 'sync';
-  await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error('Could not render the slide as an image')); img.src = url; });
+  const load = (url) => new Promise((res, rej) => { const img = new Image(); img.decoding = 'sync'; const tm = setTimeout(() => rej(new Error('Rendering timed out')), 8000); img.onload = () => { clearTimeout(tm); res(img); }; img.onerror = () => { clearTimeout(tm); rej(new Error('Could not render the slide as an image')); }; img.src = url; });
+  let img; let blobUrl = null;
+  try { img = await load(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`); } catch { blobUrl = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' })); try { img = await load(blobUrl); } finally { setTimeout(() => URL.revokeObjectURL(blobUrl), 1000); } }
   const c = document.createElement('canvas');
-  c.width = Math.round(w * scale); c.height = Math.round(h * scale);
+  c.width = Math.max(1, Math.round(w * scale)); c.height = Math.max(1, Math.round(h * scale));
   const ctx = c.getContext('2d');
-  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, c.width, c.height);
+  if (background) { ctx.fillStyle = background; ctx.fillRect(0, 0, c.width, c.height); }
   ctx.drawImage(img, 0, 0, c.width, c.height);
   return c;
+}
+/** transparent canvas of one rendered element (vector PDF fallback for objects without a vector form) */
+export async function elementToCanvas(node, w, h, scale = 2) {
+  const clone = node.cloneNode(true);
+  Object.assign(clone.style, { left: '0px', top: '0px', transform: 'none', position: 'relative', translate: 'none', rotate: 'none', scale: 'none' });
+  clone.querySelectorAll('video,audio').forEach((m) => m.remove());
+  const wrap = document.createElement('div');
+  wrap.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
+  Object.assign(wrap.style, { width: `${w}px`, height: `${h}px`, position: 'relative', overflow: 'visible' });
+  wrap.appendChild(clone);
+  try { return await paint(wrap, Math.max(1, w), Math.max(1, h), scale, null); } catch { return null; }
+}
+/** print HTML images as blob: URLs (no `img-src data:` needed) */
+export async function canvasUrl(canvas, type = 'image/jpeg', q = 0.9) {
+  const blob = await new Promise((res) => canvas.toBlob(res, type, q));
+  return blob ? URL.createObjectURL(blob) : canvas.toDataURL(type, q);
 }
 export async function canvasBytes(canvas, type = 'image/png', quality = 0.92) {
   const blob = await new Promise((res) => canvas.toBlob(res, type, quality));

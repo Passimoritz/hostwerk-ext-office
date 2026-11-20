@@ -15,6 +15,52 @@ export class Ref {
   get single() { return this.r1 === this.r2 && this.c1 === this.c2; }
 }
 export const isRef = (v) => v instanceof Ref;
+/** LAMBDA value: parameter names, body AST and the LET/LAMBDA names visible where it was made */
+export class Lambda {
+  constructor(params, body, locals) { this.params = params; this.body = body; this.locals = locals; }
+}
+export const isLambda = (v) => v instanceof Lambda;
+/** marker for a LAMBDA parameter that was left out (ISOMITTED) */
+export const OMITTED = Object.freeze({ omitted: true });
+/** call a LAMBDA value with already evaluated arguments */
+export function callLambda(fn, args, ctx) {
+  if (!isLambda(fn)) return ERR.VALUE;
+  if (args.length > fn.params.length) return ERR.VALUE;
+  if ((ctx.depth = (ctx.depth || 0) + 1) > 200) { ctx.depth--; return ERR.CALC; }
+  try {
+    const locals = new Map(fn.locals || []);
+    fn.params.forEach((p, i) => locals.set(p, i < args.length && args[i] !== undefined ? args[i] : OMITTED));
+    return evaluate(fn.body, { ...ctx, locals });
+  } finally { ctx.depth--; }
+}
+/** the cell range of a structured reference (Table1[Col], [@Col], Table1[[#Headers],[A]:[B]]) or an error */
+export function structuredRef(n, ctx) {
+  const t = ctx.table ? ctx.table(n.table, ctx.sheet, ctx.r, ctx.c) : null;
+  if (!t) return ERR.REF;
+  const g = t.range;
+  const hdr = t.header ? 1 : 0; const tot = t.totals ? 1 : 0;
+  const data = { r1: g.r1 + hdr, r2: g.r2 - tot };
+  let c1 = g.c1; let c2 = g.c2;
+  if (n.c1 != null) {
+    const ix = (name) => t.columns.findIndex((x) => String(x).toLowerCase() === String(name).toLowerCase());
+    const a = ix(n.c1); const b = ix(n.c2 == null ? n.c1 : n.c2);
+    if (a < 0 || b < 0) return ERR.REF;
+    c1 = g.c1 + Math.min(a, b); c2 = g.c1 + Math.max(a, b);
+  }
+  const sp = n.specials || [];
+  let r1; let r2;
+  if (sp.includes('thisRow')) {
+    if (ctx.sheet !== t.sheet || ctx.r < data.r1 || ctx.r > data.r2) return ERR.VALUE;
+    r1 = ctx.r; r2 = ctx.r;
+  } else if (!sp.length || (sp.length === 1 && sp[0] === 'data')) { r1 = data.r1; r2 = data.r2; } else if (sp.includes('all')) { r1 = g.r1; r2 = g.r2; } else {
+    const want = new Set(sp);
+    r1 = want.has('headers') ? (hdr ? g.r1 : null) : want.has('data') ? data.r1 : want.has('totals') && tot ? g.r2 : null;
+    r2 = want.has('totals') ? (tot ? g.r2 : null) : want.has('data') ? data.r2 : want.has('headers') && hdr ? g.r1 : null;
+    if (r1 == null || r2 == null) return ERR.REF;
+  }
+  if (r2 < r1) return ERR.REF;
+  return new Ref(t.sheet, r1, c1, r2, c2);
+}
 export const isMat = (v) => Array.isArray(v);
 
 /** clip whole columns/rows to the used area so A:A doesn't create a million values */
@@ -171,10 +217,31 @@ export function evaluate(n, ctx) {
     case 'ref': {
       const sh = n.sheet ? ctx.sheetByName(n.sheet) : ctx.sheet;
       if (!sh) return ERR.REF;
+      if (n.sheet2) { // 3D reference Sheet1:Sheet3!A1 → union over the sheets in between
+        const list = ctx.sheetsBetween ? ctx.sheetsBetween(n.sheet, n.sheet2) : null;
+        if (!list || !list.length) return ERR.REF;
+        const u = list.map((x) => new Ref(x, Math.min(n.r1, n.r2), Math.min(n.c1, n.c2), Math.max(n.r1, n.r2), Math.max(n.c1, n.c2)));
+        if (u.length === 1) return u[0];
+        u.union = true; u.three = true;
+        return u;
+      }
       return new Ref(sh, n.r1 > n.r2 ? n.r2 : n.r1, n.c1 > n.c2 ? n.c2 : n.c1, Math.max(n.r1, n.r2), Math.max(n.c1, n.c2));
     }
+    case 'sref': return structuredRef(n, ctx);
+    case 'isect': {
+      const a = evaluate(n.a, ctx); const b = evaluate(n.b, ctx);
+      if (!isRef(a) || !isRef(b)) return isErr(a) ? a : isErr(b) ? b : ERR.VALUE;
+      if (a.sheet !== b.sheet) return ERR.VALUE;
+      const r1 = Math.max(a.r1, b.r1); const r2 = Math.min(a.r2, b.r2); const c1 = Math.max(a.c1, b.c1); const c2 = Math.min(a.c2, b.c2);
+      return r1 > r2 || c1 > c2 ? ERR.NULL : new Ref(a.sheet, r1, c1, r2, c2);
+    }
+    case 'call': {
+      const f = evaluate(n.f, ctx);
+      if (isErr(f)) return f;
+      return callLambda(f, n.args.map((x) => (x.t === 'missing' ? undefined : evaluate(x, ctx))), ctx);
+    }
     case 'name': {
-      if (ctx.locals && !n.sheet && ctx.locals.has(n.v.toUpperCase())) return ctx.locals.get(n.v.toUpperCase());
+      if (ctx.locals && !n.sheet && ctx.locals.has(n.v.toUpperCase())) { const v = ctx.locals.get(n.v.toUpperCase()); return v === OMITTED ? null : v; }
       const def = ctx.name(n.v, n.sheet ? ctx.sheetByName(n.sheet) : ctx.sheet);
       if (!def) return ERR.NAME;
       if ((ctx.depth = (ctx.depth || 0) + 1) > 50) { ctx.depth--; return ERR.CALC; }
@@ -216,8 +283,17 @@ export function evaluate(n, ctx) {
       return u;
     }
     case 'fn': {
+      // a LET/LAMBDA name or a defined name holding a LAMBDA, called like a function
+      const local = ctx.locals && ctx.locals.get(n.name);
+      if (local !== undefined && isLambda(local)) return callLambda(local, n.args.map((x) => (x.t === 'missing' ? undefined : evaluate(x, ctx))), ctx);
       const def = ctx.fn[n.name];
-      if (!def) return ERR.NAME;
+      if (!def) {
+        const nd = ctx.name && ctx.name(n.name, ctx.sheet);
+        if (!nd) return ERR.NAME;
+        const f = evaluate(nd.ast, nd.sheet ? { ...ctx, sheet: nd.sheet } : ctx);
+        if (!isLambda(f)) return isErr(f) ? f : ERR.VALUE;
+        return callLambda(f, n.args.map((x) => (x.t === 'missing' ? undefined : evaluate(x, ctx))), ctx);
+      }
       if (def.lazy) return def.fn(n.args, ctx);
       const args = n.args.map((x) => evaluate(x, ctx));
       return def.fn(args, ctx, n);
@@ -228,6 +304,7 @@ export function evaluate(n, ctx) {
 
 /** Final result of a cell formula: Ref → value or matrix; 1×1 matrix → value; blank → 0 */
 export function finalize(v, ctx) {
+  if (isLambda(v) || v === OMITTED) return ERR.CALC;
   if (isRef(v)) v = v.single ? ctx.get(v.sheet, v.r1, v.c1) : refValues(v, ctx);
   if (isMat(v)) {
     if (v.union) return ERR.VALUE;

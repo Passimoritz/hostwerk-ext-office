@@ -6,14 +6,15 @@
  * Linux: .desktop file + xdg-mime default after asking. macOS / no desktop app: an honest notice.
  */
 import { useEffect, useRef, useState } from 'react';
-import { MonitorCheck, CheckCircle2, CircleDashed, MinusCircle, ExternalLink, X, Plus, Trash2, FileText, Sheet, Presentation, FileType, RefreshCw } from 'lucide-react';
+import { MonitorCheck, CheckCircle2, CircleDashed, MinusCircle, ExternalLink, X, Plus, Trash2, RefreshCw } from 'lucide-react';
 import { get, post } from '@hostwerk/api';
 import { Btn, Callout, Loading, confirmDialog } from '@hostwerk/ui';
 import { t } from '@hostwerk/i18n';
 import { toast } from '../lib/toast';
 import { saveSettings } from './store';
+import { FileTypeIcon } from '../lib/fileIcons';
 
-const KIND_ROWS = [['docs', 'Documents', FileText], ['sheets', 'Spreadsheets', Sheet], ['slides', 'Presentations', Presentation], ['pdf', 'PDF', FileType]];
+const KIND_ROWS = [['docs', 'Documents', 'docx'], ['sheets', 'Spreadsheets', 'xlsx'], ['slides', 'Presentations', 'pptx'], ['pdf', 'PDF', 'pdf']];
 const STATE_TEXT = {
   default: ['Hostwerk opens them', CheckCircle2, 'c-ok'],
   partial: ['Some open in Hostwerk', CheckCircle2, 'c-warn'],
@@ -86,8 +87,8 @@ export function DefaultAppCard({ onSetting }) {
   const able = os && !os.error && os.supported && !os.code;
   const win = os && os.platform === 'win32';
   return (
-    <div className="card of-shell-os">
-      <div className="card-head"><MonitorCheck size={18} aria-hidden="true" /><h3>Hostwerk as the default app for office files</h3>
+    <div className="card of-shell-os is-hero">
+      <div className="card-head"><span className="of-shell-os-badge" aria-hidden="true"><MonitorCheck size={22} /></span><h3>Hostwerk as the default app for office files</h3>
         {os && allDefault(os) && <span className="badge ok">Default</span>}
         {os && !allDefault(os) && os.registered && <span className="badge">Under “Open with”</span>}
         <span className="right"><Btn className="sm ghost icon" icon={RefreshCw} title="Check again" aria-label="Check again" onClick={reload} /></span>
@@ -101,7 +102,7 @@ export function DefaultAppCard({ onSetting }) {
               const [text, SI, cls] = STATE_TEXT[st.state] || STATE_TEXT.none;
               return (
                 <div key={k} className="of-shell-os-kind">
-                  <I size={16} aria-hidden="true" /><b className="small">{t(label)}</b>
+                  <FileTypeIcon ext={I} size={20} /><b className="small">{t(label)}</b>
                   <span className={`small ${cls} of-shell-os-state`}><SI size={14} aria-hidden="true" />{t(text)}</span>
                 </div>
               );

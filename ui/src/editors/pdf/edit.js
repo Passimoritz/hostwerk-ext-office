@@ -6,10 +6,11 @@
  * AcroForm, outline, XMP/PDF-A metadata, attachments stay), pages of other sources are copied in.
  */
 import {
-  PDFDocument, PDFName, PDFDict, PDFString, PDFHexString, StandardFonts, PageSizes, degrees,
-  PDFTextField, PDFCheckBox, PDFRadioGroup, PDFDropdown, PDFOptionList, PDFSignature,
+  PDFDocument, PDFName, PDFDict, PDFString, PDFHexString, StandardFonts, PageSizes, degrees, PDFArray, PDFRef, PDFNumber,
+  PDFTextField, PDFCheckBox, PDFRadioGroup, PDFDropdown, PDFOptionList, PDFSignature, PDFObjectCopier,
 } from 'pdf-lib';
-import { writeAnnotations } from './annotations.js';
+import { writeAnnotations, markDocument, MARKER } from './annotations.js';
+import { canEncodeWinAnsi, parseFont, UnicodeFont } from './ttf.js';
 
 export const SIZES = { A4: PageSizes.A4, Letter: PageSizes.Letter, A5: PageSizes.A5, Legal: PageSizes.Legal };
 const LOAD = { updateMetadata: false, ignoreEncryption: false, throwOnInvalidObject: false };
@@ -231,7 +232,7 @@ export function inspect(doc) {
  *   meta      { title, author, subject, keywords }
  *   mode      'annot' | 'burn'       – how annotations are written
  */
-export async function buildDocument({ sources, pages, annots = {}, forms = null, flatten = false, meta = null, mode = 'annot', author = '' }) {
+export async function buildDocument({ sources, pages, annots = {}, forms = null, flatten = false, meta = null, mode = 'annot', author = '', fonts = [], names = [] }) {
   const base = await loadPdf(sources[0]);
   const basePages = base.getPages();
   // values first – the fields still find their widgets on the original pages
@@ -242,11 +243,13 @@ export async function buildDocument({ sources, pages, annots = {}, forms = null,
   const copied = new Map();
   const extra = new Map();
   for (const p of pages) if (p.src !== 0) { if (!extra.has(p.src)) extra.set(p.src, []); extra.get(p.src).push(p.index); }
+  const adopt = [];
   for (const [src, idx] of extra) {
     const d = await loadPdf(sources[src]);
     const uniq = [...new Set(idx)];
     const got = await base.copyPages(d, uniq);
     uniq.forEach((ix, k) => copied.set(`${src}:${ix}`, got[k]));
+    adopt.push({ d, got, refMap: new Map(uniq.map((ix, k) => [d.getPage(ix).ref.toString(), got[k].ref])), title: names[src] || '' });
   }
   const used = new Set();
   const out = [];
@@ -273,14 +276,24 @@ export async function buildDocument({ sources, pages, annots = {}, forms = null,
 
   for (let i = base.getPageCount() - 1; i >= 0; i--) base.removePage(i);
   for (const { page } of out) base.addPage(page);
+  // inserted pages keep their form fields and bookmarks
+  adopt.forEach((a, i) => {
+    try { adoptForms(base, a.d, a.got, i + 2); } catch { /* the fields still show, only not as one form */ }
+    try { adoptOutline(base, a.d, a.refMap, a.title); } catch { /* no bookmarks */ }
+  });
 
   const needFont = out.some(({ p }) => (annots[p.id] || []).length);
   const font = needFont ? await base.embedFont(StandardFonts.Helvetica) : null;
+  const picker = needFont ? fontPicker(base, font, fonts) : null;
+  let editable = 0;
   for (const { p, page } of out) {
     if (p.rot) page.setRotation(degrees(norm(page.getRotation().angle + p.rot)));
     const list = annots[p.id];
-    if (list && list.length) await writeAnnotations(base, page, list, { mode, font, author });
+    if (list && list.length) editable += await writeAnnotations(base, page, list, { mode, fonts: picker, author });
   }
+  if (picker) picker.finish();
+  if (editable) markDocument(base);
+  else if (base.catalog.get(PDFName.of(MARKER))) base.catalog.delete(PDFName.of(MARKER));
   applyMeta(base, meta);
   base.setModificationDate(new Date());
   try { return await base.save(); } catch (e) {
@@ -294,3 +307,197 @@ export async function buildDocument({ sources, pages, annots = {}, forms = null,
 /** quick helper for tests and the "Extract" action: indices of the model's pages → model entries */
 export const modelFromCount = (n) => [...Array(n).keys()].map((index) => ({ id: `p${index}`, src: 0, index, rot: 0 }));
 
+
+/* ---------------- fonts for annotation text ---------------- */
+
+/**
+ * Helvetica (WinAnsi) when it can show the text, else the first Unicode font (bundled Latin/Greek/Cyrillic font,
+ * then the CJK fonts of the component) that has every character – embedded as a subset at the end (finish()).
+ */
+export function fontPicker(doc, helv, fonts = []) {
+  const parsed = []; const unis = [];
+  const get = (i) => { if (parsed[i] === undefined) { try { parsed[i] = parseFont(fonts[i]); } catch { parsed[i] = null; } } return parsed[i]; };
+  const uni = (i) => { if (!unis[i]) unis[i] = new UnicodeFont(doc, [get(i)]); return { font: unis[i], ref: unis[i].ref, key: `OfUni${i}` }; };
+  const helvetica = { font: helv, ref: helv.ref, key: 'OfHelv' };
+  return {
+    pick(text) {
+      if (canEncodeWinAnsi(text)) return helvetica;
+      let best = -1; let bestMissing = Infinity;
+      for (let i = 0; i < fonts.length; i++) {
+        const f = get(i); if (!f) continue;
+        let missing = 0; for (const ch of String(text)) { const c = ch.codePointAt(0); if (c > 31 && !f.gid(c)) missing++; }
+        if (!missing) return uni(i);
+        if (missing < bestMissing) { bestMissing = missing; best = i; }
+      }
+      return best >= 0 ? uni(best) : helvetica;
+    },
+    finish() { unis.forEach((u) => u && u.embed()); },
+  };
+}
+
+/** characters of the annotation texts that neither Helvetica nor the given fonts can show */
+export function missingGlyphs(annots, fonts = []) {
+  const parsed = fonts.map((b) => { try { return parseFont(b); } catch { return null; } }).filter(Boolean);
+  const miss = new Set();
+  for (const list of Object.values(annots || {})) {
+    for (const a of list || []) {
+      if (a.type !== 'text' && a.type !== 'stamp') continue;
+      for (const ch of String(a.text || '')) {
+        const c = ch.codePointAt(0);
+        if (c < 32 || canEncodeWinAnsi(ch)) continue;
+        if (!parsed.some((f) => f.gid(c))) miss.add(ch);
+      }
+    }
+  }
+  return [...miss];
+}
+
+/* ---------------- forms and bookmarks of inserted pages ---------------- */
+
+const look = (ctx, o) => (o instanceof PDFRef ? ctx.lookup(o) : o);
+
+/** root fields of the widgets on the copied pages → into the base document's AcroForm (renamed on a name clash) */
+export function adoptForms(base, src, pages, n = 2) {
+  const ctx = base.context;
+  const roots = new Map();
+  for (const page of pages) {
+    const annots = look(ctx, page.node.get(PDFName.of('Annots')));
+    if (!(annots instanceof PDFArray)) continue;
+    for (let i = 0; i < annots.size(); i++) {
+      let ref = annots.get(i); let d = look(ctx, ref);
+      if (!(d instanceof PDFDict) || d.get(PDFName.of('Subtype')) !== PDFName.of('Widget')) continue;
+      let guard = 0;
+      while (d.get(PDFName.of('Parent')) instanceof PDFRef && guard++ < 32) { ref = d.get(PDFName.of('Parent')); d = ctx.lookup(ref); }
+      if (ref instanceof PDFRef) roots.set(ref.toString(), { ref, d });
+    }
+  }
+  if (!roots.size) return 0;
+  let acro = look(ctx, base.catalog.get(PDFName.of('AcroForm')));
+  if (!(acro instanceof PDFDict)) { acro = ctx.obj({ Fields: [] }); base.catalog.set(PDFName.of('AcroForm'), ctx.register(acro)); }
+  let fields = look(ctx, acro.get(PDFName.of('Fields')));
+  if (!(fields instanceof PDFArray)) { fields = ctx.obj([]); acro.set(PDFName.of('Fields'), fields); }
+  const nameOf = (d) => { const t = d.get(PDFName.of('T')); return t && t.decodeText ? t.decodeText() : ''; };
+  const taken = new Set();
+  for (let i = 0; i < fields.size(); i++) { const d = look(ctx, fields.get(i)); if (d instanceof PDFDict) taken.add(nameOf(d)); }
+  let added = 0;
+  for (const { ref, d } of roots.values()) {
+    if (fields.asArray().some((x) => x instanceof PDFRef && x.toString() === ref.toString())) continue;
+    let name = nameOf(d);
+    if (name && taken.has(name)) { let k = n; while (taken.has(`${name} (${k})`)) k++; name = `${name} (${k})`; d.set(PDFName.of('T'), PDFHexString.fromText(name)); }
+    taken.add(name);
+    fields.push(ref); added++;
+  }
+  // default appearance + resources (fonts) of the source form
+  const sAcro = look(src.context, src.catalog.get(PDFName.of('AcroForm')));
+  if (sAcro instanceof PDFDict) {
+    const copier = PDFObjectCopier.for(src.context, ctx);
+    if (!acro.get(PDFName.of('DA')) && sAcro.get(PDFName.of('DA'))) acro.set(PDFName.of('DA'), copier.copy(look(src.context, sAcro.get(PDFName.of('DA')))));
+    const sDR = look(src.context, sAcro.get(PDFName.of('DR')));
+    if (sDR instanceof PDFDict) {
+      const dr = look(ctx, acro.get(PDFName.of('DR')));
+      if (!(dr instanceof PDFDict)) acro.set(PDFName.of('DR'), copier.copy(sDR));
+      else {
+        const sFont = look(src.context, sDR.get(PDFName.of('Font')));
+        let fontD = look(ctx, dr.get(PDFName.of('Font')));
+        if (sFont instanceof PDFDict) {
+          if (!(fontD instanceof PDFDict)) { fontD = ctx.obj({}); dr.set(PDFName.of('Font'), fontD); }
+          for (const [k, v] of sFont.entries()) if (!fontD.get(k)) fontD.set(k, copier.copy(v));
+        }
+      }
+    }
+  }
+  return added;
+}
+
+function nameTree(ctx, node, out = new Map(), depth = 0) {
+  const n = look(ctx, node);
+  if (!(n instanceof PDFDict) || depth > 32) return out;
+  const names = look(ctx, n.get(PDFName.of('Names')));
+  if (names instanceof PDFArray) for (let i = 0; i + 1 < names.size(); i += 2) { const k = look(ctx, names.get(i)); out.set(k && k.decodeText ? k.decodeText() : String(k), names.get(i + 1)); }
+  const kids = look(ctx, n.get(PDFName.of('Kids')));
+  if (kids instanceof PDFArray) for (let i = 0; i < kids.size(); i++) nameTree(ctx, kids.get(i), out, depth + 1);
+  return out;
+}
+
+function link(parentRef, parent, kids, open) {
+  kids.forEach((k, i) => {
+    k.dict.set(PDFName.of('Parent'), parentRef);
+    if (i > 0) { k.dict.set(PDFName.of('Prev'), kids[i - 1].ref); kids[i - 1].dict.set(PDFName.of('Next'), k.ref); }
+  });
+  parent.set(PDFName.of('First'), kids[0].ref);
+  parent.set(PDFName.of('Last'), kids[kids.length - 1].ref);
+  parent.set(PDFName.of('Count'), PDFNumber.of(open ? kids.length : -kids.length));
+}
+
+/** bookmarks of the source that lead to copied pages → appended to the base outline (under the source's name) */
+export function adoptOutline(base, src, refMap, title = '') {
+  const sctx = src.context; const ctx = base.context;
+  const root = look(sctx, src.catalog.get(PDFName.of('Outlines')));
+  if (!(root instanceof PDFDict)) return 0;
+  let named = null;
+  const namedDest = (key) => {
+    if (!named) {
+      named = new Map();
+      const dests = look(sctx, src.catalog.get(PDFName.of('Dests')));
+      if (dests instanceof PDFDict) for (const [k, v] of dests.entries()) named.set(k.decodeText(), v);
+      const names = look(sctx, src.catalog.get(PDFName.of('Names')));
+      if (names instanceof PDFDict) nameTree(sctx, names.get(PDFName.of('Dests')), named);
+    }
+    let v = look(sctx, named.get(key));
+    if (v instanceof PDFDict) v = look(sctx, v.get(PDFName.of('D')));
+    return v;
+  };
+  const destOf = (item) => {
+    let dest = look(sctx, item.get(PDFName.of('Dest')));
+    if (!dest) { const a = look(sctx, item.get(PDFName.of('A'))); if (a instanceof PDFDict && a.get(PDFName.of('S')) === PDFName.of('GoTo')) dest = look(sctx, a.get(PDFName.of('D'))); }
+    if (dest && !(dest instanceof PDFArray) && dest.decodeText) dest = namedDest(dest.decodeText());
+    if (!(dest instanceof PDFArray) || !(dest.get(0) instanceof PDFRef)) return null;
+    const to = refMap.get(dest.get(0).toString());
+    if (!to) return null;
+    const rest = dest.asArray().slice(1).map((x) => { const v = look(sctx, x); return v instanceof PDFName || v instanceof PDFNumber ? v : ctx.obj(null); });
+    return ctx.obj([to, ...rest]);
+  };
+  // copy a chain of siblings → [{ ref, dict }]; items without a kept page and without kept children are dropped
+  const copyChain = (first, depth = 0) => {
+    const items = []; let cur = look(sctx, first); let guard = 0;
+    while (cur instanceof PDFDict && guard++ < 5000 && depth < 32) {
+      const kids = copyChain(cur.get(PDFName.of('First')), depth + 1);
+      const dest = destOf(cur);
+      if (dest || kids.length) {
+        const t = look(sctx, cur.get(PDFName.of('Title')));
+        const dict = ctx.obj({});
+        dict.set(PDFName.of('Title'), PDFHexString.fromText(t && t.decodeText ? t.decodeText() : ''));
+        if (dest) dict.set(PDFName.of('Dest'), dest);
+        const ref = ctx.register(dict);
+        if (kids.length) link(ref, dict, kids, true);
+        items.push({ ref, dict });
+      }
+      cur = look(sctx, cur.get(PDFName.of('Next')));
+    }
+    return items;
+  };
+  let items = copyChain(root.get(PDFName.of('First')));
+  if (!items.length) return 0;
+  if (title) {
+    const dict = ctx.obj({}); dict.set(PDFName.of('Title'), PDFHexString.fromText(title));
+    const first = items.find((x) => x.dict.get(PDFName.of('Dest')));
+    if (first) dict.set(PDFName.of('Dest'), first.dict.get(PDFName.of('Dest')));
+    const ref = ctx.register(dict);
+    link(ref, dict, items, false);
+    items = [{ ref, dict }];
+  }
+  let brootRef = base.catalog.get(PDFName.of('Outlines'));
+  let broot = look(ctx, brootRef);
+  if (!(broot instanceof PDFDict)) { broot = ctx.obj({ Type: 'Outlines' }); brootRef = ctx.register(broot); base.catalog.set(PDFName.of('Outlines'), brootRef); }
+  const lastRef = broot.get(PDFName.of('Last'));
+  const last = look(ctx, lastRef);
+  items.forEach((it, i) => {
+    it.dict.set(PDFName.of('Parent'), brootRef);
+    if (i > 0) { it.dict.set(PDFName.of('Prev'), items[i - 1].ref); items[i - 1].dict.set(PDFName.of('Next'), it.ref); }
+  });
+  if (last instanceof PDFDict) { last.set(PDFName.of('Next'), items[0].ref); items[0].dict.set(PDFName.of('Prev'), lastRef); } else broot.set(PDFName.of('First'), items[0].ref);
+  broot.set(PDFName.of('Last'), items[items.length - 1].ref);
+  const cnt = look(ctx, broot.get(PDFName.of('Count')));
+  broot.set(PDFName.of('Count'), PDFNumber.of(Math.abs(cnt instanceof PDFNumber ? cnt.asNumber() : 0) + items.length));
+  return items.length;
+}

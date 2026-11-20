@@ -6,6 +6,7 @@ import { t } from '@hostwerk/i18n';
 import { parseXml, isEl } from '../_shared/xmltree.js';
 import { ActionRow, decodeText } from './common.jsx';
 import { Keep } from '../_shared/keep.jsx';
+import { FileTypeIcon } from '../../lib/fileIcons.jsx';
 
 const MAX_TEXT = 3 * 1024 * 1024;
 
@@ -78,6 +79,7 @@ export default function DataView({ file, bytes, host }) {
   return (
     <div className="of-view-data">
       <div className="of-view-toolbar">
+        <span className="of-view-tname"><FileTypeIcon name={file.name} size={20} /><b className="of-view-ellipsis"><Keep>{file.name}</Keep></b></span>
         {kind !== 'text' && parsed.ok && <Seg value={mode} onChange={setMode} options={[{ id: 'tree', label: t('Tree'), icon: Braces }, { id: 'pretty', label: t('Formatted'), icon: Code2 }, { id: 'raw', label: t('Raw'), icon: FileText }]} />}
         {mode !== 'tree' && <button type="button" className={`btn sm ghost${wrap ? ' on' : ''}`} aria-pressed={wrap} onClick={() => setWrap(!wrap)} title="Wrap lines"><WrapText size={16} /> {t('Wrap lines')}</button>}
         <button type="button" className="btn sm ghost" onClick={copy} title="Copy all"><Copy size={16} /> {t('Copy')}</button>

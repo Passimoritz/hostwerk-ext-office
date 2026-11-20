@@ -120,9 +120,16 @@ function routes(host, o) {
     const counts = { favorites: lib.fromKeys(o.meta.favorites()).length, trash: o.trash.list().length, shared: new Set(o.shareList().filter((x) => !S.expired(x)).map((x) => x.key)).size, templates: o.templates.list().length };
     res.json({ dir, view, entries, counts, crumbs: lib.crumbs(dir).map((c, i) => (i === 0 ? { ...c, name: host.t('Library') } : c)) });
   });
-  r.get('/office/search', (req, res) => {
+  r.get('/office/search', async (req, res) => {
     const text = String(req.query.q || '').trim();
     if (!text) return res.json({ hits: [], indexing: !!o.index.running });
+    // ?semantic=1: search by meaning (1.1, semantic.js) – same hit shape plus mode
+    if (boolQ(req.query.semantic) && o.semantic) {
+      const out = await o.semantic.search(text, { dir: normRel(req.query.dir || ''), limit: 60 });
+      const kind = String(req.query.kind || '');
+      const hits = []; for (const h of out.hits) { try { const e = lib.entryOf({ path: h.rel }); if (!kind || e.kind === kind) hits.push({ ...e, snippet: h.snippet, score: h.score }); } catch { /* gone */ } }
+      return res.json({ hits, indexing: !!o.index.running, mode: out.mode });
+    }
     const dir = normRel(req.query.dir || '');
     const kind = String(req.query.kind || '');
     const hits = [];
@@ -226,13 +233,25 @@ function routes(host, o) {
     const label = (FORMATS[e.ext] || {}).label;
     res.json({ ...e, ...facts, label: label ? host.t(label) : null, edit: (FORMATS[e.ext] || {}).edit || null, versions: o.versions.list(f.key).length, full: f.full });
   });
+  // embedded thumbnail (docProps/thumbnail.*, ODF Thumbnails/…) or one the UI rendered (PUT /office/thumb, per mtime); ETag/304
+  const thumbMiss = new Map(); // key → mtime without an embedded thumbnail (no need to open the zip again)
   r.get('/office/thumb', async (req, res) => {
     const f = lib.file(q(req));
-    if (f.st.size > MAX_READ) throw err(404, 'No thumbnail');
-    const t = X.thumb(await fs.promises.readFile(f.full), extOf(f.full));
-    if (!t) throw err(404, 'No thumbnail');
+    const mtime = Math.floor(f.st.mtimeMs);
+    const etag = `"t${mtime.toString(36)}-${f.st.size.toString(36)}"`;
+    res.setHeader('Cache-Control', 'private, max-age=60, must-revalidate');
+    res.setHeader('ETag', etag);
+    if (req.headers['if-none-match'] === etag) return res.status(304).end();
+    let t = null;
+    if (f.st.size <= MAX_READ && thumbMiss.get(f.key) !== mtime) {
+      t = X.thumb(await fs.promises.readFile(f.full), extOf(f.full));
+      if (!t) { thumbMiss.set(f.key, mtime); if (thumbMiss.size > 5000) thumbMiss.clear(); }
+    }
+    if (!t && o.thumbs) { const got = o.thumbs.get(f.key, mtime); if (got) t = { ...got, rendered: true }; }
+    if (!t) { res.removeHeader('ETag'); if (req.query.probe) return res.status(204).end(); throw err(404, 'No thumbnail'); } // probe=1: “is there one?” without an error in the browser console
     res.setHeader('Content-Type', t.type);
-    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    if (t.rendered) res.setHeader('x-thumb', 'rendered');
     res.end(t.data);
   });
 
@@ -562,6 +581,9 @@ function routes(host, o) {
     }
     res.json({ error: 0 });
   });
+
+  /* ---------------- Office 1.1 (routes11.js) – before the error handler ---------------- */
+  if (typeof o.extraRoutes === 'function') o.extraRoutes(host, o);
 
   /* ---------------- errors (status + translated text + extra fields like { mtime }) ---------------- */
   const onError = (e, req, res, next) => {

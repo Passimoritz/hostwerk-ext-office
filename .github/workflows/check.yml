@@ -22,10 +22,15 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24
-      - name: Hostwerk extension check
+      - name: Hostwerk extension check (the shipped package)
+        # The catalog runs sdk/check.js --strict on the unpacked release zip and Hostwerk checks the unpacked package on
+        # install – so the check runs on exactly the files the "Build package" step below zips (same filter), not on the
+        # whole checkout (ui/src, tests and tools are not shipped and would count against the 10 MB limit).
         run: |
           curl -fsSL https://raw.githubusercontent.com/Passimoritz/hostwerk-public/main/sdk/check.js -o "$RUNNER_TEMP/check.js"
-          node "$RUNNER_TEMP/check.js" . --strict
+          PKG="$RUNNER_TEMP/pkg"; mkdir -p "$PKG"
+          git ls-files -z | grep -zvE '^(\.github/|\.gitignore$|\.gitattributes$|tests/|tools/|scripts/|ui/src/|node_modules/|package(-lock)?\.json$|docs/.*\.md$|ARCHITECTURE\.md$|.*\.todo\.json$)' | xargs -0 cp --parents -t "$PKG"
+          node "$RUNNER_TEMP/check.js" "$PKG" --strict
       - name: Interface module and editor chunks build
         # Office: main module plus the lazy editor chunks (ui/assets/*) with the format libraries from package.json.
         # npm ci also provides the test dependencies (unit tests below).

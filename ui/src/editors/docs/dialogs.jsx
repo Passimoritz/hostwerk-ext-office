@@ -130,12 +130,14 @@ export function ParagraphDialog({ attrs, onSave, onClose }) {
   );
 }
 
-export function WordCountDialog({ stats, selection, pages, onClose }) {
+export function WordCountDialog({ stats, selection, pages, onClose, goal = 0, onGoal }) {
+  const [g, setG] = useState(goal ? String(goal) : '');
   const rows = [['Pages', pages], ['Words', stats.words], ['Characters (no spaces)', stats.charsNoSpaces], ['Characters (with spaces)', stats.chars], ['Paragraphs', stats.paragraphs]];
   return (
     <Modal title="Word count" onClose={onClose} footer={<Btn className="primary" onClick={onClose}>Close</Btn>}>
       <table className="table"><tbody>{rows.map(([k, v]) => <tr key={k}><td>{k}</td><td className="num">{Number(v).toLocaleString()}</td></tr>)}</tbody></table>
       {selection && <p className="small muted">{t('Selection: {w} words, {c} characters', { w: selection.words, c: selection.chars })}</p>}
+      {onGoal && <Field label="Word goal" hint="The status bar shows how far you are. Empty = no goal."><div className="row-tight"><input className="input" inputMode="numeric" value={g} onChange={(e) => setG(e.target.value.replace(/D/g, ''))} placeholder={t('e.g. 1500')} aria-label="Word goal" /><Btn onClick={() => { onGoal(Number(g) || 0); onClose(); }}>Set goal</Btn></div></Field>}
     </Modal>
   );
 }

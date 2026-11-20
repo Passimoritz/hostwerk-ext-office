@@ -26,8 +26,13 @@ const { ZipWriter, readZip } = require('./zip');
 const { routes } = require('./routes');
 const { extOf, FORMATS } = require('./formats');
 const { OsReg } = require('./osreg');
+const V11 = require('./v11');
+const { routes11 } = require('./routes11');
 
 let state = null;
+// per activation (key: its host): an update activates the new module while the old one is still shutting down – the old
+// deactivate() must never stop the new activation (it removed the new "Office documents" root in Files after an update)
+const states = new WeakMap();
 
 function activate(host) {
   const { ctx } = host;
@@ -74,7 +79,8 @@ function activate(host) {
   const sharedKeys = () => new Set(shares.filter((s) => !(s.expires && s.expires <= Date.now())).map((s) => s.key));
   const rekeyShares = (a, b) => { let ch = false; for (const s of shares) if (s.key === a || s.key.startsWith(`${a}/`)) { s.key = b + s.key.slice(a.length); if (!s.root) s.path = s.key; s.name = path.posix.basename(s.key); ch = true; } if (ch) saveShares(shares); };
 
-  const library = new Library({ settings, files: ctx.files || null, meta, versions, trash, index, sharedKeys, dataDir, onChange: () => index.soon(), onRekey: rekeyShares });
+  let hooks = null; // Office 1.1 (v11.js): rules, forms, publishing, co-editing follow writes and renames
+  const library = new Library({ settings, files: ctx.files || null, meta, versions, trash, index, sharedKeys, dataDir, onChange: () => index.soon(), onRekey: (a, b) => { rekeyShares(a, b); if (hooks) hooks.onRekey(a, b); }, onWrite: (l) => { if (hooks) hooks.onWrite(l); }, thumbHas: (k, m) => !!(hooks && hooks.thumbs && hooks.thumbs.has(k, m)) });
 
   /* ---------- secret for tokens/cookies ---------- */
   let secretBuf = null;
@@ -160,6 +166,8 @@ function activate(host) {
 
   const o = { settings, saveSettings, library, meta, versions, trash, templates, index, libs, converters, resetConverters, convert, plan, targetsFor: C.targets, engine, servers, drive, canWindow,
     frames: new Map(), secret, shareList, saveShares, countView, sharePdf, guard, hasDesktop, userName, linkBases, osreg, libRoot: () => `ext:${host.id || 'office'}:${LIB_ROOT}` };
+  hooks = V11.setup(host, o, { dataRoot, dataDir, every, later });
+  o.extraRoutes = routes11;
   routes(host, o);
 
   /* ---------- background work ---------- */
@@ -171,6 +179,8 @@ function activate(host) {
   }
   fs.mkdirSync(settings().libraryDir, { recursive: true });
   addRoot();
+  // an update from 1.0.x: the old module's deactivate() runs after this activation and removes the root once more
+  later(3000, () => addRoot());
   // the root's name is plain text in Hostwerk's language – follow a language switch
   let rootLang = typeof host.lang === 'function' ? host.lang() : null;
   every(20000, () => { const l = typeof host.lang === 'function' ? host.lang() : null; if (l && l !== rootLang) { rootLang = l; addRoot(); } });
@@ -310,20 +320,30 @@ function activate(host) {
     } catch (e) { host.log('transfer', e.message); }
   }
 
+  let down = false;
   const shutdown = () => {
+    if (down) return; // the shutdown hook and deactivate() both call it – once is enough
+    down = true;
     for (const off of timers.splice(0)) { try { off(); } catch { /* egal */ } }
     try { if (watcher) watcher.close(); } catch { /* egal */ }
     watcher = null;
     if (viewSave) { clearTimeout(viewSave); viewSave = null; try { writeJson(file('shares.json'), shares); } catch { /* egal */ } }
+    if (hooks) { try { hooks.shutdown(); } catch { /* egal */ } }
     index.stop(); meta.flush(); C.killAll();
     try { if (host.files && typeof host.files.removeRoot === 'function') host.files.removeRoot(LIB_ROOT); } catch { /* Hostwerk removes it anyway */ }
   };
   host.on('shutdown', shutdown);
   state = { shutdown, o };
+  states.set(host, state);
   return { ok: true };
 }
 
-function deactivate() { if (state) { try { state.shutdown(); } catch { /* egal */ } state = null; } }
+function deactivate(host) {
+  const s = host && states.has(host) ? states.get(host) : state;
+  if (!s) return;
+  try { s.shutdown(); } catch { /* egal */ }
+  if (state === s) state = null;
+}
 
 /**
  * Removing the extension (SDK 3.3 hook, never on switch-off or update): take Hostwerk out of "Open with" (Hostwerk does

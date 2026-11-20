@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDown } from 'lucide-react';
 import { t } from '@hostwerk/i18n';
-import { withKeys } from '../_shared/keys.js';
+import { withKeys, keyLabel } from '../_shared/keys.js';
 import { colorName } from '../_shared/colors.js';
 
 /** ribbon button: keeps the editor focus (mousedown is prevented), shows its shortcut in the tooltip */
@@ -59,7 +59,7 @@ export function Drop({ icon: Icon, label, title, keys, disabled, active, childre
 export function MenuItem({ icon: Icon, children, onClick, active, keys, disabled }) {
   return (
     <button type="button" role="menuitem" className={`of-docs-mi ${active ? 'of-on' : ''}`} disabled={disabled} onMouseDown={(e) => e.preventDefault()} onClick={onClick}>
-      {Icon ? <Icon size={14} /> : <span className="of-mi-ic" />}<span className="grow">{children}</span>{keys && <span className="of-mi-keys">{keys}</span>}
+      {Icon ? <Icon size={14} /> : <span className="of-mi-ic" />}<span className="grow">{children}</span>{keys && <span className="of-mi-keys">{keyLabel(keys)}</span>}
     </button>
   );
 }

@@ -18,6 +18,28 @@ import { parseQuery, basename, fmtBytes } from './util';
 import EditorHost from './EditorHost';
 import { ensureFullEditor } from './engine';
 import { DialogView } from './files';
+import ThumbRenderer from './thumbHost';
+import { FileTypeIcon } from '../lib/fileIcons';
+import { familyOf, iconInfo } from '../lib/fileTypes';
+import { canThumb, ensureThumb } from '../lib/thumbs';
+import { prefetchFor } from '../lib/loader';
+
+/*
+ * Coloured icons and first-page thumbnails for Hostwerk's Files (SDK 3.16 slots files.icon / files.thumb – older
+ * Hostwerk versions ignore unknown slots, so nothing breaks there):
+ *   files.icon  { id, match: { test(name) }, Component({ name, size, entry }), info(name) → { color, family, label } }
+ *   files.thumb { id, match: { test(name) }, thumb({ root, path, name, mtime, size }) → Promise<url|null> }
+ * A thumbnail request also fetches the matching editor chunk in the background (the click after it opens fast).
+ */
+// only the formats Office itself opens or edits – text, code, images, archives, databases and folders keep Hostwerk's own icons
+const ICON_FAMILIES = new Set(['word', 'sheet', 'slides', 'pdf', 'mail', 'contact', 'calendar', 'ebook', 'diagram', 'note', 'publisher', 'project', 'google', 'iwork']);
+const iconMatch = { test: (name) => ICON_FAMILIES.has(familyOf(String(name || ''))) };
+function FilesIcon({ name, entry, size = 16 }) { return <FileTypeIcon name={name || (entry && entry.name)} entry={entry && entry.dir ? entry : undefined} size={size} showExt={size >= 48} />; }
+export const filesIcon = [{ id: 'office', title: 'Office', match: iconMatch, Component: FilesIcon, info: (name) => { const i = iconInfo(name); return { color: i.color, family: i.family, label: i.label }; } }];
+export const filesThumb = [{
+  id: 'office', title: 'Office', match: { test: (name) => canThumb({ name: String(name || '') }) },
+  thumb: (x) => { const name = x.name || basename(x.path); prefetchFor(name); return ensureThumb(canon({ root: x.root, path: x.path, name, mtime: x.mtime, size: x.size })); },
+}];
 
 loadSettings().catch(() => {}); // the slots ask settingsNow() synchronously (openFromFiles)
 
@@ -70,7 +92,7 @@ export function EditorScreen() {
   const { hasConverter } = useOfficeStatus();
   useEffect(() => { const h = () => setQ(parseQuery((location.hash.split('?')[1]) || '')); window.addEventListener('hashchange', h); return () => window.removeEventListener('hashchange', h); }, []);
   const back = () => { location.replace(q.back && /^#?\/files/.test(q.back) ? `#${String(q.back).replace(/^#/, '')}` : filesRoute({ root: LIB_ROOT, dir: true })); };
-  if (q.dialog === 'new') return <div className="of-shell-screen of-shell-screen-dialog"><DialogView d={{ type: 'new', kind: q.kind || 'docs', gallery: !!q.gallery, root: q.root || LIB_ROOT, dir: q.dir || '' }} hasConverter={hasConverter} onClose={back} /></div>;
+  if (q.dialog === 'new') return <div className="of-shell-screen of-shell-screen-dialog"><DialogView d={{ type: 'new', kind: q.kind || 'docs', gallery: !!q.gallery, root: q.root || LIB_ROOT, dir: q.dir || '' }} hasConverter={hasConverter} onClose={back} /><ThumbRenderer /></div>;
   if (!q.path) return <div className="of-shell-screen-empty"><TileEmpty icon={FileText} text="No file selected." action="Open Office documents" href={filesRoute({ root: LIB_ROOT, dir: true })} /></div>;
   const target = canon({ root: q.root, path: q.path });
   return <div className="of-shell-screen"><EditorHost key={`${target.root || ''}|${target.path}|${q.app || ''}`} target={target} opts={q} bare /></div>;

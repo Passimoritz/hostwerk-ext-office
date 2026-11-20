@@ -40,6 +40,7 @@ function markOpen(m) {
   }
 }
 
+function wrapMarks(html, marks) { let t = html; const ms = marks || []; for (let k = ms.length - 1; k >= 0; k--) { const [o, c] = markOpen(ms[k]); t = o + t + c; } return t; }
 export function renderInline(nodes, ctx) {
   let s = '';
   for (const n of nodes || []) {
@@ -63,8 +64,21 @@ export function renderInline(nodes, ctx) {
       s += ctx.export
         ? `<sup data-type="footnote" data-text="${esc(n.attrs.text || '')}" class="of-docs-fn" id="fnref${k}"><a href="#fn${k}">${k}</a></sup>`
         : `<sup data-type="footnote" data-text="${esc(n.attrs.text || '')}" class="of-docs-fn">${k}</sup>`;
-    } else if (n.type === 'equation') s += `<span data-type="equation" data-latex="${esc(n.attrs.latex || '')}" class="of-docs-eq">${equationHtml(n.attrs.latex || '')}</span>`;
-    else if (n.content) s += renderInline(n.content, ctx);
+    } else if (n.type === 'equation') {
+      const a = n.attrs || {};
+      const mm = a.mathml ? String(a.mathml).replace(/^[\s\S]*?(<math\b)/, '$1') : null;
+      s += `<span data-type="equation" data-latex="${esc(a.latex || '')}"${a.display ? ' data-display="1"' : ''} class="of-docs-eq${a.display ? ' of-eq-block' : ''}">${mm || equationHtml(a.latex || '')}</span>`;
+    } else if (n.type === 'field') {
+      const a = n.attrs || {};
+      const v = ctx.fields && a.kind === 'page' && ctx.fields.page != null ? String(ctx.fields.page) : ctx.fields && a.kind === 'pages' && ctx.fields.pages != null ? String(ctx.fields.pages) : a.value || '';
+      s += wrapMarks(`<span data-type="field" data-kind="${esc(a.kind || '')}" class="of-docs-field">${esc(v)}</span>`, n.marks);
+    } else if (n.type === 'contentControl') {
+      const a = n.attrs || {};
+      s += wrapMarks(`<span data-type="content-control" data-kind="${esc(a.kind || 'text')}" class="of-docs-cc">${esc(a.kind === 'checkbox' ? (a.checked ? '☒' : '☐') : a.value || '')}</span>`, n.marks);
+    } else if (n.type === 'diagram') {
+      const a = n.attrs || {};
+      s += a.src ? `<img src="${esc(a.src)}" alt="${esc(a.source || '')}" data-type="diagram" class="of-docs-diagram-img"${a.width ? ` width="${a.width}"` : ''} style="max-width:100%;height:auto;display:block;margin:0 auto">` : `<pre class="of-docs-diagram-src">${esc(a.source || '')}</pre>`;
+    } else if (n.content) s += renderInline(n.content, ctx);
   }
   return s;
 }
@@ -94,6 +108,8 @@ function renderBlock(n, ctx) {
     case 'taskItem': return `<li data-type="taskItem" data-checked="${a.checked ? 'true' : 'false'}">${ctx.export ? `<input type="checkbox" disabled${a.checked ? ' checked' : ''}> ` : ''}${renderBlocks(n.content, ctx)}</li>`;
     case 'horizontalRule': return '<hr>';
     case 'pageBreak': return '<div data-type="page-break" class="of-docs-pagebreak" style="break-after:page;page-break-after:always"></div>';
+    case 'sectionBreak': return a.type === 'continuous' ? '' : '<div data-type="section-break" class="of-docs-pagebreak" style="break-after:page;page-break-after:always"></div>';
+    case 'controlBlock': return `<div data-type="control-block" class="of-docs-ccblock">${renderBlocks(n.content, ctx)}</div>`;
     case 'toc': {
       const es = a.entries || [];
       ctx.tocs = (ctx.tocs || 0) + 1;
@@ -117,8 +133,8 @@ function renderBlock(n, ctx) {
 }
 
 /** body HTML of a document (export: footnote list + links; ids: heading anchors for the TOC) */
-export function docToHtml(doc, { exportMode = false, ids = false } = {}) {
-  const ctx = { export: exportMode, ids };
+export function docToHtml(doc, { exportMode = false, ids = false, fields = null } = {}) {
+  const ctx = { export: exportMode, ids, fields };
   let html = renderBlocks((doc && doc.content) || [], ctx);
   if (exportMode) {
     const notes = footnotesOf(doc);

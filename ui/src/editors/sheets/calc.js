@@ -4,7 +4,8 @@
  * spilling. Values of formula cells are kept in cell.v.
  */
 import { parse, collectDeps } from './formula/parser.js';
-import { evaluate, finalize, isRef } from './formula/eval.js';
+import { evaluate, finalize, isRef, structuredRef } from './formula/eval.js';
+import { setDate1904 } from './format/dates.js';
 import { FUNCTIONS } from './formula/functions.js';
 import { ERR, isErr } from './formula/errors.js';
 import { MAXC, MAXR, parseRange } from './formula/refs.js';
@@ -21,7 +22,9 @@ export class Calc {
     this.fcols = new Map(); // sheetId → Map(col → Set(row)) of formula cells
     this.volatile = new Set();
     this.nameUsers = new Set();
+    this.tableUsers = new Set(); // formulas with structured references (relinked when a table changes)
     this.circular = null;
+    this.iterations = 0; // iterations used by the last iterative calculation
     this.pending = new Set(); // manual mode: dirty seeds
   }
 
@@ -48,7 +51,7 @@ export class Calc {
     }
     const fc = this.fcols.get(p.sheet.id);
     if (fc) { const s = fc.get(p.key % MAXC); if (s) s.delete(Math.floor(p.key / MAXC)); }
-    this.volatile.delete(id); this.nameUsers.delete(id);
+    this.volatile.delete(id); this.nameUsers.delete(id); this.tableUsers.delete(id);
     this.prec.delete(id);
   }
   link(sheet, key, cell) {
@@ -64,12 +67,18 @@ export class Calc {
       vol = d.volatile;
       names = d.names;
       const addRef = (n, baseSheet) => {
+        if (n.sheet2) { for (const x of this.book.sheetsBetween(n.sheet, n.sheet2)) addRef({ ...n, sheet: x.name, sheet2: null }, baseSheet); return; }
         const sh = n.sheet ? this.book.sheetByName(n.sheet) : baseSheet;
         if (!sh) return;
         const r1 = Math.min(n.r1, n.r2); const r2 = Math.max(n.r1, n.r2); const c1 = Math.min(n.c1, n.c2); const c2 = Math.max(n.c1, n.c2);
         refs.push({ sheet: sh, r1, c1, r2, c2, single: r1 === r2 && c1 === c2 });
       };
       for (const n of d.refs) addRef(n, sheet);
+      if (d.srefs) {
+        const cx = this.ctxFor(sheet, Math.floor(key / MAXC), key % MAXC);
+        for (const n of d.srefs) { const g = structuredRef(n, cx); if (isRef(g)) refs.push({ sheet: g.sheet, r1: g.r1, c1: g.c1, r2: g.r2, c2: g.c2, single: g.single }); }
+        this.tableUsers.add(this.id(sheet, key));
+      }
       // names: add their precedents (one level deep is enough for typical use; deeper names → volatile)
       for (const nm of names) {
         const def = this.book.nameDef(nm.v, sheet);
@@ -96,7 +105,7 @@ export class Calc {
 
   /** Full rebuild of the graph (after load or structural changes) */
   rebuild() {
-    this.prec.clear(); this.single.clear(); this.ranges.clear(); this.fcols.clear(); this.volatile.clear(); this.nameUsers.clear();
+    this.prec.clear(); this.single.clear(); this.ranges.clear(); this.fcols.clear(); this.volatile.clear(); this.nameUsers.clear(); this.tableUsers.clear();
     for (const sh of this.book.sheets) for (const [k, cell] of sh.cells) if (cell.f) this.link(sh, k, cell);
   }
 
@@ -125,6 +134,8 @@ export class Calc {
       get: (sh, rr, cc) => book.value(sh, rr, cc),
       sheetByName: (n) => book.sheetByName(n),
       sheetIndex: (sh) => book.sheets.indexOf(sh),
+      sheetsBetween: (a, b) => book.sheetsBetween(a, b),
+      table: (name, sh, rr, cc) => book.tableDef(name, sh, rr, cc),
       sheetCount: () => book.sheets.length,
       name: (n, sh) => { const d = book.nameDef(n, sh); if (!d) return null; const ast = this.compile(d.ref); return ast instanceof Error ? null : { ast, sheet: d.scope }; },
       bounds: (sh) => book.bounds(sh),
@@ -189,6 +200,7 @@ export class Calc {
     }
     for (const v of this.volatile) todo.add(v);
     this.circular = null;
+    setDate1904(this.book.date1904);
     const done = new Set();
     for (let pass = 0; pass < 8; pass++) {
       const changedSpill = this.run(todo);
@@ -242,6 +254,8 @@ export class Calc {
       }
     }
     const spillChanged = [];
+    const it = this.book.iterate;
+    if (circ.size && it && it.on) return this.iterate(order, circ, it, spillChanged);
     for (const id of order) {
       const p = this.prec.get(id);
       if (!p) continue;
@@ -251,6 +265,29 @@ export class Calc {
       const { v, link } = this.evalCell(p.sheet, p.key, cell);
       this.setResult(p.sheet, p.key, cell, v, link, spillChanged);
     }
+    return spillChanged;
+  }
+  /** iterative calculation (File → Options → Formulas in Excel): circular cells start from their last value and are
+   *  evaluated again until no value changes more than `delta` or `count` passes were made */
+  iterate(order, circ, it, spillChanged) {
+    const max = Math.max(1, Math.min(32767, it.count || 100)); const delta = it.delta ?? 0.001;
+    for (const id of circ) { const p = this.prec.get(id); const cell = p && p.sheet.cells.get(p.key); if (cell && (typeof cell.v !== 'number' && typeof cell.v !== 'string' && typeof cell.v !== 'boolean')) cell.v = 0; }
+    let n = 0;
+    for (; n < max; n++) {
+      let change = 0;
+      for (const id of order) {
+        const p = this.prec.get(id);
+        if (!p) continue;
+        const cell = p.sheet.cells.get(p.key);
+        if (!cell || !cell.f) continue;
+        const old = cell.v;
+        const { v, link } = this.evalCell(p.sheet, p.key, cell);
+        this.setResult(p.sheet, p.key, cell, v, link, spillChanged);
+        if (circ.has(id)) change = Math.max(change, typeof v === 'number' && typeof old === 'number' ? Math.abs(v - old) : v === old ? 0 : Infinity);
+      }
+      if (change <= delta) { n++; break; }
+    }
+    this.iterations = n;
     return spillChanged;
   }
   isSelfRangeOnly() { return false; }

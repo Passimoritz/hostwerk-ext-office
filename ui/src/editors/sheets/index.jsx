@@ -10,6 +10,7 @@ import { makeLocale } from './format/locale.js';
 import { saveBytes, csvToBook, CSV } from './io/formats.js';
 import { sheetjsText, sheetjsGrid } from './io/sheetjs.js';
 import { decodeText, detectDelimiter, parseCSV } from './io/csv.js';
+import { Compare } from './plus/compare.jsx';
 import './style.css';
 
 const docLang = () => (String((typeof document !== 'undefined' && document.documentElement.lang) || 'en').toLowerCase().startsWith('de') ? 'de' : 'en');
@@ -67,5 +68,5 @@ function Preview({ bytes, ext, name }) {
   );
 }
 
-export default { kind: 'sheets', Editor, create, toText, Preview };
+export default { kind: 'sheets', Editor, create, toText, Preview, Compare };
 export { csvToBook };

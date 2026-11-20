@@ -1,13 +1,20 @@
-/* Images (png, jpg, gif, webp, bmp, svg – svg sanitised and shown as <img>): fit, 100 %, zoom (wheel/buttons), pan, rotate, info. */
+/* Images (png, jpg, gif, webp, bmp, svg, emf/wmf via emf.js – svg sanitised and shown as <img>): fit, 100 %, zoom (wheel/buttons), pan, rotate, info. */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import DOMPurify from 'dompurify';
 import { ZoomIn, ZoomOut, Maximize, RotateCw, RotateCcw, Scan } from 'lucide-react';
 import { t } from '@hostwerk/i18n';
 import { ActionRow, useBlobUrl, fmtSize } from './common.jsx';
 import { FORMATS } from '../../lib/formats.js';
-import { Raw } from '../_shared/keep.jsx';
+import { Raw, Keep } from '../_shared/keep.jsx';
+import { metafileToSvg } from './emf.js';
+import { FileTypeIcon } from '../../lib/fileIcons.jsx';
 
 export function imageBytes(bytes, ext) {
+  if (ext === 'emf' || ext === 'wmf' || ext === 'emz') {
+    // Windows metafiles: drawn as SVG by our small EMF/WMF reader (common records)
+    const r = metafileToSvg(bytes);
+    if (r) return { bytes: new TextEncoder().encode(r.svg), mime: 'image/svg+xml', converted: true };
+  }
   if (ext !== 'svg') return { bytes, mime: (FORMATS[ext] || {}).mime || 'image/png' };
   const clean = DOMPurify.sanitize(new TextDecoder().decode(bytes), { USE_PROFILES: { svg: true, svgFilters: true } });
   return { bytes: new TextEncoder().encode(clean), mime: 'image/svg+xml' };
@@ -47,6 +54,7 @@ export default function ImageView({ file, bytes, host }) {
   return (
     <div className="of-view-image" onKeyDown={key} tabIndex={-1}>
       <div className="of-view-toolbar">
+        <span className="of-view-tname"><FileTypeIcon name={file.name} size={20} /><b className="of-view-ellipsis"><Keep>{file.name}</Keep></b></span>
         <button type="button" className="btn sm ghost icon" title="Zoom out (Ctrl+-)" aria-label="Zoom out" onClick={() => setZ(Math.max(0.05, s / 1.25))}><ZoomOut size={16} /></button>
         <span className="small muted of-view-zoomv">{Math.round(s * 100)} %</span>
         <button type="button" className="btn sm ghost icon" title="Zoom in (Ctrl++)" aria-label="Zoom in" onClick={() => setZ(s * 1.25)}><ZoomIn size={16} /></button>

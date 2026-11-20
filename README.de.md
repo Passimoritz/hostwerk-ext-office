@@ -27,7 +27,11 @@ Dokumente, Tabellen, Präsentationen und PDFs direkt in Hostwerk erstellen, bear
 - **Dokumente** wie in Word: Formatvorlagen, Schriften, Listen, Tabellen, Bilder, Kopf- und Fußzeilen, Seitenzahlen, Fußnoten, Inhaltsverzeichnis, Kommentare, Änderungen nachverfolgen, Suchen und Ersetzen, Seitenansicht mit Lineal und Navigation – docx, odt, rtf, md, html, txt und doc
 - **Tabellen** wie in Excel: Formeln mit Hunderten Funktionen, mehrere Blätter, Zahlenformate, bedingte Formatierung, Datenüberprüfung, Sortieren und Filtern, Diagramme, Fenster fixieren, Zusammenfassung der Auswahl – xlsx, xls, ods, csv und viele weitere
 - **Präsentationen** wie in PowerPoint: Folien mit Layouts und Designs, Textfelder, Formen, Bilder, Tabellen, Diagramme, Übergänge und Animationen, Notizen, Bildschirmpräsentation mit Referentenansicht im eigenen Hostwerk-Fenster – pptx, odp und ppt
-- **PDFs:** lesen, suchen, markieren, Notizen, Stempel, Unterschrift, Formulare ausfüllen, Seiten umsortieren, drehen, löschen, einfügen, zusammenführen und aufteilen
+- **PDFs:** lesen, suchen, markieren, Notizen, Stempel, Unterschrift, Formulare ausfüllen, Seiten umsortieren, drehen, löschen, einfügen, zusammenführen und aufteilen, Texterkennung (OCR), echtes Schwärzen, zwei PDFs vergleichen, Passwortschutz
+- **Gemeinsam bearbeiten (1.1):** Dokumente, Tabellen und Präsentationen live mit allen, die in diesem Hostwerk angemeldet sind – mit Cursor, Auswahl und einem, der speichert
+- **Live-Daten (1.1):** Live-Felder in Dokumenten und Folien (Datum, Hostwerk-Werte, eine Zelle einer anderen Tabelle), Live-Datentabellen und Tabellen aus Hostwerks Datenbanken als Blätter (Änderungen werden nach deiner Bestätigung zurückgeschrieben), Formulare aus einer Tabelle mit öffentlicher Seite, Regeln mit Benachrichtigung, geplante PDF-Berichte, Kanban-, Kalender- und Galerie-Ansicht eines Blatts
+- **Schreiben und Präsentieren (1.1):** „/“-Befehle, LaTeX-Formeln (als echte Office-Formeln gespeichert), Diagramme aus Text (Mermaid), Versionen vergleichen, Präsentation aus einem Dokument, Handy als Fernbedienung per QR-Code, KI-Helfer mit dem Anbieter, den du in Hostwerk eingerichtet hast
+- **Sicher teilen (1.1):** passwortgeschützte Word-/Excel-/PowerPoint-/OpenDocument-Dateien öffnen und bleiben beim Speichern verschlüsselt (Passwort oder Hostwerks Passwort-Tresor), vor dem Teilen bereinigen, als Webseite veröffentlichen, Office-Bibliothek in Hostwerks Sicherungen
 - **Alles andere lesen:** E-Mails (eml, msg), Kontakte (vcf), Kalender (ics), E-Books (epub), Visio, Apple Pages/Keynote/Numbers, OpenDocument-Zeichnungen, Bilder, JSON, XML und ZIP
 - **Google Drive:** mit deinem eigenen Google-OAuth-Client (die Einstellungen zeigen die Schritte) einmal im Hostwerk-Fenster anmelden, dann öffnen sich Google-Dokumente, -Tabellen und -Präsentationen in den eingebauten Editoren und werden zurück zu Google gespeichert
 - **Nichts geht verloren:** Teile, die die Editoren nicht bearbeiten (Makros, SmartArt, Pivot-Tabellen, eingebettete Objekte …), bleiben beim Speichern unverändert erhalten
@@ -42,7 +46,9 @@ Dokumente, Tabellen, Präsentationen und PDFs direkt in Hostwerk erstellen, bear
 
 ## Installieren
 
-In Hostwerk (ab 3.2.2, Erweiterungs-SDK 3.15): **Erweiterungen → Entdecken** und „Installieren“ klicken.
+In Hostwerk (ab 3.2.2, Erweiterungs-SDK 3.15): **Erweiterungen → Entdecken** und „Installieren“ klicken. Die farbigen Datei-Symbole und Vorschaubilder in Liste und Raster von Hostwerks Dateien brauchen Hostwerk 3.2.3 (SDK 3.16) – ältere Fassungen zeigen dort Hostwerks eigene Symbole, alles andere funktioniert gleich.
+
+**Bausteine bei Bedarf:** ein paar schwere Teile stecken nicht im Paket und werden beim ersten Gebrauch einmal heruntergeladen (Office fragt vorher und zeigt die Größe; feste Adressen, jede Datei gegen eine festgelegte SHA-256 geprüft; danach funktionieren sie offline): die Texterkennung für PDFs (OCR, Deutsch + Englisch, ≈ 23 MB), Diagramme aus Text (Mermaid, ≈ 14 MB) und die PDF-Schriften für Chinesisch, Japanisch und Koreanisch (≈ 33 MB).
 
 Native Erweiterungen laufen als Teil von Hostwerk (eigener Server- und Oberflächen-Teil). Deshalb installiert Hostwerk sie nur aus dem offiziellen Katalog (mit Prüfsumme) oder im Entwickler-Modus.
 
@@ -51,6 +57,7 @@ Native Erweiterungen laufen als Teil von Hostwerk (eigener Server- und Oberfläc
 - `office` im Hostwerk-Datenordner – deine Dateien, in Dateien als „Office-Dokumente“ (Ort in den Einstellungen änderbar)
 - `office-data` – Schlagwörter, Notizen, Versionen, Papierkorb, Suchindex, Freigaben, eigene Vorlagen
 - `office-engine` – die eigene Office-Engine (nur wenn sie gebraucht wird, etwa 1,5 GB)
+- `office-components` – Bausteine bei Bedarf (OCR, Mermaid, asiatische PDF-Schriften – nur die, die du genutzt hast)
 
 Beim Entfernen der Erweiterung bleibt alles erhalten. Nur „Restlos entfernen“ bietet an, auch diese Ordner zu löschen (du siehst vorher jeden mit seiner Größe).
 
@@ -60,7 +67,8 @@ Beim Entfernen der Erweiterung bleibt alles erhalten. Nur „Restlos entfernen�
 npm ci                               # Bibliotheken für den Build
 node --test tests/*.test.js          # Tests
 node tools/build.js                  # Oberfläche und Editoren bauen (ui/index.js, ui/assets/*)
-node check.js . --strict             # dieselbe Prüfung wie der Katalog (sdk/check.js)
+node tools/package.js --dir /tmp/pkg # das Release-Paket genau wie die CI es baut (Größe, Inhalt)
+node check.js /tmp/pkg --strict      # dieselbe Prüfung wie der Katalog (sdk/check.js auf dem Paket)
 ```
 
 Oberfläche in `ui/src` (Dateien-Anbindung, Editor-Rahmen und Einstellungen in `ui/src/shell`, Editoren in `ui/src/editors/<art>` – sie werden erst beim Öffnen einer Datei geladen), Server-Teil in `server/`. Texte im Code sind Englisch, Deutsch steht in `locales/de.json`.

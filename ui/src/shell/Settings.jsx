@@ -6,6 +6,7 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import {
   Settings2, FileText, Sheet, Presentation, FileType, Cpu, Plug, Share2, Library, ArrowLeft, CheckCircle2, XCircle, Download, RotateCcw, Trash2, FlaskConical, Sparkles, Cloud, LogOut, RefreshCw, MonitorCheck,
+  FileSpreadsheet, Calculator, PenLine, FolderOpen, Search, Folders, FilePlus2, MonitorPlay, Save, Link2, History, Type,
 } from 'lucide-react';
 import { get, post } from '@hostwerk/api';
 import { SettingsLayout, SettingRow, Switch, Seg, Field, PathInput, SaveBar, Callout, Btn, Loading, Empty, toast, confirmDialog, useRemembered, InfoTip } from '@hostwerk/ui';
@@ -99,38 +100,38 @@ export default function OfficeSettings({ embedded = false, query = '' }) {
 
   let pane = null;
   if (group === 'general') pane = <>
-    <div className="card"><div className="card-head"><h3>Saving</h3></div><div className="card-body">
+    <div className="card"><div className="card-head"><Save size={16} className="of-shell-chead" aria-hidden="true" /><h3>Saving</h3></div><div className="card-body">
       <Toggle p="general.autosave" title="Save automatically" text="Saves a few seconds after your last change. Every save keeps the previous content as a version." />
       <Num p="general.autosaveSeconds" title="Wait before saving" unit="seconds" disabled={!v('general.autosave')} />
       <Pick p="general.newFormat" title="Format of new files" text="Microsoft Office (docx, xlsx, pptx) or OpenDocument (odt, ods, odp) – you can always pick another one in the dialog." options={[['ms', 'Microsoft Office'], ['odf', 'OpenDocument']]} />
       <Toggle p="general.confirmDelete" title="Ask before moving to the trash" text="Deleted files can be restored from the trash either way." />
     </div></div>
-    <div className="card"><div className="card-head"><h3>Writing</h3></div><div className="card-body">
+    <div className="card"><div className="card-head"><Type size={16} className="of-shell-chead" aria-hidden="true" /><h3>Writing</h3></div><div className="card-body">
       <Text p="general.author" title="Author name" text="Written into new files and comments." placeholder="e.g. Anna Berger" />
       <Toggle p="general.spellcheck" title="Check spelling" text="Marks unknown words while you type (uses the spell checker of this window)." />
       <Select p="general.language" title="Language of documents" text="For spelling, hyphenation and number formats." options={LANGS} />
       <Pick p="general.units" title="Units" options={[['cm', 'Centimetres'], ['in', 'Inches']]} />
     </div></div>
-    <div className="card"><div className="card-head"><h3>In Files</h3></div><div className="card-body">
+    <div className="card"><div className="card-head"><Folders size={16} className="of-shell-chead" aria-hidden="true" /><h3>In Files</h3></div><div className="card-body">
       <Toggle p="general.openFromFiles" title="Open office files in Office" text="A click on a document, spreadsheet, presentation or PDF in Files opens it in Office – in every folder. Off: Files shows its preview; right-click → “Open in Office” still works." />
       <Num p="general.recentCount" title="Recent files in the Office section" unit="files" />
     </div></div>
   </>;
   else if (group === 'library') pane = <>
-    <div className="card"><div className="card-head"><h3>Folder “Office documents”</h3></div><div className="card-body stack">
+    <div className="card"><div className="card-head"><FolderOpen size={16} className="of-shell-chead" aria-hidden="true" /><h3>Folder “Office documents”</h3></div><div className="card-body stack">
       <Field label="Folder of “Office documents” in Files" hint="Empty = Hostwerk’s data folder. Files already there stay where they are; Files shows the new folder.">
         <PathInput mode="folder" title={t('Folder of “Office documents” in Files')} value={v('libraryDir')} onChange={set('libraryDir')} placeholder={t('Hostwerk data folder (default)')} />
         {err('libraryDir')}
       </Field>
     </div></div>
-    <div className="card"><div className="card-head"><h3>Trash and versions</h3></div><div className="card-body">
+    <div className="card"><div className="card-head"><History size={16} className="of-shell-chead" aria-hidden="true" /><h3>Trash and versions</h3></div><div className="card-body">
       <Num p="general.trashDays" title="Keep deleted files" unit="days" text="Afterwards they are removed for good." />
       <Num p="general.keepVersions" title="Versions per file" unit="versions" text="Older versions beyond this number are removed." />
       <Num p="general.versionDays" title="Keep versions" unit="days" />
     </div></div>
   </>;
   else if (group === 'docs') pane = <>
-    <div className="card"><div className="card-head"><h3>New documents</h3></div><div className="card-body">
+    <div className="card"><div className="card-head"><FilePlus2 size={16} className="of-shell-chead" aria-hidden="true" /><h3>New documents</h3></div><div className="card-body">
       <Font p="docs.font" title="Font" />
       <Num p="docs.fontSize" title="Font size" unit="pt" step={0.5} />
       <Select p="docs.lineHeight" title="Line spacing" num options={[[1, 'Single (1.0)'], [1.08, '1.08'], [1.15, '1.15'], [1.5, '1.5'], [2, 'Double (2.0)']]} />
@@ -141,7 +142,7 @@ export default function OfficeSettings({ embedded = false, query = '' }) {
         <div className="of-shell-margins">{['top', 'right', 'bottom', 'left'].map((k) => <label key={k} className="stack of-shell-gap-0"><span className="tiny muted">{t(k[0].toUpperCase() + k.slice(1))}</span><input className="input of-shell-num-in" type="number" value={v(`docs.margins.${k}`) ?? ''} onChange={(e) => set(`docs.margins.${k}`)(e.target.value === '' ? '' : Number(e.target.value))} aria-label={t(`Margin ${k}`)} />{err(`docs.margins.${k}`)}</label>)}</div>
       </SettingRow>
     </div></div>
-    <div className="card"><div className="card-head"><h3>Editing and view</h3></div><div className="card-body">
+    <div className="card"><div className="card-head"><PenLine size={16} className="of-shell-chead" aria-hidden="true" /><h3>Editing and view</h3></div><div className="card-body">
       <Toggle p="docs.ruler" title="Show the ruler" />
       <Select p="docs.zoom" title="Zoom" num options={ZOOMS.map((z) => [z, `${z} %`])} />
       <Toggle p="docs.smartQuotes" title="Typographic quotes" text="Turns straight quotes into „…“ or “…” while typing." />
@@ -150,7 +151,7 @@ export default function OfficeSettings({ embedded = false, query = '' }) {
     </div></div>
   </>;
   else if (group === 'sheets') pane = <>
-    <div className="card"><div className="card-head"><h3>New spreadsheets and view</h3></div><div className="card-body">
+    <div className="card"><div className="card-head"><Sheet size={16} className="of-shell-chead" aria-hidden="true" /><h3>New spreadsheets and view</h3></div><div className="card-body">
       <Font p="sheets.font" title="Font" />
       <Num p="sheets.fontSize" title="Font size" unit="pt" step={0.5} />
       <Toggle p="sheets.gridlines" title="Show gridlines" />
@@ -158,25 +159,25 @@ export default function OfficeSettings({ embedded = false, query = '' }) {
       <Toggle p="sheets.headings" title="Show row and column headings" />
       <Select p="sheets.zoom" title="Zoom" num options={ZOOMS.map((z) => [z, `${z} %`])} />
     </div></div>
-    <div className="card"><div className="card-head"><h3>Calculation and formats</h3></div><div className="card-body">
+    <div className="card"><div className="card-head"><Calculator size={16} className="of-shell-chead" aria-hidden="true" /><h3>Calculation and formats</h3></div><div className="card-body">
       <Toggle p="sheets.autoCalc" title="Calculate automatically" text="Off: F9 calculates." />
       <Toggle p="sheets.r1c1" title="R1C1 references" text="Rows and columns as numbers instead of A1." />
       <Pick p="sheets.functionNames" title="Function names" text="Files always keep the English names." options={[['auto', 'Like the language'], ['en', 'English (SUM, IF)'], ['de', 'German (SUMME, WENN)']]} />
       <Pick p="sheets.decimal" title="Decimal separator" options={[['auto', 'Like the language'], ['.', 'Point (1.5)'], [',', 'Comma (1,5)']]} />
       <Select p="sheets.dateFormat" title="Date format" options={[['auto', 'Like the language'], ['DD.MM.YYYY', '31.12.2026'], ['YYYY-MM-DD', '2026-12-31'], ['MM/DD/YYYY', '12/31/2026'], ['DD/MM/YYYY', '31/12/2026']]} />
     </div></div>
-    <div className="card"><div className="card-head"><h3>CSV files</h3></div><div className="card-body">
+    <div className="card"><div className="card-head"><FileSpreadsheet size={16} className="of-shell-chead" aria-hidden="true" /><h3>CSV files</h3></div><div className="card-body">
       <Select p="sheets.csvDelimiter" title="Separator" options={[['auto', 'Detect automatically'], [',', 'Comma (,)'], [';', 'Semicolon (;)'], ['\t', 'Tab'], ['|', 'Vertical bar (|)']]} />
       <Select p="sheets.csvEncoding" title="Text encoding" options={[['utf-8', 'UTF-8 (recommended)'], ['windows-1252', 'Windows-1252 (old Excel)'], ['iso-8859-1', 'ISO-8859-1'], ['utf-16le', 'UTF-16']]} />
     </div></div>
   </>;
   else if (group === 'slides') pane = <>
-    <div className="card"><div className="card-head"><h3>New presentations</h3></div><div className="card-body">
+    <div className="card"><div className="card-head"><Presentation size={16} className="of-shell-chead" aria-hidden="true" /><h3>New presentations</h3></div><div className="card-body">
       <Pick p="slides.size" title="Slide size" options={[['16:9', '16:9'], ['4:3', '4:3'], ['A4', 'A4']]} />
       <Select p="slides.theme" title="Design" options={[['hostwerk', 'Hostwerk'], ['light', 'Light'], ['dark', 'Dark'], ['minimal', 'Minimal'], ['classic', 'Classic']]} />
       <Font p="slides.font" title="Font" />
     </div></div>
-    <div className="card"><div className="card-head"><h3>Presenting</h3></div><div className="card-body">
+    <div className="card"><div className="card-head"><MonitorPlay size={16} className="of-shell-chead" aria-hidden="true" /><h3>Presenting</h3></div><div className="card-body">
       <Toggle p="slides.notes" title="Show speaker notes while editing" />
       <Toggle p="slides.presenterView" title="Presenter view" text="Notes, next slide and timer in a second Hostwerk window." />
       <Pick p="slides.transition" title="Transition" options={[['none', 'None'], ['fade', 'Fade'], ['slide', 'Slide in']]} />
@@ -185,7 +186,7 @@ export default function OfficeSettings({ embedded = false, query = '' }) {
     </div></div>
   </>;
   else if (group === 'pdf') pane = (
-    <div className="card"><div className="card-head"><h3>PDF</h3></div><div className="card-body">
+    <div className="card"><div className="card-head"><FileType size={16} className="of-shell-chead" aria-hidden="true" /><h3>PDF</h3></div><div className="card-body">
       <Select p="pdf.zoom" title="Zoom when opening" options={[['auto', 'Automatic'], ['page-fit', 'Whole page'], ['page-width', 'Page width'], ...ZOOMS.map((z) => [String(z), `${z} %`])]} />
       <Toggle p="pdf.sidebar" title="Show page thumbnails" />
       <Pick p="pdf.scroll" title="Scrolling" options={[['vertical', 'Vertical'], ['horizontal', 'Horizontal'], ['page', 'Page by page']]} />
@@ -195,7 +196,7 @@ export default function OfficeSettings({ embedded = false, query = '' }) {
   else if (group === 'converters') pane = <ConvertersPane v={v} set={set} err={err} Toggle={Toggle} Num={Num} Pick={Pick} dirty={dirty} />;
   else if (group === 'integrations') pane = <IntegrationsPane v={v} set={set} err={err} Pick={Pick} dirty={dirty} save={save} />;
   else if (group === 'sharing') pane = (
-    <div className="card"><div className="card-head"><h3>Share links</h3></div><div className="card-body">
+    <div className="card"><div className="card-head"><Link2 size={16} className="of-shell-chead" aria-hidden="true" /><h3>Share links</h3></div><div className="card-body">
       <Toggle p="sharing.enabled" title="Allow share links" text="Read-only links for single files. Visitors see the file – PDF and pictures directly, office files as PDF." />
       <Num p="sharing.defaultDays" title="Links are valid for" unit="days (0 = no end)" disabled={!v('sharing.enabled')} />
       <Toggle p="sharing.allowDownload" title="Allow download by default" disabled={!v('sharing.enabled')} />
@@ -262,7 +263,7 @@ function ConvertersPane({ v, set, err, Toggle, Num, Pick, dirty }) {
         <Pick p="converters.autoEngine" title="When a file needs the engine" options={[['ask', 'Ask once'], ['auto', 'Set it up automatically'], ['off', 'Never']]} />
       </div>
     </div>
-    <div className="card"><div className="card-head"><h3>Found on this PC</h3><div className="right"><Btn className="sm ghost" icon={RefreshCw} onClick={reload}>Check again</Btn></div></div>
+    <div className="card"><div className="card-head"><Search size={16} className="of-shell-chead" aria-hidden="true" /><h3>Found on this PC</h3><div className="right"><Btn className="sm ghost" icon={RefreshCw} onClick={reload}>Check again</Btn></div></div>
       <div className="card-body stack">
         {!status ? <Loading inline /> : <>
           <div className="row-tight">{lo ? <CheckCircle2 size={16} className="c-ok" aria-hidden="true" /> : <XCircle size={16} className="muted" aria-hidden="true" />}<b className="small">LibreOffice</b><span className="small muted ellipsis">{lo ? `${lo.version || ''} · ${lo.path || ''}` : t('not found')}</span></div>
@@ -273,7 +274,7 @@ function ConvertersPane({ v, set, err, Toggle, Num, Pick, dirty }) {
         </div>
       </div>
     </div>
-    <div className="card"><div className="card-head"><h3>Which converter</h3></div><div className="card-body">
+    <div className="card"><div className="card-head"><Cpu size={16} className="of-shell-chead" aria-hidden="true" /><h3>Which converter</h3></div><div className="card-body">
       <Pick p="converters.preferred" title="Prefer" text="Microsoft Office converts its own formats most faithfully; LibreOffice (or the Office engine) knows more formats." options={[['auto', 'Automatic'], ['libreoffice', 'LibreOffice'], ['msoffice', 'Microsoft Office']]} />
       <Toggle p="converters.msoffice" title="Use Microsoft Office when installed" text="Windows only – Office runs invisibly in the background." />
       <SettingRow title="Path to LibreOffice" text="Empty = find it automatically (or use the Office engine).">

@@ -259,7 +259,48 @@ function relsOf(files, partPath) {
 }
 const relId = (el) => { const r = kid(el, 'Rel'); return r ? r.a['r:id'] || Object.entries(r.a).find(([k]) => /:id$/.test(k))?.[1] : null; };
 
+/** theme colours of visio/theme/theme1.xml → { dk1, lt1, dk2, lt2, accent1 … accent6 } */
+export function themeColors(xml) {
+  const out = {};
+  if (!xml) return out;
+  for (const m of String(xml).matchAll(/<a:(dk1|lt1|dk2|lt2|accent[1-6])>\s*<a:(?:srgbClr val|sysClr[^>]*?lastClr)="([0-9A-Fa-f]{6})"/g)) out[m[1]] = `#${m[2].toLowerCase()}`;
+  return out;
+}
+/** QuickStyle colour index (0 dk1, 1 lt1, 2…7 accent1…6, 100+ = the same with variants) → colour */
+export function quickColor(theme, idx) {
+  const i = Number(idx) % 100;
+  const key = i === 0 ? 'dk1' : i === 1 ? 'lt1' : i >= 2 && i <= 7 ? `accent${i - 1}` : 'accent1';
+  return theme[key] || null;
+}
+export function shade(hex, f) {
+  const n = parseInt(hex.slice(1), 16); const k = (v) => Math.max(0, Math.min(255, Math.round(f < 0 ? v * (1 + f) : v + (255 - v) * f)));
+  return `#${[k(n >> 16), k((n >> 8) & 255), k(n & 255)].map((x) => x.toString(16).padStart(2, '0')).join('')}`;
+}
+/** rounded corners (Visio "Rounding") for paths made of straight lines */
+export function roundPath(d, r) {
+  if (!(r > 0) || !/^[ML0-9.\s,eZ-]+$/.test(d) || /Z/.test(d.slice(0, -1))) return d;
+  const closed = /Z\s*$/.test(d);
+  const pts = [...d.matchAll(/[ML]\s*(-?[\d.]+(?:e-?\d+)?)[\s,]+(-?[\d.]+(?:e-?\d+)?)/g)].map((m) => [Number(m[1]), Number(m[2])]);
+  if (pts.length < 3) return d;
+  const f = (v) => (Math.round(v * 100) / 100).toString();
+  let out = `M${f(pts[0][0])} ${f(pts[0][1])}`;
+  for (let i = 1; i < pts.length; i++) {
+    const p = pts[i];
+    if (i === pts.length - 1 && !closed) { out += `L${f(p[0])} ${f(p[1])}`; break; }
+    const a = pts[i - 1]; const b = pts[(i + 1) % pts.length];
+    const la = Math.hypot(p[0] - a[0], p[1] - a[1]); const lb = Math.hypot(b[0] - p[0], b[1] - p[1]);
+    const rr = Math.min(r, la / 2, lb / 2);
+    if (rr < 0.01) { out += `L${f(p[0])} ${f(p[1])}`; continue; }
+    const p1 = [p[0] + ((a[0] - p[0]) / la) * rr, p[1] + ((a[1] - p[1]) / la) * rr];
+    const p2 = [p[0] + ((b[0] - p[0]) / lb) * rr, p[1] + ((b[1] - p[1]) / lb) * rr];
+    out += `L${f(p1[0])} ${f(p1[1])}Q${f(p[0])} ${f(p[1])} ${f(p2[0])} ${f(p2[1])}`;
+  }
+  return closed ? `${out}Z` : out;
+}
+
 export function readVsdx(files) {
+  const theme = themeColors(files['visio/theme/theme1.xml'] || Object.entries(files).find(([k]) => /^visio\/theme\/theme\d+\.xml$/.test(k))?.[1]);
+  let gradSeq = 0;
   const media = files.media || {};
   // style sheets
   const styles = new Map();
@@ -325,6 +366,7 @@ export function readVsdx(files) {
     const prels2 = relsOf(files, pg.part);
     let body = '';
     let markers = false;
+    let gdefs = '';
 
     const shapeOut = (el, parentM, masterId, inherited) => {
       const masterAttr = el.a.Master || masterId;
@@ -353,22 +395,39 @@ export function readVsdx(files) {
         // geometry
         const lp = num(cell('LinePattern', 'line'), 1);
         const lw = Math.max(0.25, num(cell('LineWeight', 'line'), 0.01) * S);
-        const lc = color(cell('LineColor', 'line'), '#000000');
+        const lcRaw = cell('LineColor', 'line');
+        let lc = color(lcRaw, '#000000');
+        if ((lcRaw === 'Themed' || lcRaw == null) && cell('QuickStyleLineColor', 'line') != null && quickColor(theme, cell('QuickStyleLineColor', 'line'))) lc = shade(quickColor(theme, cell('QuickStyleLineColor', 'line')), -0.25);
         const lt = num(cell('LineColorTrans', 'line'), 0);
         const fp = num(cell('FillPattern', 'fill'), 1);
-        const fc = color(cell('FillForegnd', 'fill'), '#ffffff');
+        const fcRaw = cell('FillForegnd', 'fill');
+        const qf = cell('QuickStyleFillColor', 'fill');
+        let fc = color(fcRaw, '#ffffff');
+        if ((fcRaw === 'Themed' || fcRaw == null) && qf != null && quickColor(theme, qf)) fc = quickColor(theme, qf);
+        // gradient fill (FillGradientEnabled + FillGradient stops)
+        let fillRef = null;
+        if (cell('FillGradientEnabled', 'fill') === '1' && sheet.sections.FillGradient && sheet.sections.FillGradient[0]) {
+          const stops = sheet.sections.FillGradient[0].rows.filter((r) => !r.del).map((r) => ({ c: color(r.cells.GradientStopColor, fc), p: num(r.cells.GradientStopPosition, 0), tr: num(r.cells.GradientStopColorTrans, 0) }));
+          if (stops.length >= 2) {
+            let ang = num(cell('FillGradientAngle', 'fill'), Math.PI / 2); if (Math.abs(ang) > 7) ang = (ang * Math.PI) / 180;
+            const id = `vsg${++gradSeq}`; const cx = Math.cos(ang) / 2; const cy = Math.sin(ang) / 2;
+            gdefs += `<linearGradient id="${id}" x1="${fmt(0.5 - cx)}" y1="${fmt(0.5 + cy)}" x2="${fmt(0.5 + cx)}" y2="${fmt(0.5 - cy)}">${stops.map((x) => `<stop offset="${fmt(Math.max(0, Math.min(1, x.p)))}" stop-color="${x.c}"${x.tr ? ` stop-opacity="${fmt(1 - x.tr)}"` : ''}/>`).join('')}</linearGradient>`;
+            fillRef = `url(#${id})`;
+          }
+        }
+        const rounding = num(cell('Rounding', 'line'), 0) * S;
         const ft = num(cell('FillForegndTrans', 'fill'), 0);
         const begin = num(cell('BeginArrow', 'line'), 0); const end = num(cell('EndArrow', 'line'), 0);
         for (const g of sheet.sections.Geometry || []) {
           if (g.cells.NoShow === '1') continue;
-          const { d, closed } = geometryToPath(g.rows, w, h, tf);
+          const gp = geometryToPath(g.rows, w, h, tf); const closed = gp.closed; const d = rounding > 0 && gp.d ? roundPath(gp.d, rounding) : gp.d;
           if (!d) continue;
           const noFill = g.cells.NoFill === '1' || !closed || fp === 0;
           const noLine = g.cells.NoLine === '1' || lp === 0;
           const dash = DASH[lp] ? ` stroke-dasharray="${DASH[lp].map((x) => fmt(x * Math.max(1, lw / 1.5))).join(' ')}"` : '';
           const arrows = !closed && !noLine ? `${begin > 0 ? ' marker-start="url(#vsa)"' : ''}${end > 0 ? ' marker-end="url(#vsa)"' : ''}` : '';
           if (arrows) markers = true;
-          body += `<path d="${d}" fill="${noFill ? 'none' : fc}"${!noFill && ft ? ` fill-opacity="${fmt(1 - ft)}"` : ''} stroke="${noLine ? 'none' : lc}"${lt ? ` stroke-opacity="${fmt(1 - lt)}"` : ''} stroke-width="${fmt(lw)}"${dash}${arrows} stroke-linejoin="round" style="color:${lc}"/>`;
+          body += `<path d="${d}" fill="${noFill ? 'none' : fillRef || fc}"${!noFill && ft ? ` fill-opacity="${fmt(1 - ft)}"` : ''} stroke="${noLine ? 'none' : lc}"${lt ? ` stroke-opacity="${fmt(1 - lt)}"` : ''} stroke-width="${fmt(lw)}"${dash}${arrows} stroke-linejoin="round" style="color:${lc}"/>`;
         }
         // images
         const fd = kid(el, 'ForeignData');
@@ -424,7 +483,7 @@ export function readVsdx(files) {
 
     for (const sh of kids(kid(root, 'Shapes'), 'Shape')) shapeOut(sh, [1, 0, 0, 1, 0, 0], null, null);
     const defs = markers ? '<marker id="vsa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse" markerUnits="strokeWidth"><path d="M0 0L10 5L0 10z" fill="context-stroke"/></marker>' : '';
-    return { body, texts, defs };
+    return { body, texts, defs: defs + gdefs };
   };
 
   const byId = new Map(all.map((p) => [p.id, p]));
@@ -435,7 +494,7 @@ export function readVsdx(files) {
     while (bg && !seen.has(bg.id)) { seen.add(bg.id); layers.unshift(renderPage({ ...bg, h: p.h })); bg = bg.backPage != null ? byId.get(bg.backPage) : null; }
     const main = renderPage(p);
     layers.push(main);
-    const defs = layers.map((l) => l.defs).find(Boolean) || '';
+    const defs = layers.map((l) => l.defs).join('');
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${fmt(p.w * S)} ${fmt(p.h * S)}" width="${fmt(p.w * S)}" height="${fmt(p.h * S)}"><defs>${defs}</defs><rect width="100%" height="100%" fill="#ffffff"/>${layers.map((l) => l.body).join('')}</svg>`;
     return { name: p.name, w: p.w, h: p.h, svg, texts: main.texts };
   });

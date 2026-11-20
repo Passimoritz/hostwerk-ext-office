@@ -1,43 +1,53 @@
 /*
  * Small building blocks of the shell: kind-coloured file icons, thumbnails, highlighted search text, dates.
  */
-import { createElement, useEffect, useState } from 'react';
-import { FileText, Sheet, Presentation, FileType, File, Folder, FileArchive, Mail, Image as ImageIcon, BookOpen, Contact, CalendarDays, Link2 } from 'lucide-react';
+import { createElement, useEffect, useRef, useState } from 'react';
+import { FileText, Sheet, Presentation, FileType, File, Folder } from 'lucide-react';
 import { apiUrl } from '@hostwerk/api';
 import * as HAPI from '@hostwerk/api';
 import { toast, confirmDialog } from '@hostwerk/ui';
 import { t } from '@hostwerk/i18n';
 import { Keep } from '@hostwerk/kit';
-import { FORMATS, extOf } from '../lib/formats';
-import { url } from '../lib/api';
-import { highlightParts, kindOfEntry } from './util';
+import { FileTypeIcon } from '../lib/fileIcons';
+import { thumbSrc, requestThumb, canThumb, forgetThumb } from '../lib/thumbs';
+import { highlightParts } from './util';
 
 export const KIND_ICON = { docs: FileText, sheets: Sheet, slides: Presentation, pdf: FileType, viewer: File, folder: Folder };
-const VIEWER_ICON = { eml: Mail, msg: Mail, vcf: Contact, ics: CalendarDays, epub: BookOpen, zip: FileArchive, png: ImageIcon, jpg: ImageIcon, jpeg: ImageIcon, gif: ImageIcon, webp: ImageIcon, bmp: ImageIcon, svg: ImageIcon };
 export const KIND_LABEL = { docs: 'Document', sheets: 'Spreadsheet', slides: 'Presentation', pdf: 'PDF', viewer: 'Other file', folder: 'Folder' };
 
-/** Kind-coloured icon with the extension underneath – size 'sm' (list rows), 'md' (details) or 'lg' (grid tiles) */
+const PX = { xs: 16, sm: 16, md: 32, lg: 64, xl: 64 };
+/** Coloured file icon (lib/fileIcons.jsx) – size 'sm' (list rows, 16 px), 'md' (32 px) or 'lg' (64 px with the extension) or a number */
 export function FileIcon({ entry, name, size = 'sm', className = '' }) {
-  const e = entry || { name };
-  const kind = kindOfEntry(e);
-  const ext = e.dir ? '' : extOf(e.name);
-  const google = (FORMATS[ext] || {}).family === 'google';
-  const I = kind === 'viewer' ? (google ? Link2 : VIEWER_ICON[ext] || File) : KIND_ICON[kind] || File;
-  const px = size === 'lg' ? 30 : size === 'md' ? 22 : 16;
-  return (
-    <span className={`of-shell-icon of-shell-k-${kind} of-shell-icon-${size} ${className}`} aria-hidden="true">
-      <I size={px} />
-      {size !== 'sm' && ext && <span className="of-shell-icon-ext">{ext.slice(0, 5)}</span>}
-    </span>
-  );
+  const px = typeof size === 'number' ? size : PX[size] || 16;
+  return <FileTypeIcon entry={entry || { name }} size={px} showExt={px >= 48} className={`of-shell-ficon ${className}`} />;
 }
 
-/** Embedded thumbnail (GET /office/thumb) when the file has one, otherwise the icon */
-export function Thumb({ entry }) {
-  const [bad, setBad] = useState(false);
-  useEffect(() => setBad(false), [entry.path, entry.mtime]);
-  if (!entry.thumb || bad || entry.dir || entry.root) return <FileIcon entry={entry} size="lg" />;
-  return <img className="of-shell-thumb-img" alt="" loading="lazy" src={apiUrl(url('/thumb', { path: entry.path, v: entry.mtime || '' }))} onError={() => setBad(true)} />;
+/**
+ * First-page thumbnail (embedded or generated, GET /office/thumb) – otherwise the icon. Files without a thumbnail are
+ * queued for the generator (lib/thumbs.js: idle time, one at a time) when `generate` is set; the picture fades in.
+ */
+export function Thumb({ entry, generate = true, size = 'lg' }) {
+  const [src, setSrc] = useState(() => thumbSrc(entry));
+  const [loaded, setLoaded] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => { setSrc(thumbSrc(entry)); setLoaded(false); }, [entry.path, entry.root, entry.mtime, entry.thumb]); // eslint-disable-line react-hooks/exhaustive-deps
+  // not there yet: render it when the tile comes into view (and the browser is idle)
+  useEffect(() => {
+    if (src || !generate || entry.dir || !canThumb(entry)) return undefined;
+    const el = ref.current;
+    let off = null;
+    const go = () => { off = requestThumb(entry, (u) => setSrc(u)); };
+    if (!el || typeof IntersectionObserver === 'undefined') { go(); return () => off && off(); }
+    const io = new IntersectionObserver((xs) => { if (xs.some((x) => x.isIntersecting)) { io.disconnect(); go(); } }, { rootMargin: '200px' });
+    io.observe(el);
+    return () => { io.disconnect(); if (off) off(); };
+  }, [src, entry.path, entry.root, entry.mtime]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <span ref={ref} className={`of-shell-thumb ${src && loaded ? 'is-img' : ''}`}>
+      {(!src || !loaded) && <FileIcon entry={entry} size={size} />}
+      {src && <img className={`of-shell-thumb-img ${loaded ? 'on' : ''}`} alt="" loading="lazy" decoding="async" src={src} onLoad={() => setLoaded(true)} onError={() => { setSrc(null); forgetThumb(entry); }} />}
+    </span>
+  );
 }
 
 /*

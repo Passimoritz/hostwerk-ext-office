@@ -9,11 +9,12 @@
  *   page #/ext/office[?action=…]   Hostwerk's "New" menu, shortcuts, quick search: new · new-docs … · template · upload ·
  *                                  folder · search · trash · open&target= – everything leads into Files
  */
+import './lib/toastfix';
 import { useEffect } from 'react';
 import { FileText, Settings2 } from 'lucide-react';
 import EditorHost from './shell/EditorHost';
 import OfficeSettings from './shell/Settings';
-import { FilesPreview, RecentTile, EditorScreen, officeMatch } from './shell/slots';
+import { FilesPreview, RecentTile, EditorScreen, officeMatch, filesIcon, filesThumb } from './shell/slots';
 import { fileActions, fileMarks, filesNew, OfficeSection, OfficeDialogHost, officeSectionWhen, opensInOffice, openFromFiles, openDialog, sectionIntent } from './shell/files';
 import { parseQuery, openTarget } from './shell/util';
 import { LIB_ROOT, filesRoute, openEditor, canon } from './shell/ops';
@@ -61,6 +62,9 @@ export default {
     'files.preview': [{ id: 'office', title: 'Office', match: officeMatch, Component: FilesPreview }],
     'files.actions': fileActions,
     'files.marks': fileMarks,
+    // SDK 3.16 (feature-detected by Hostwerk: older versions ignore these): coloured icons + first-page thumbnails
+    'files.icon': filesIcon,
+    'files.thumb': filesThumb,
     'dashboard.tiles': [{ id: 'recent', title: 'Recent documents', icon: FileText, size: 'third', Component: RecentTile }],
     'settings.tabs': [{ id: 'office', title: 'Office', icon: Settings2, Component: OfficeSettings }],
     // renders nothing but Office's dialogs (New, Share, Versions …) wherever they are opened from

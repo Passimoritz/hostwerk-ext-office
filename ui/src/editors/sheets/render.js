@@ -7,6 +7,9 @@ import { formatValue } from './format/numfmt.js';
 import { isErr } from './formula/errors.js';
 import { toDisplay } from './formula/parser.js';
 import { cfAt } from './cf.js';
+import { tableStyleAt } from './tables.js';
+import { drawIcon, sparkMap, drawSparkline, drawRich, drawRemote, paintOutline, outlineLevels, OL } from './paintPlus.js';
+import { setDate1904 } from './format/dates.js';
 
 const K = (r, c) => r * MAXC + c;
 export const REF_COLORS = ['#2f6fe4', '#d9480f', '#7b2fbe', '#2b8a3e', '#c2255c', '#0b7285', '#e67700', '#5c940d'];
@@ -26,13 +29,20 @@ const DASH = { dotted: [1, 2], hair: [1, 1], dashed: [4, 2], mediumDashed: [6, 3
 /** geometry helper shared by painting and hit testing */
 export function makeGeo({ sheet, axes, z, scrollX, scrollY, W, H, headings, dpr }) {
   const { rows, cols } = axes;
-  const hh = headings ? Math.round(22 * Math.min(1.4, Math.max(0.8, z))) : 0;
+  const hh0 = headings ? Math.round(22 * Math.min(1.4, Math.max(0.8, z))) : 0;
   const digits = String(Math.min(MAXR, rows.index((scrollY + H) / z) + 2)).length;
-  const hw = headings ? Math.round((Math.max(3, digits) * 8 + 14) * Math.min(1.4, Math.max(0.8, z))) : 0;
+  const hw0 = headings ? Math.round((Math.max(3, digits) * 8 + 14) * Math.min(1.4, Math.max(0.8, z))) : 0;
+  // outline gutters (grouped rows/columns): one lane per level + the level buttons
+  const olr = headings ? outlineLevels(sheet.outlineRows) : 0; const olc = headings ? outlineLevels(sheet.outlineCols) : 0;
+  const gx = olr ? (olr + 1) * OL + 2 : 0; const gy = olc ? (olc + 1) * OL + 2 : 0;
+  const hw = hw0 + gx; const hh = hh0 + gy;
   const fr = Math.min(sheet.freeze.rows || 0, MAXR - 1); const fc = Math.min(sheet.freeze.cols || 0, MAXC - 1);
   const fy = rows.pos(fr) * z; const fx = cols.pos(fc) * z;
   const g = {
-    z, hw, hh, fr, fc, fx, fy, W, H, scrollX, scrollY, rows, cols, dpr,
+    z, hw, hh, hw0, hh0, gx, gy, olr, olc, fr, fc, fx, fy, W, H, scrollX, scrollY, rows, cols, dpr,
+    /** device-pixel-snapped coordinate for 1px lines (crisp at any zoom / DPR) */
+    px: (v) => { const d = dpr || 1; const w = Math.max(1, Math.round(d)); return (Math.round(v * d) + (w % 2 ? 0.5 : 0)) / d; },
+    lw: Math.max(1, Math.round(dpr || 1)) / (dpr || 1),
     colX: (c) => (c < fc ? hw + cols.pos(c) * z : hw + fx + (cols.pos(c) - cols.pos(fc)) * z - scrollX),
     rowY: (r) => (r < fr ? hh + rows.pos(r) * z : hh + fy + (rows.pos(r) - rows.pos(fr)) * z - scrollY),
     colW: (c) => cols.size(c) * z,
@@ -64,6 +74,9 @@ function quadrants(g) {
 export function paint(ctx, g, st) {
   const { book, sheet, theme, sel, edit, refs, copy, drag, showFormulas, loc, defFont, readOnly } = st;
   const { dpr, W, H, z } = g;
+  setDate1904(book.date1904);
+  const tsAt = tableStyleAt(book, sheet);
+  const spk = sparkMap(sheet);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, W, H);
@@ -79,10 +92,10 @@ export function paint(ctx, g, st) {
     ctx.beginPath(); ctx.rect(q.clip.x, q.clip.y, q.clip.w, q.clip.h); ctx.clip();
     // gridlines
     if (showGrid) {
-      ctx.strokeStyle = '#dadce0'; ctx.lineWidth = 1;
+      ctx.strokeStyle = '#dadce0'; ctx.lineWidth = g.lw;
       ctx.beginPath();
-      for (let c = q.ca; c <= q.cb + 1; c++) { if (g.cols.hidden(c)) continue; const x = Math.round(g.colX(c)) - 0.5; ctx.moveTo(x, q.clip.y); ctx.lineTo(x, q.clip.y + q.clip.h); }
-      for (let r = q.ra; r <= q.rb + 1; r++) { if (g.rows.hidden(r)) continue; const y = Math.round(g.rowY(r)) - 0.5; ctx.moveTo(q.clip.x, y); ctx.lineTo(q.clip.x + q.clip.w, y); }
+      for (let c = q.ca; c <= q.cb + 1; c++) { if (g.cols.hidden(c)) continue; const x = g.px(g.colX(c) - 0.5); ctx.moveTo(x, q.clip.y); ctx.lineTo(x, q.clip.y + q.clip.h); }
+      for (let r = q.ra; r <= q.rb + 1; r++) { if (g.rows.hidden(r)) continue; const y = g.px(g.rowY(r) - 0.5); ctx.moveTo(q.clip.x, y); ctx.lineTo(q.clip.x + q.clip.w, y); }
       ctx.stroke();
     }
     const items = [];
@@ -104,13 +117,19 @@ export function paint(ctx, g, st) {
       const k = K(r, c);
       const cell = sheet.cells.get(k);
       const v = cell ? cell.v : sheet.spill.has(k) ? sheet.spill.get(k).v : null;
-      const s = cell && cell.s;
-      const cfs = cf ? cf(r, c) : null;
-      if (!cell && v == null && !cfs && !m) continue;
+      const s0 = cell && cell.s;
+      const cf0 = cf ? cf(r, c) : null;
+      const ts = tsAt ? tsAt(r, c) : null;
+      const sp = spk ? spk.get(k) : null;
+      if (!cell && v == null && !cf0 && !m && !ts && !sp) continue;
+      // table style under the cell's own formatting
+      const s = ts ? { ...ts, ...(s0 || {}), fill: (s0 && s0.fill) || ts.fill, color: (s0 && s0.color) || ts.color, b: (s0 && s0.b) || ts.b, bd: (s0 && s0.bd) || ts.bd } : s0;
+      const cfs = cf0;
       const rc = m ? g.rect(m.r1, m.c1, m.r2, m.c2) : { x: g.colX(c), y: g.rowY(r), w: g.colW(c), h: g.rowH(r) };
       const fill = (cfs && cfs.fill) || (s && s.fill) || (m ? '#ffffff' : null);
       if (fill) { ctx.fillStyle = fill; ctx.fillRect(rc.x, rc.y, rc.w - (m && !s?.fill && showGrid ? 1 : 0), rc.h - (m && !s?.fill && showGrid ? 1 : 0)); }
       if (cfs && cfs.bar) { const bw = Math.max(0, (rc.w - 4) * cfs.bar.pct); const grd = ctx.createLinearGradient(rc.x + 2, 0, rc.x + 2 + Math.max(bw, 1), 0); grd.addColorStop(0, cfs.bar.color); grd.addColorStop(1, `${cfs.bar.color}33`); ctx.fillStyle = grd; ctx.fillRect(rc.x + 2, rc.y + 2, bw, rc.h - 4); }
+      if (sp) drawSparkline(ctx, book, sp, rc, z);
       prepared.push({ r, c, k, cell, v, s, cfs, rc, m });
     }
     // pass 2: text
@@ -118,6 +137,13 @@ export function paint(ctx, g, st) {
       const { cell, s, cfs, rc, r, c } = p;
       let v = p.v;
       if (v == null && !(showFormulas && cell && cell.f)) continue;
+      if (cfs && cfs.icon) { const isz = Math.min(rc.h - 2, 16 * z); drawIcon(ctx, cfs.icon.set, cfs.icon.i, cfs.icon.n, rc.x + 2 * z, rc.y + (rc.h - isz) / 2, isz); if (cfs.icon.hide) continue; }
+      if (cell && cell.rich && !(showFormulas && cell.f) && typeof v === 'string' && !(s && s.rot)) {
+        // like plain text: overflow into empty cells on the right
+        let w = rc.w; let cc = c + 1;
+        while (!(s && s.wrap) && !p.m && cc <= Math.min(q.cb + 2, MAXC - 1)) { const x = sheet.cells.get(K(r, cc)); if ((x && x.v != null && x.v !== '') || sheet.spill.has(K(r, cc)) || covered.has(K(r, cc))) break; w += g.colW(cc); cc++; if (w > 2000) break; }
+        drawRich(ctx, cell.rich, { ...rc, w }, { z, defFont, fontStack, h: (s && s.h) || 'left', va: (s && s.va) || 'bottom', pad: 3 * z, s }); continue;
+      }
       let text; let color = null;
       if (showFormulas && cell && cell.f) text = `=${toDisplay(cell.f, loc)}`;
       else { const f = formatValue(v, (s && s.nf) || 'General', loc); text = f.text; color = f.color; }
@@ -264,17 +290,20 @@ export function paint(ctx, g, st) {
             ctx.fillRect(ar.x + ar.w, ar.y, Math.max(0, rr.x + rr.w - ar.x - ar.w), ar.h);
           }
         }
-        if (i === sel.ranges.length - 1) strokeRange(gg, acc, 2, null, null);
+        if (i === sel.ranges.length - 1) {
+          if (st.selRect) { const rr = st.selRect; ctx.strokeStyle = acc; ctx.lineWidth = 2; ctx.strokeRect(Math.round(rr.x), Math.round(rr.y), Math.round(rr.w) - 1, Math.round(rr.h) - 1); } else strokeRange(gg, acc, 2, null, null);
+        }
       });
       const last = sel.ranges[sel.ranges.length - 1];
       if (sel.ranges.length > 1) { ctx.strokeStyle = acc; ctx.lineWidth = 1; ctx.strokeRect(Math.round(ar.x) + 0.5, Math.round(ar.y) + 0.5, Math.round(ar.w) - 2, Math.round(ar.h) - 2); }
       // fill handle
       if (!readOnly && sel.ranges.length === 1 && !edit) {
-        const rr = g.rect(last.r1, last.c1, Math.min(last.r2, MAXR - 1), Math.min(last.c2, MAXC - 1));
+        const rr = st.selRect || g.rect(last.r1, last.c1, Math.min(last.r2, MAXR - 1), Math.min(last.c2, MAXC - 1));
         ctx.fillStyle = '#ffffff'; ctx.fillRect(rr.x + rr.w - 4.5, rr.y + rr.h - 4.5, 8, 8);
         ctx.fillStyle = acc; ctx.fillRect(rr.x + rr.w - 3.5, rr.y + rr.h - 3.5, 6, 6);
       }
     }
+    if (st.remote && st.remote.length) drawRemote(ctx, g, st.remote, sheet);
     if (copy && copy.sheetId === sheet.id) strokeRange(copy.g, acc, 2, [5, 3], null);
     if (drag && drag.preview) strokeRange(drag.preview, '#5f6368', 2, drag.kind === 'fill' ? [4, 2] : null, null);
     ctx.restore();
@@ -284,6 +313,7 @@ export function paint(ctx, g, st) {
   if (g.fr) ctx.fillRect(g.hw, g.hh + g.fy - 1, W - g.hw, 1.5);
   if (g.fc) ctx.fillRect(g.hw + g.fx - 1, g.hh, 1.5, H - g.hh);
   if (g.hw || g.hh) paintHeaders(ctx, g, st);
+  g.outlineBtns = paintOutline(ctx, g, sheet, theme);
 }
 
 function paintHeaders(ctx, g, st) {
@@ -305,7 +335,7 @@ function paintHeaders(ctx, g, st) {
       if (inSel('c', c)) { ctx.fillStyle = full('c', c) ? theme.headSelStrong : theme.headSel; ctx.fillRect(x, 0, w, hh); }
       ctx.fillStyle = inSel('c', c) ? theme.headSelText : theme.headText;
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      if (w > 8) ctx.fillText(colName(c), x + w / 2, hh / 2 + 0.5);
+      if (w > 8) ctx.fillText(st.r1c1 ? String(c + 1) : colName(c), x + w / 2, g.gy + (hh - g.gy) / 2 + 0.5);
       ctx.fillStyle = theme.line; ctx.fillRect(Math.round(x + w) - 1, 0, 1, hh);
     }
     ctx.restore();

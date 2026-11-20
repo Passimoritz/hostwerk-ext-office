@@ -7,6 +7,7 @@
  */
 import { readCfb } from '../_shared/cfb.js';
 import { decodeCharset, readMail, htmlToText } from './mime.js';
+import { decompressRtf, rtfToHtml } from './rtf.js';
 
 const CP = { 1252: 'windows-1252', 1250: 'windows-1250', 1251: 'windows-1251', 1253: 'windows-1253', 1254: 'windows-1254', 1257: 'windows-1257', 28591: 'iso-8859-1', 28592: 'iso-8859-2', 28605: 'iso-8859-15', 65001: 'utf-8', 20127: 'utf-8', 932: 'shift_jis', 936: 'gbk', 949: 'euc-kr', 950: 'big5', 1200: 'utf-16le', 50220: 'iso-2022-jp', 51932: 'euc-jp' };
 
@@ -62,7 +63,15 @@ export function readMsg(bytes, depth = 0) {
   // HTML body: string or binary in the internet code page
   const html = r.get(0x1013, ['001F', '001E', '0102']);
   if (html) res.html = html.k === '001F' ? new TextDecoder('utf-16le').decode(html.s) : decodeCharset(html.s, CP[top.get(0x3fde)] || codepage);
-  if (!res.html && !res.text && r.bin(0x1009)) res.rtfOnly = true;
+  // RTF body (PR_RTF_COMPRESSED): Outlook's encapsulated HTML gives the original HTML, plain RTF a simple HTML view
+  const rtfBin = !res.html ? r.bin(0x1009) : null;
+  if (rtfBin) {
+    try {
+      const conv = rtfToHtml(decompressRtf(rtfBin));
+      if (conv.fromHtml || conv.text) { res.html = conv.html; res.fromRtf = true; if (!res.text) res.text = conv.text; }
+    } catch { /* damaged – the plain text (if any) is shown */ }
+    if (!res.html && !res.text) res.rtfOnly = true;
+  }
 
   // recipients
   const recips = new Set(); const atts = new Set();

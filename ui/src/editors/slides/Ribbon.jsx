@@ -10,7 +10,10 @@ import {
   MessageSquare, MessageSquarePlus, ZoomIn, ZoomOut, Maximize, Grid3x3, Ruler, Magnet, StickyNote, PanelLeft, PanelRight, LayoutList, Sparkles, Layers,
   Square, Trash2, Lock, Grid2x2, TableCellsMerge, TableCellsSplit, BetweenHorizontalStart, BetweenHorizontalEnd, BetweenVerticalStart, BetweenVerticalEnd,
   Text, MonitorPlay, ListTree, Undo2, Redo2, ArrowUp, ArrowDown, Volume2, SquareDashed, Wand2,
+  Crop, Bot, FileInput, Radio, GitCompareArrows, ChevronUp, ChevronDown, Shapes as IconsIcon, RefreshCw, Plus as PlusIcon, Sparkle, Route,
 } from 'lucide-react';
+import { IconPicker, EffectGallery } from './Extras.jsx';
+import { effectLabel, CLASS_LABEL } from './anim.js';
 import { createElement as h } from 'react';
 import { t } from '@hostwerk/i18n';
 import { RB, Group as G, Pop, Menu, ColorPop, ColorGrid, Num, ShapeGallery, ShapeIcon } from './controls.jsx';
@@ -33,7 +36,7 @@ export const SIZES_PT = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36,
 const BULLETS = ['•', '◦', '▪', '–', '➢', '✓', '★', '◆', '→'];
 const NUMBERS = [['arabicPeriod', '1. 2. 3.'], ['arabicParenR', '1) 2) 3)'], ['alphaUcPeriod', 'A. B. C.'], ['alphaLcPeriod', 'a. b. c.'], ['alphaLcParenR', 'a) b) c)'], ['romanUcPeriod', 'I. II. III.'], ['romanLcPeriod', 'i. ii. iii.']];
 const SPACING = [100, 115, 150, 200, 250, 300];
-export const TRANSITIONS = [{ id: 'none', label: 'None' }, { id: 'fade', label: 'Fade' }, { id: 'push', label: 'Push' }, { id: 'wipe', label: 'Wipe' }, { id: 'cover', label: 'Cover' }, { id: 'split', label: 'Split' }, { id: 'zoom', label: 'Zoom' }];
+export const TRANSITIONS = [{ id: 'none', label: 'None' }, { id: 'morph', label: 'Morph' }, { id: 'fade', label: 'Fade' }, { id: 'push', label: 'Push' }, { id: 'wipe', label: 'Wipe' }, { id: 'cover', label: 'Cover' }, { id: 'split', label: 'Split' }, { id: 'zoom', label: 'Zoom' }];
 const DIRS = [{ id: 'l', label: 'From right' }, { id: 'r', label: 'From left' }, { id: 'u', label: 'From bottom' }, { id: 'd', label: 'From top' }];
 const FLY_DIRS = [{ id: 'b', label: 'From bottom' }, { id: 't', label: 'From top' }, { id: 'l', label: 'From left' }, { id: 'r', label: 'From right' }];
 const EMOJI = '😀 😃 😄 😁 😊 😍 🤩 😎 🤔 😮 😢 😡 👍 👎 👏 🙌 🙏 💪 👋 ✌️ 🤝 ❤️ 🧡 💛 💚 💙 💜 ⭐ 🌟 ✨ 🔥 💡 🎯 🚀 🏆 🎉 🎁 📈 📉 📊 📌 📎 📝 📅 ⏰ ✅ ❌ ⚠️ ❓ ❗ ➕ ➖ ➡️ ⬅️ ⬆️ ⬇️ 🔒 🔑 💬 📣 📷 🎵 🌍 🏠 🏢 🚗 ✈️ 🍀 ☀️ 🌙 ☁️ ⚡ 💧 🌱 🍎 ☕ 💰 💶 💳 🛒 🧩 ⚙️ 🔧 🧪 📚 🎓 💻 📱 🖨️ 🔔'.split(' ');
@@ -94,7 +97,8 @@ function TablePicker({ onPick, close }) {
   );
 }
 
-export default function Ribbon({ c, tab, setTab }) {
+export default function Ribbon({ c, tab, setTab, collapsed, setCollapsed }) {
+  const [peek, setPeek] = useState(false);
   const { doc, slide, selEls, fmt, readOnly, state } = c;
   const has = selEls.length > 0;
   const hasText = has && selEls.some((e) => e.text || e.type === 'table');
@@ -105,7 +109,7 @@ export default function Ribbon({ c, tab, setTab }) {
   const tabs = [...TABS, ...(ctxTab && !ro ? [{ id: 'format', label: ctxTab === 'table' ? 'Table' : ctxTab === 'chart' ? 'Chart' : ctxTab === 'image' ? 'Picture' : 'Shape format', ctx: true }] : [])];
   const cur = tabs.some((x) => x.id === tab) ? tab : 'home';
   const tr = (slide && slide.transition) || { type: 'none' };
-  const selAnim = one && slide ? (slide.animations || []).find((a) => a.el === one.id) : null;
+  const selAnim = c.selAnim || null;
 
   const fontGroup = (
     <G label={t('Font')}>
@@ -189,13 +193,14 @@ export default function Ribbon({ c, tab, setTab }) {
   );
 
   return (
-    <div className="of-slides-ribbon">
+    <div className={`of-slides-ribbon ${collapsed ? 'min' : ''} ${collapsed && peek ? 'peek' : ''}`} onMouseLeave={() => setPeek(false)} onClick={(e) => { if (collapsed && peek && e.target.closest('.of-slides-rbody button')) setTimeout(() => setPeek(false), 0); }}>
       <div className="of-slides-tabs" role="tablist">
-        {tabs.map((x) => <button key={x.id} type="button" role="tab" aria-selected={cur === x.id} className={`of-slides-tab ${cur === x.id ? 'on' : ''} ${x.ctx ? 'ctx' : ''}`} onClick={() => setTab(x.id)}>{t(x.label)}</button>)}
+        {tabs.map((x) => <button key={x.id} type="button" role="tab" aria-selected={cur === x.id} className={`of-slides-tab ${cur === x.id ? 'on' : ''} ${x.ctx ? 'ctx' : ''}`} onClick={() => { setTab(x.id); if (collapsed) setPeek(!(peek && cur === x.id)); }} onDoubleClick={() => setCollapsed && setCollapsed(!collapsed)}>{t(x.label)}</button>)}
         <span className="grow" />
         <RB icon={Undo2} title={t('Undo')} kbd="Ctrl+Z" disabled={ro || !state.canUndo} onClick={c.undo} />
         <RB icon={Redo2} title={t('Redo')} kbd="Ctrl+Y" disabled={ro || !state.canRedo} onClick={c.redo} />
         <RB icon={Presentation} label={t('Present')} title={t('Present from the current slide')} kbd="Shift+F5" onClick={() => c.present('current')} />
+        {setCollapsed && <RB icon={collapsed ? ChevronDown : ChevronUp} title={collapsed ? t('Show the ribbon') : t('Collapse the ribbon')} kbd="Ctrl+F1" className="of-slides-ribbontoggle" onClick={() => { setCollapsed(!collapsed); setPeek(false); }} />}
       </div>
       <div className="of-slides-rbody" role="tabpanel">
         {cur === 'home' && <>
@@ -218,20 +223,30 @@ export default function Ribbon({ c, tab, setTab }) {
           {fontGroup}
           {paraGroup}
           {drawingGroup}
+          <G label={t('Designer')}>
+            <RB icon={Wand2} label={t('Designer')} big active={state.pane === 'designer'} disabled={ro || !slide} onClick={c.designer} />
+            {c.feats && c.feats.ai && <RB icon={Bot} label={t('AI')} big title={t('AI: speaker notes and text')} disabled={ro || !slide} onClick={c.ai} />}
+          </G>
         </>}
         {cur === 'insert' && <>
-          <G label={t('Slides')}><Pop icon={Plus} label={t('New slide')} big split onMain={() => c.newSlide()} disabled={ro} width={500} content={(close) => <LayoutPicker doc={doc} close={close} onPick={(k) => c.newSlide(k)} />} /></G>
+          <G label={t('Slides')}><Pop icon={Plus} label={t('New slide')} big split onMain={() => c.newSlide()} disabled={ro} width={500} content={(close) => <LayoutPicker doc={doc} close={close} onPick={(k) => c.newSlide(k)} />} />
+            <RB icon={FileInput} label={t('From a document')} big title={t('Make slides from a Word, OpenDocument or Markdown document')} disabled={ro} onClick={c.fromDoc} /></G>
           <G label={t('Tables')}><Pop icon={Table} label={t('Table')} big disabled={ro} content={(close) => <TablePicker close={close} onPick={c.insertTable} />} /></G>
           <G label={t('Images')}>
             <Pop icon={Image} label={t('Pictures')} big disabled={ro} content={(close) => <Menu close={close} items={[{ icon: ImagePlus, label: t('From this device …'), onClick: c.pictureFromFile }, { icon: Clipboard, label: t('From clipboard'), onClick: c.pictureFromClipboard }, { icon: Link2, label: t('From a web address …'), onClick: c.pictureFromUrl }]} />} />
           </G>
           <G label={t('Illustrations')}>
             <Pop icon={Shapes} label={t('Shapes')} big disabled={ro} width={300} content={(close) => <ShapeGallery close={close} onPick={(g) => c.setTool(g)} />} />
-            <Pop icon={Smile} label={t('Icons')} big disabled={ro} width={300} content={(close) => <div className="of-slides-emoji">{EMOJI.map((e) => <button key={e} type="button" onClick={() => { close(); c.insertEmoji(e); }}>{e}</button>)}</div>} />
+            <Pop icon={Sparkle} label={t('Icons')} big disabled={ro} width={480} content={(close) => <IconPicker close={close} onPick={c.insertIcon} />} />
+            <Pop icon={Smile} label={t('Emoji')} big disabled={ro} width={300} content={(close) => <div className="of-slides-emoji">{EMOJI.map((e) => <button key={e} type="button" onClick={() => { close(); c.insertEmoji(e); }}>{e}</button>)}</div>} />
             <Pop icon={ChartColumn} label={t('Chart')} big disabled={ro} content={(close) => <Menu close={close} items={[{ icon: ChartColumn, label: t('Column'), onClick: () => c.insertChart('col') }, { icon: ChartBar, label: t('Bar'), onClick: () => c.insertChart('bar') }, { icon: ChartLine, label: t('Line'), onClick: () => c.insertChart('line') }, { icon: ChartLine, label: t('Area'), onClick: () => c.insertChart('area') }, { icon: ChartPie, label: t('Pie'), onClick: () => c.insertChart('pie') }, { icon: ChartPie, label: t('Doughnut'), onClick: () => c.insertChart('doughnut') }]} />} />
           </G>
           <G label={t('Links')}><RB icon={Link2} label={t('Link')} big kbd="Ctrl+K" disabled={ro || !has} onClick={c.insertLink} /></G>
-          <G label={t('Comments')}><RB icon={MessageSquarePlus} label={t('Comment')} big disabled={ro || !slide} onClick={() => c.togglePane('comments', true)} /></G>
+          <G label={t('Live data')}>
+            <RB icon={Radio} label={t('Live field')} big title={t('A value from Hostwerk that refreshes during the slide show')} disabled={ro} onClick={c.liveField} />
+            <RB icon={RefreshCw} label={t('Refresh')} title={t('Refresh live fields')} disabled={ro} onClick={c.refreshLive} />
+          </G>
+          <G label={t('Comments')}><RB icon={MessageSquarePlus} label={t('Comment')} big kbd="Ctrl+Alt+M" disabled={ro || !slide} onClick={c.addComment} /></G>
           <G label={t('Text')}>
             <RB icon={Type} label={t('Text box')} big active={state.tool === 'textbox'} disabled={ro} onClick={() => c.setTool('textbox')} />
             <div className="of-slides-rcol">
@@ -282,11 +297,19 @@ export default function Ribbon({ c, tab, setTab }) {
           <G label={t('Animation')}>
             <div className="of-slides-trgallery">
               <button type="button" className={`of-slides-trbtn ${one && !selAnim ? 'on' : ''}`} disabled={ro || !one} onClick={c.removeAnim}><TransitionIcon type="none" /><span className="small">{t('None')}</span></button>
-              {EFFECTS.map((x) => <button key={x.id} type="button" disabled={ro || !has} className={`of-slides-trbtn ${selAnim && selAnim.effect === x.id ? 'on' : ''}`} onClick={() => c.setAnim({ effect: x.id })}><TransitionIcon type={x.id === 'appear' ? 'appear' : x.id === 'fly' ? 'push' : x.id} /><span className="small">{t(x.label)}</span></button>)}
+              {EFFECTS.map((x) => <button key={x.id} type="button" disabled={ro || !has} className={`of-slides-trbtn ${selAnim && (selAnim.cls || 'entr') === 'entr' && selAnim.effect === x.id ? 'on' : ''}`} onClick={() => c.setAnim({ cls: 'entr', effect: x.id, path: undefined })}><TransitionIcon type={x.id === 'appear' ? 'appear' : x.id === 'fly' ? 'push' : x.id} /><span className="small">{t(x.label)}</span></button>)}
             </div>
+            <div className="of-slides-rcol">
+              <Pop icon={Sparkles} label={t('More effects')} title={t('Entrance, emphasis, exit and motion paths')} disabled={ro || !has} width={560} content={(close) => <EffectGallery current={selAnim} close={close} onPick={(spec) => c.setAnim({ ...spec, ...(spec.cls !== 'path' ? { path: undefined } : {}) })} />} />
+              {selAnim && <span className="small muted">{`${t(CLASS_LABEL[selAnim.cls || 'entr'])}: ${t(effectLabel(selAnim))}`}</span>}
+            </div>
+          </G>
+          <G label={t('Advanced animation')}>
+            <Pop icon={PlusIcon} label={t('Add animation')} big title={t('Add another effect to the selected object')} disabled={ro || !has} width={560} content={(close) => <EffectGallery close={close} onPick={(spec) => c.addAnim(spec)} />} />
           </G>
           <G label={t('Effect options')}>
             <Pop icon={Sparkles} label={t('Direction')} disabled={ro || !selAnim || selAnim.effect !== 'fly'} content={(close) => <Menu close={close} items={FLY_DIRS.map((d) => ({ label: t(d.label), active: selAnim && selAnim.dir === d.id, onClick: () => c.setAnim({ dir: d.id }) }))} />} />
+            {selAnim && selAnim.cls === 'path' && <span className="small muted"><Route size={12} /> {t('Drag the red end point on the slide')}</span>}
             <RB icon={Play} label={t('Preview')} disabled={!slide || !(slide.animations || []).length} onClick={c.previewAnims} />
           </G>
           <G label={t('Timing')}>
@@ -325,9 +348,11 @@ export default function Ribbon({ c, tab, setTab }) {
         {cur === 'review' && <>
           <G label={t('Proofing')}><RB icon={SpellCheck} label={t('Spelling')} big active={state.spellcheck} onClick={c.toggleSpell} /></G>
           <G label={t('Comments')}>
-            <RB icon={MessageSquarePlus} label={t('New comment')} big disabled={ro || !slide} onClick={() => c.togglePane('comments', true)} />
+            <RB icon={MessageSquarePlus} label={t('New comment')} big kbd="Ctrl+Alt+M" disabled={ro || !slide} onClick={c.addComment} />
             <RB icon={MessageSquare} label={t('Show comments')} big active={state.pane === 'comments'} onClick={() => c.togglePane('comments')} />
           </G>
+          <G label={t('Compare')}><RB icon={GitCompareArrows} label={t('Compare versions')} big onClick={c.compare} /></G>
+          {c.feats && c.feats.ai && <G label={t('AI')}><RB icon={Bot} label={t('Notes and text')} big disabled={ro || !slide} onClick={c.ai} /></G>}
         </>}
         {cur === 'view' && <>
           <G label={t('Presentation views')}>
@@ -338,9 +363,13 @@ export default function Ribbon({ c, tab, setTab }) {
           </G>
           <G label={t('Show')}>
             <div className="of-slides-rcol">
-              <label className="row-tight small"><input type="checkbox" checked={state.guides} onChange={c.toggleGuides} /><Ruler size={14} />{t('Guides')}</label>
+              <label className="row-tight small"><input type="checkbox" checked={!!c.rulers} onChange={c.toggleRulers} /><Ruler size={14} />{t('Ruler')}</label>
+              <label className="row-tight small"><input type="checkbox" checked={state.guides} onChange={c.toggleGuides} /><SquareDashed size={14} />{t('Centre guides')}</label>
               <label className="row-tight small"><input type="checkbox" checked={state.grid} onChange={c.toggleGrid} /><Grid3x3 size={14} />{t('Gridlines')}</label>
               <label className="row-tight small"><input type="checkbox" checked={state.snap} onChange={c.toggleSnap} /><Magnet size={14} />{t('Snap to objects')}</label>
+            </div>
+            <div className="of-slides-rcol">
+              <Pop icon={SquareDashed} label={t('Guides')} disabled={ro} content={(close) => <Menu close={close} items={[{ label: t('Add vertical guide'), onClick: () => c.addGuide('x') }, { label: t('Add horizontal guide'), onClick: () => c.addGuide('y') }, '-', { label: t('Remove all guides'), disabled: !(doc.guides || []).length, onClick: c.clearGuides }]} />} />
             </div>
             <div className="of-slides-rcol">
               <label className="row-tight small"><input type="checkbox" checked={state.notesPane} onChange={c.toggleNotes} /><StickyNote size={14} />{t('Notes')}</label>
@@ -399,7 +428,7 @@ export default function Ribbon({ c, tab, setTab }) {
             <RB icon={Square} title={t('Shadow')} active={!!one.shadow} disabled={ro} onClick={c.toggleShadow} />
             <Pop icon={Shapes} label={t('Crop to shape')} disabled={ro} width={300} content={(close) => <ShapeGallery close={close} onPick={(g) => c.cropToShape(g)} />} />
           </G>
-          <G label={t('Size')}><RB icon={PanelRight} label={t('Crop …')} big onClick={() => c.togglePane('format', true)} /></G>
+          <G label={t('Size')}><RB icon={Crop} label={t('Crop')} big active={!!c.cropping} title={t('Crop by dragging the black handles (double-click the picture too) – Esc ends')} disabled={ro} onClick={c.crop} /><RB icon={PanelRight} label={t('Exact …')} onClick={() => c.togglePane('format', true)} /></G>
           {fontGroup && null}
         </>}
         {cur === 'format' && ctxTab === 'shape' && <>
@@ -426,6 +455,7 @@ function TransitionIcon({ type }) {
   if (type === 'wipe') return <svg {...p}>{box}<rect x="4" y="4" width="9" height="12" fill="currentColor" opacity=".5" /><path d="M13 3v14" stroke="currentColor" strokeWidth="1.5" /></svg>;
   if (type === 'cover') return <svg {...p}>{box}<rect x="9" y="4" width="13" height="12" fill="currentColor" opacity=".5" /><path d="M9 4v12" stroke="currentColor" /></svg>;
   if (type === 'split') return <svg {...p}>{box}<path d="M13 3v14M9 10H4M17 10h5" stroke="currentColor" strokeWidth="1.5" /></svg>;
+  if (type === 'morph') return <svg {...p}>{box}<circle cx="8" cy="12" r="3" fill="currentColor" opacity=".35" /><circle cx="17" cy="8" r="4" fill="currentColor" opacity=".8" /><path d="M10 10.5l3-1.5" stroke="currentColor" strokeDasharray="1.5 1.5" /></svg>;
   return <svg {...p}>{box}<rect x="9" y="7" width="8" height="6" fill="currentColor" opacity=".5" /><rect x="5" y="4" width="16" height="12" fill="none" stroke="currentColor" strokeDasharray="2 2" /></svg>;
 }
 

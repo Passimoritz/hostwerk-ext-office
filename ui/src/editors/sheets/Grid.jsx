@@ -14,10 +14,11 @@ import { ChartSVG } from './charts.jsx';
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const norm = (a, b) => ({ r1: Math.min(a.r, b.r), c1: Math.min(a.c, b.c), r2: Math.max(a.r, b.r), c2: Math.max(a.c, b.c) });
 
+const reduced = () => typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 function readTheme(el) {
   const cs = getComputedStyle(el);
   const v = (n, d) => (cs.getPropertyValue(n) || '').trim() || d;
-  const accent = v('--accent', '#6a46ff');
+  const accent = v('--of-sheet-sel', '') || v('--accent', '#6a46ff');
   return {
     accent, head: v('--surface-2', '#f7f8fb'), headText: v('--muted', '#5f677c'), line: v('--line', '#e3e6ee'),
     headSel: v('--accent-soft', 'rgba(106,70,255,.1)'), headSelStrong: `color-mix(in srgb, ${accent} 30%, transparent)`, headSelText: v('--accent-text', '#5a37f0'),
@@ -90,9 +91,30 @@ export const Grid = forwardRef(function Grid(props, apiRef) {
       const sp = sheet.spill.get(k); const anchor = sp ? sp.anchor : sheet.spillAnchors.has(k) ? k : null;
       if (anchor != null) { const d = sheet.spillAnchors.get(anchor); if (d) { const r0 = Math.floor(anchor / MAXC); const c0 = anchor % MAXC; spillRange = { r1: r0, c1: c0, r2: r0 + d.rows - 1, c2: c0 + d.cols - 1 }; } }
     }
-    paint(ctx, g, { book, sheet, theme, sel, edit, refs, pointing, copy, drag: dragView, showFormulas, loc, defFont, readOnly, spillRange });
-  }, [theme, size, sel, edit, refs, pointing, copy, dragView, showFormulas, loc, defFont, readOnly, book, sheet, scroll, zoom, version]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { cancelAnimationFrame(raf.current); raf.current = requestAnimationFrame(draw); return () => cancelAnimationFrame(raf.current); }, [draw]);
+    paint(ctx, g, { book, sheet, theme, sel, edit, refs, pointing, copy, drag: dragView, showFormulas, loc, defFont, readOnly, spillRange, remote: props.remote, r1c1: props.r1c1, selRect: selRect.current });
+  }, [theme, size, sel, edit, refs, pointing, copy, dragView, showFormulas, loc, defFont, readOnly, book, sheet, scroll, zoom, version, props.remote, props.r1c1]); // eslint-disable-line react-hooks/exhaustive-deps
+  // paint in the same frame as React's commit (scrolling stays in step with the scrollbars)
+  useLayoutEffect(() => { cancelAnimationFrame(raf.current); draw(); }, [draw]);
+  // the selection glides to its new place (keyboard moves; not while dragging, not with reduced motion)
+  const selRect = useRef(null); const lastSel = useRef(null); const anim = useRef(0);
+  useEffect(() => {
+    const g = geoRef.current; if (!sel || !g) return;
+    const last = sel.ranges[sel.ranges.length - 1];
+    const prev = lastSel.current; lastSel.current = { ...last, sheet: sheet.id };
+    if (!prev || prev.sheet !== sheet.id || drag.current || reduced() || sel.ranges.length > 1) return;
+    if (Math.abs(prev.r1 - last.r1) + Math.abs(prev.c1 - last.c1) > 12 || (prev.r1 === last.r1 && prev.c1 === last.c1 && prev.r2 === last.r2 && prev.c2 === last.c2)) return;
+    if (last.r2 - last.r1 > 50 || last.c2 - last.c1 > 50) return;
+    const from = g.rect(prev.r1, prev.c1, prev.r2, prev.c2); const to = g.rect(last.r1, last.c1, last.r2, last.c2);
+    const t0 = performance.now(); const D = 110;
+    cancelAnimationFrame(anim.current);
+    const tick = (now) => {
+      const k = Math.min(1, (now - t0) / D); const e = 1 - (1 - k) ** 3;
+      selRect.current = k >= 1 ? null : { x: from.x + (to.x - from.x) * e, y: from.y + (to.y - from.y) * e, w: from.w + (to.w - from.w) * e, h: from.h + (to.h - from.h) * e };
+      draw();
+      if (k < 1) anim.current = requestAnimationFrame(tick);
+    };
+    anim.current = requestAnimationFrame(tick);
+  }, [sel]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---------- api for the editor ---------- */
   const cellRect = (r, c) => {
@@ -125,6 +147,7 @@ export const Grid = forwardRef(function Grid(props, apiRef) {
   const local = (e) => { const r = canvas.current.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
   const hit = (x, y) => {
     const g = geoRef.current;
+    if ((g.gx && x < g.gx) || (g.gy && y < g.gy)) return { area: 'gutter' };
     if (x < g.hw && y < g.hh) return { area: 'corner' };
     if (y < g.hh) {
       const c = g.colAt(x);
@@ -183,6 +206,8 @@ export const Grid = forwardRef(function Grid(props, apiRef) {
     if (e.button === 1) return;
     const p = local(e);
     const h = hit(p.x, p.y);
+    if (props.onBlankClick) props.onBlankClick();
+    if (h.area === 'gutter') { const ob = (geoRef.current.outlineBtns || []).find((b) => p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h); e.preventDefault(); if (ob && props.onOutline && !readOnly) props.onOutline(ob); return; }
     e.preventDefault(); // keep the keyboard focus in the cell input
     if (props.focus) { props.focus(); setTimeout(() => props.focus && props.focus(), 0); }
     if (e.button === 2) {
@@ -242,7 +267,7 @@ export const Grid = forwardRef(function Grid(props, apiRef) {
         if (Math.abs(dr) >= Math.abs(dc) && dr) dst = dr > 0 ? { ...src, r2: c.r } : { ...src, r1: c.r };
         else if (dc) dst = dc > 0 ? { ...src, c2: c.c } : { ...src, c1: c.c };
         drag.current.dst = dst;
-        setDragView({ kind: 'fill', preview: dst });
+        setDragView({ kind: 'fill', preview: dst, tip: props.fillPreview ? props.fillPreview(src, dst) : null, at: q });
       }, onUp: (q, ev) => { const dst = drag.current && drag.current.dst; void q; if (dst && (dst.r1 !== src.r1 || dst.r2 !== src.r2 || dst.c1 !== src.c1 || dst.c2 !== src.c2)) props.onFill(src, dst, ev.ctrlKey || ev.metaKey); } }, e);
       return;
     }
@@ -275,17 +300,31 @@ export const Grid = forwardRef(function Grid(props, apiRef) {
     if (drag.current) return;
     const p = local(e);
     const h = hit(p.x, p.y);
-    setCursor(h.area === 'corner' ? 'default' : h.resize ? (h.area === 'colhead' ? 'col-resize' : 'row-resize') : h.area === 'colhead' ? 's-resize' : h.area === 'rowhead' ? 'e-resize' : h.fill ? 'crosshair' : h.border ? 'move' : h.filterBtn ? 'pointer' : 'cell');
+    setCursor(h.area === 'gutter' ? ((geoRef.current.outlineBtns || []).some((b) => p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) ? 'pointer' : 'default') : h.area === 'corner' ? 'default' : h.resize ? (h.area === 'colhead' ? 'col-resize' : 'row-resize') : h.area === 'colhead' ? 's-resize' : h.area === 'rowhead' ? 'e-resize' : h.fill ? 'crosshair' : h.border ? 'move' : h.filterBtn ? 'pointer' : 'cell');
     if (h.area === 'cell') {
       const cell = sheet.cells.get(h.r * MAXC + h.c);
       if (cell && (cell.note || ((cell.link || cell.link_) && false))) { if (!hover || hover.r !== h.r || hover.c !== h.c) setHover({ r: h.r, c: h.c }); } else if (hover) setHover(null);
     } else if (hover) setHover(null);
   };
+  // mouse wheels move in notches: glide there (touchpads already send smooth, momentum deltas – applied directly)
+  const glide = useRef({ x: 0, y: 0, raf: 0 });
   const onWheel = (e) => {
     if (e.ctrlKey) { e.preventDefault(); props.onZoom && props.onZoom(e.deltaY < 0 ? 10 : -10); return; }
     const el = scroller.current;
-    el.scrollTop += e.deltaMode === 1 ? e.deltaY * 20 : e.deltaY;
-    el.scrollLeft += e.deltaMode === 1 ? e.deltaX * 20 : e.deltaX || (e.shiftKey ? e.deltaY : 0);
+    const dy = e.deltaMode === 1 ? e.deltaY * 20 : e.deltaMode === 2 ? e.deltaY * el.clientHeight : e.deltaY;
+    const dx = e.deltaMode === 1 ? e.deltaX * 20 : e.deltaX || (e.shiftKey ? dy : 0);
+    const notch = e.deltaMode !== 0 || (Math.abs(e.deltaY) >= 50 && Number.isInteger(e.deltaY) && !e.deltaX);
+    if (!notch || reduced()) { el.scrollTop += e.shiftKey ? 0 : dy; el.scrollLeft += dx; return; }
+    const gl = glide.current;
+    gl.y += e.shiftKey ? 0 : dy; gl.x += dx;
+    if (gl.raf) return;
+    const step = () => {
+      const sy = Math.abs(gl.y) < 1 ? gl.y : gl.y * 0.28; const sx = Math.abs(gl.x) < 1 ? gl.x : gl.x * 0.28;
+      el.scrollTop += sy; el.scrollLeft += sx; gl.y -= sy; gl.x -= sx;
+      gl.raf = Math.abs(gl.y) > 0.5 || Math.abs(gl.x) > 0.5 ? requestAnimationFrame(step) : 0;
+      if (!gl.raf) { gl.x = 0; gl.y = 0; }
+    };
+    gl.raf = requestAnimationFrame(step);
   };
   useEffect(() => { const cv = canvas.current; const h = (e) => onWheel(e); cv.addEventListener('wheel', h, { passive: false }); return () => cv.removeEventListener('wheel', h); });
 
@@ -309,7 +348,7 @@ export const Grid = forwardRef(function Grid(props, apiRef) {
       <div className="of-sheet-overlay" style={overlayStyle}>
         <div className="of-sheet-objects" style={{ left: g.hw + g.fx, top: g.hh + g.fy, right: 0, bottom: 0 }}>
           <div style={{ position: 'absolute', left: -(g.hw + g.fx), top: -(g.hh + g.fy) }}>
-            {sheet.images.map((im) => { const rc = objRect(im.anchor); return <img key={im.id} src={im.src} alt="" className="of-sheet-image" style={rc} draggable={false} title={t('Picture from the file (kept unchanged)')} />; })}
+            {props.objects ? props.objects(objRect) : sheet.images.map((im) => { const rc = objRect(im.anchor); return <img key={im.id} src={im.src} alt="" className="of-sheet-image" style={rc} draggable={false} />; })}
             {sheet.charts.map((ch) => <ChartBox key={ch.id} chart={ch} rect={objRect(ch.anchor)} z={z} selected={props.chartSel === ch.id} readOnly={readOnly} data={props.chartData(ch)}
               onSelect={() => props.onChartSel(ch.id)} onChange={(anchor) => props.onChartChange(ch.id, anchor)} onOpen={() => props.onChartOpen(ch.id)} onMenu={(at) => props.onChartMenu(ch.id, at)} />)}
           </div>
@@ -318,6 +357,7 @@ export const Grid = forwardRef(function Grid(props, apiRef) {
           ? <div className="of-sheet-guide v" style={{ left: g.colX(dragView.size.idx) + dragView.size.px * z }} />
           : <div className="of-sheet-guide h" style={{ top: g.rowY(dragView.size.idx) + dragView.size.px * z }} />)}
         {dragView && dragView.size && <div className="of-sheet-tip small" style={{ left: dragView.size.axis === 'col' ? g.colX(dragView.size.idx) + dragView.size.px * z + 6 : 4, top: dragView.size.axis === 'col' ? 2 : g.rowY(dragView.size.idx) + dragView.size.px * z + 4 }}>{dragView.size.axis === 'col' ? t('Width: {px} px', { px: Math.round(dragView.size.px) }) : t('Height: {px} px', { px: Math.round(dragView.size.px) })}</div>}
+        {dragView && dragView.tip && dragView.at && <div className="of-sheet-tip small is-fill" style={{ left: dragView.at.x + 14, top: dragView.at.y + 16 }}><Keep>{dragView.tip}</Keep></div>}
         {noteRect && noteCell && noteCell.note && <div className="of-sheet-note" style={{ left: noteRect.x + noteRect.w + 6, top: noteRect.y }}>{noteCell.noteAuthor && <b className="small"><Keep>{noteCell.noteAuthor}</Keep></b>}<div className="small"><Keep>{noteCell.note}</Keep></div></div>}
         {children && children(g, cellRect)}
       </div>

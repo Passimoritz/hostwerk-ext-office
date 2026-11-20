@@ -8,6 +8,11 @@ import { css } from '../themes.js';
 import { S } from '../units.js';
 import { layoutOf } from '../model.js';
 import { shapePath } from './geometry.js';
+import { customPaths } from './custom.js';
+import { metaToSvgUrl, isMetafile } from './metafile.js';
+
+/** what an <img> can show: EMF/WMF are drawn as SVG (the file keeps the metafile) */
+export const displaySrc = (src) => (isMetafile(src) ? metaToSvgUrl(src) || src : src);
 import { paraProps, runProps, paraCss, runCss, bulletLabels, runText, fontStack } from './text.js';
 import Chart from './Chart.jsx';
 
@@ -147,7 +152,8 @@ function LineEl({ el, theme }) {
 function ShapeEl({ el, theme, ctx, mode, editing, renderEditor }) {
   const w = S(el.w); const H = S(el.h);
   const defs = [];
-  const geo = el.geom && el.geom !== 'rect' || el.fill || el.line ? shapePath(el.geom || 'rect', w, H, el.adj) : null;
+  const custom = el.geom === 'custom' && el.paths ? customPaths(el.paths, w, H) : null;
+  const geo = custom ? { d: '' } : el.geom && el.geom !== 'rect' || el.fill || el.line ? shapePath(el.geom || 'rect', w, H, el.adj) : null;
   const ln = el.line;
   const wpx = ln ? Math.max(0.25, S(ln.width || 12700)) : 0;
   const fl = [el.flipH && 'scaleX(-1)', el.flipV && 'scaleY(-1)'].filter(Boolean).join(' ');
@@ -156,7 +162,8 @@ function ShapeEl({ el, theme, ctx, mode, editing, renderEditor }) {
   return h('div', { style: { position: 'absolute', inset: 0 } },
     showGeo ? h('svg', { width: w, height: H, viewBox: `0 0 ${w} ${H}`, style: { position: 'absolute', left: 0, top: 0, overflow: 'visible', transform: fl || undefined, filter: shadowCss(el.shadow, theme) } },
       h('defs', null, defs),
-      h('path', { d: geo.d, fill: svgFill(el.fill, theme, defs, w, H), fillRule: geo.evenodd ? 'evenodd' : undefined, stroke: ln ? css(ln.color || 'tx1', theme, '#000') : 'none', strokeWidth: wpx || undefined, strokeDasharray: ln ? dashArray(ln, wpx) : undefined, strokeLinejoin: 'round' })) : null,
+      custom ? custom.map((p, i) => h('path', { key: i, d: p.d, fill: p.fill ? svgFill(el.fill, theme, defs, w, H) : 'none', stroke: ln && p.stroke ? css(ln.color || 'tx1', theme, '#000') : 'none', strokeWidth: wpx || undefined, strokeDasharray: ln ? dashArray(ln, wpx) : undefined, strokeLinejoin: ln && ln.join === 'round' ? 'round' : 'miter', strokeLinecap: (ln && ln.cap) || 'butt' }))
+        : h('path', { d: geo.d, fill: svgFill(el.fill, theme, defs, w, H), fillRule: geo.evenodd ? 'evenodd' : undefined, stroke: ln ? css(ln.color || 'tx1', theme, '#000') : 'none', strokeWidth: wpx || undefined, strokeDasharray: ln ? dashArray(ln, wpx) : undefined, strokeLinejoin: 'round' })) : null,
     ph ? h('div', { className: 'of-slides-picph' }, h('svg', { width: 48, height: 48, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5 }, h('rect', { x: 3, y: 3, width: 18, height: 18, rx: 2 }), h('circle', { cx: 9, cy: 9, r: 2 }), h('path', { d: 'm21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21' }))) : null,
     editing && renderEditor ? renderEditor(el) : el.text ? h(TextBody, { body: el.text, theme, w, h: H, ctx, mode, prompt: el.ph && el.ph !== 'pic' ? ctx.prompt && ctx.prompt(el) : null }) : null);
 }
@@ -168,7 +175,7 @@ function ImageEl({ el, theme }) {
   const ln = el.line;
   const geo = el.geom && el.geom !== 'rect' ? shapePath(el.geom, w, H, el.adj) : null;
   return h('div', { style: { position: 'absolute', inset: 0, overflow: 'hidden', opacity: el.opacity ?? 1, clipPath: geo ? `path('${geo.d}')` : undefined, filter: shadowCss(el.shadow, theme), boxShadow: ln ? `inset 0 0 0 ${Math.max(0.5, S(ln.width || 12700))}px ${css(ln.color, theme)}` : undefined, transform: [el.flipH && 'scaleX(-1)', el.flipV && 'scaleY(-1)'].filter(Boolean).join(' ') || undefined } },
-    el.src ? h('img', { src: el.src, alt: el.alt || '', draggable: false, style: { position: 'absolute', left: -(c.l || 0) * fw, top: -(c.t || 0) * fh, width: fw, height: fh, maxWidth: 'none', userSelect: 'none', pointerEvents: 'none' } }) : null);
+    el.src ? h('img', { src: displaySrc(el.src), alt: el.alt || '', draggable: false, decoding: 'async', style: { position: 'absolute', left: -(c.l || 0) * fw, top: -(c.t || 0) * fh, width: fw, height: fh, maxWidth: 'none', userSelect: 'none', pointerEvents: 'none' } }) : null);
 }
 
 function tableCellFill(el, ri, ci, cell, theme) {
@@ -212,7 +219,7 @@ function MediaEl({ el, mode }) {
 }
 
 function UnknownEl({ el }) {
-  if (el.src) return h('img', { src: el.src, alt: el.what || '', draggable: false, style: { position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'fill', pointerEvents: 'none' } });
+  if (el.src) return h('img', { src: displaySrc(el.src), alt: el.what || '', draggable: false, decoding: 'async', style: { position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'fill', pointerEvents: 'none' } });
   return h('div', { className: 'of-slides-unknown' }, h('span', null, el.what || 'Object'));
 }
 

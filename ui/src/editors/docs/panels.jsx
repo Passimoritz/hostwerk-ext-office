@@ -10,17 +10,45 @@ import { Keep, Raw } from '../_shared/keep.jsx';
 import { colorOf } from './extensions/track.js';
 import { MM_PX } from './io/pm.js';
 
+const CHANGE_LABEL = (r) => (r.type === 'insertion' ? t('Inserted') : r.type === 'deletion' ? t('Deleted') : r.type === 'pmark' ? (r.attrs.type === 'ins' ? t('New paragraph') : t('Paragraphs joined')) : r.type === 'pchange' ? t('Paragraph formatted') : r.type === 'row' ? (r.attrs.type === 'ins' ? t('Row inserted') : t('Row deleted')) : t('Formatted'));
+/** comment text with @mentions highlighted */
+export function MentionText({ text }) {
+  const parts = String(text || '').split(/(@[p{L}][p{L}p{N}._-]*(?:s[p{Lu}][p{L}.-]*)?)/u);
+  return <>{parts.map((p, k) => (k % 2 ? <span key={k} className="of-docs-mention"><Keep>{p}</Keep></span> : <Keep key={k}>{p}</Keep>))}</>;
+}
+/** "@An" at the caret → names that start with "An" */
+function mentionQuery(v) { const m = /(?:^|s)@([p{L}][p{L}p{N}._ -]{0,24})?$/u.exec(v); return m ? (m[1] || '') : null; }
+function MentionList({ value, people, onPick }) {
+  const q = mentionQuery(value);
+  if (q == null) return null;
+  const list = people.filter((p) => p.toLowerCase().startsWith(q.toLowerCase())).slice(0, 6);
+  if (!list.length) return null;
+  return <div className="of-docs-mentions" role="listbox">{list.map((p) => <Raw as="button" type="button" key={p} role="option" className="of-docs-mi" onMouseDown={(e) => e.preventDefault()} onClick={() => onPick(value.replace(/@([p{L}][p{L}p{N}._ -]{0,24})?$/u, `@${p} `))} title={p}>@{p}</Raw>)}</div>;
+}
 const when = (d) => { if (!d) return ''; const x = new Date(d); return Number.isNaN(x.getTime()) ? '' : x.toLocaleString(document.documentElement.lang === 'de' ? 'de-DE' : 'en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }); };
 
-export function NavPane({ headings, onJump, current }) {
+export function NavPane({ headings, onJump, current, onMove, readOnly }) {
+  const [drag, setDrag] = useState(null);
+  const [over, setOver] = useState(null);
+  const [q, setQ] = useState('');
+  const shown = q ? headings.filter((h) => h.text.toLowerCase().includes(q.toLowerCase())) : headings;
   return (
     <nav className="of-docs-side of-docs-nav" aria-label={t('Navigation')}>
       <div className="of-docs-side-head"><b>Navigation</b></div>
+      {headings.length > 8 && <div className="of-docs-nav-filter"><input className="input sm" value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('Filter headings')} aria-label={t('Filter headings')} /></div>}
       {headings.length ? (
         <div className="of-docs-side-body">
-          {headings.map((h, k) => (
-            <Raw as="button" type="button" key={k} className={`of-docs-navitem of-nl${h.level} ${current === h.index ? 'of-on' : ''}`} onClick={() => onJump(h.index)} title={h.text}>{h.text}</Raw>
+          {shown.map((h) => (
+            <Raw as="button" type="button" key={h.index} draggable={!readOnly && !!onMove && !q}
+              className={`of-docs-navitem of-nl${h.level} ${current === h.index ? 'of-on' : ''} ${drag === h.index ? 'of-drag' : ''} ${over === h.index && drag !== h.index ? 'of-over' : ''}`}
+              onClick={() => onJump(h.index)} title={readOnly || !onMove ? h.text : `${h.text} – ${t('drag to move this section')}`}
+              onDragStart={(e) => { setDrag(h.index); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', h.text); }}
+              onDragOver={(e) => { if (drag == null) return; e.preventDefault(); setOver(h.index); }}
+              onDragLeave={() => setOver((o) => (o === h.index ? null : o))}
+              onDrop={(e) => { e.preventDefault(); if (drag != null && drag !== h.index && onMove) onMove(drag, h.index); setDrag(null); setOver(null); }}
+              onDragEnd={() => { setDrag(null); setOver(null); }}>{h.text}</Raw>
           ))}
+          {!readOnly && onMove && drag != null && <div className={`of-docs-navend ${over === 'end' ? 'of-over' : ''}`} onDragOver={(e) => { e.preventDefault(); setOver('end'); }} onDrop={(e) => { e.preventDefault(); onMove(drag, null); setDrag(null); setOver(null); }}>{t('Move to the end')}</div>}
         </div>
       ) : <p className="small muted of-docs-side-empty">{t('No headings yet. Use “Heading 1–3” in Home → Styles to build the outline.')}</p>}
     </nav>
@@ -29,6 +57,7 @@ export function NavPane({ headings, onJump, current }) {
 
 export function CommentsPane({ comments, anchors, changes, activeId, readOnly, author, onSelect, onChange, onDelete, onReply, onSelectChange, onAccept, onReject, onAcceptAll, onRejectAll, tab, setTab, focusId }) {
   const list = comments.filter((c) => anchors[c.id] != null).sort((a, b) => anchors[a.id] - anchors[b.id]);
+  const people = [...new Set([author, ...comments.flatMap((c) => [c.author, ...(c.replies || []).map((r) => r.author)])].filter(Boolean))];
   const [showResolved, setShowResolved] = useState(false);
   const shown = list.filter((c) => showResolved || !c.resolved);
   return (
@@ -40,7 +69,7 @@ export function CommentsPane({ comments, anchors, changes, activeId, readOnly, a
         <div className="of-docs-side-body">
           {list.some((c) => c.resolved) && <label className="check small"><input type="checkbox" checked={showResolved} onChange={(e) => setShowResolved(e.target.checked)} /> {t('Show resolved')}</label>}
           {!shown.length && <p className="small muted of-docs-side-empty">{readOnly ? t('No comments.') : t('No comments yet. Select text and choose Review → New comment.')}</p>}
-          {shown.map((c) => <CommentCard key={c.id} c={c} active={activeId === c.id} readOnly={readOnly} author={author} autoFocus={focusId === c.id} onSelect={() => onSelect(c.id)} onChange={(patch) => onChange(c.id, patch)} onDelete={() => onDelete(c.id)} onReply={(text) => onReply(c.id, text)} />)}
+          {shown.map((c) => <CommentCard key={c.id} c={c} people={people} active={activeId === c.id} readOnly={readOnly} author={author} autoFocus={focusId === c.id} onSelect={() => onSelect(c.id)} onChange={(patch) => onChange(c.id, patch)} onDelete={() => onDelete(c.id)} onReply={(text) => onReply(c.id, text)} />)}
         </div>
       ) : (
         <div className="of-docs-side-body">
@@ -49,7 +78,7 @@ export function CommentsPane({ comments, anchors, changes, activeId, readOnly, a
           {changes.map((r, k) => (
             <div key={k} className="card of-docs-chg" style={{ '--of-rev': colorOf(r.attrs.author) }} role="button" tabIndex={0} onClick={() => onSelectChange(r)} onKeyDown={(e) => e.key === 'Enter' && onSelectChange(r)}>
               <div className="of-docs-chg-head"><span className="of-docs-dot" /><b>{r.attrs.author ? <Keep>{r.attrs.author}</Keep> : t('Unknown')}</b><span className="small muted">{when(r.attrs.date)}</span></div>
-              <div className="small">{r.type === 'insertion' ? t('Inserted') : r.type === 'deletion' ? t('Deleted') : t('Formatted')}: <span className={r.type === 'deletion' ? 'of-docs-del' : r.type === 'insertion' ? 'of-docs-ins' : ''}><Keep>{r.text.length > 80 ? `${r.text.slice(0, 80)}…` : r.text}</Keep></span></div>
+              <div className="small">{CHANGE_LABEL(r)}: <span className={r.type === 'deletion' ? 'of-docs-del' : r.type === 'insertion' ? 'of-docs-ins' : ''}><Keep>{r.text.length > 80 ? `${r.text.slice(0, 80)}…` : r.text}</Keep></span></div>
               {!readOnly && <div className="row-tight"><Btn className="xs ghost" icon={Check} onClick={(e) => { e.stopPropagation(); onAccept(r); }}>Accept</Btn><Btn className="xs ghost" icon={X} onClick={(e) => { e.stopPropagation(); onReject(r); }}>Reject</Btn></div>}
             </div>
           ))}
@@ -59,23 +88,27 @@ export function CommentsPane({ comments, anchors, changes, activeId, readOnly, a
   );
 }
 
-function CommentCard({ c, active, readOnly, author, onSelect, onChange, onDelete, onReply, autoFocus }) {
+function CommentCard({ c, people = [], active, readOnly, author, onSelect, onChange, onDelete, onReply, autoFocus }) {
   const [reply, setReply] = useState('');
+  const [leaving, setLeaving] = useState(false);
+  const resolve = () => { if (c.resolved) { onChange({ resolved: false }); return; } setLeaving(true); setTimeout(() => { setLeaving(false); onChange({ resolved: true }); }, 220); };
   const ref = useRef(null);
   useEffect(() => { if (!autoFocus) return undefined; const tm = setTimeout(() => { if (ref.current) ref.current.focus(); }, 80); return () => clearTimeout(tm); }, [autoFocus]);
   // without an author name in the settings new comments are stored as "Unknown" – they are still the user's own
   const mine = !c.author || c.author === (author || t('Unknown'));
   return (
-    <div className={`card of-docs-cmt ${active ? 'of-on' : ''} ${c.resolved ? 'of-resolved' : ''}`} onClick={onSelect} role="group" aria-label={t('Comment by {name}', { name: c.author || t('Unknown') })}>
+    <div className={`card of-docs-cmt ${active ? 'of-on' : ''} ${c.resolved ? 'of-resolved' : ''} ${leaving ? 'of-leaving' : ''}`} onClick={onSelect} role="group" aria-label={t('Comment by {name}', { name: c.author || t('Unknown') })}>
       <div className="of-docs-chg-head"><MessageSquare size={13} /><b>{c.author ? <Keep>{c.author}</Keep> : t('Unknown')}</b><span className="small muted">{when(c.date)}</span>{c.resolved && <span className="badge ok">{t('Resolved')}</span>}</div>
       {c.quote && <div className="of-docs-quote small muted">„<Keep>{c.quote.length > 90 ? `${c.quote.slice(0, 90)}…` : c.quote}</Keep>“</div>}
-      {readOnly || !mine ? <div className="of-docs-cmt-text"><Keep>{c.text}</Keep></div> : <textarea ref={ref} className="input of-docs-cmt-input" rows={Math.min(6, Math.max(2, (c.text || '').split('\n').length))} value={c.text} placeholder={t('Write a comment …')} onChange={(e) => onChange({ text: e.target.value })} onClick={(e) => e.stopPropagation()} aria-label="Comment" />}
-      {(c.replies || []).map((r, k) => <div key={k} className="of-docs-reply"><div className="small"><b>{r.author ? <Keep>{r.author}</Keep> : t('Unknown')}</b> <span className="muted">{when(r.date)}</span></div><div className="of-docs-cmt-text"><Keep>{r.text}</Keep></div></div>)}
+      {readOnly || !mine ? <div className="of-docs-cmt-text"><MentionText text={c.text} /></div> : <textarea ref={ref} className="input of-docs-cmt-input" rows={Math.min(6, Math.max(2, (c.text || '').split('\n').length))} value={c.text} placeholder={t('Write a comment …')} onChange={(e) => onChange({ text: e.target.value })} onClick={(e) => e.stopPropagation()} aria-label="Comment" />}
+      {!readOnly && mine && <MentionList value={c.text || ''} people={people} onPick={(v) => onChange({ text: v })} />}
+      {(c.replies || []).map((r, k) => <div key={k} className="of-docs-reply"><div className="small"><b>{r.author ? <Keep>{r.author}</Keep> : t('Unknown')}</b> <span className="muted">{when(r.date)}</span></div><div className="of-docs-cmt-text"><MentionText text={r.text} /></div></div>)}
       {!readOnly && active && (
         <div className="stack of-docs-cmt-actions" onClick={(e) => e.stopPropagation()}>
           <div className="row-tight"><input className="input sm grow" value={reply} placeholder={t('Reply …')} onChange={(e) => setReply(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && reply.trim()) { onReply(reply.trim()); setReply(''); } }} aria-label="Reply" /><Btn className="xs" disabled={!reply.trim()} onClick={() => { onReply(reply.trim()); setReply(''); }}>Reply</Btn></div>
+          <MentionList value={reply} people={people} onPick={setReply} />
           <div className="row-tight">
-            <Btn className="xs ghost" icon={c.resolved ? RotateCcw : Check} onClick={() => onChange({ resolved: !c.resolved })}>{c.resolved ? 'Reopen' : 'Resolve'}</Btn>
+            <Btn className="xs ghost" icon={c.resolved ? RotateCcw : Check} onClick={resolve}>{c.resolved ? 'Reopen' : 'Resolve'}</Btn>
             <Btn className="xs ghost" icon={Trash2} onClick={onDelete}>Delete</Btn>
           </div>
         </div>
@@ -140,11 +173,16 @@ export function FindBar({ editor, mode, setMode, onClose, readOnly }) {
 let HUItoast = () => {};
 export function setToast(fn) { HUItoast = fn; }
 
-export function StatusBar({ page, pages, stats, lang, zoom, setZoom, fitWidth, track, changes, layout, setLayout }) {
+export function StatusBar({ page, pages, stats, lang, zoom, setZoom, fitWidth, track, changes, layout, setLayout, goal, onWords, peers }) {
+  const pct = goal ? Math.min(100, Math.round((stats.words / goal) * 100)) : 0;
   return (
     <footer className="of-docs-status" aria-label={t('Status')}>
       <span>{t('Page {a} of {b}', { a: page, b: pages })}</span>
-      <span>{t('{n} words', { n: stats.words.toLocaleString() })}</span>
+      <button type="button" className="of-docs-words" onClick={onWords} title={t('Word count and goal')}>
+        {goal ? <span className="of-docs-goal" style={{ '--of-goal': `${pct * 3.6}deg` }} aria-hidden="true" /> : null}
+        {goal ? t('{n} of {g} words', { n: stats.words.toLocaleString(), g: goal.toLocaleString() }) : t('{n} words', { n: stats.words.toLocaleString() })}
+      </button>
+      {peers && peers.length > 0 && <span className="of-docs-peers" title={peers.map((p) => p.name).join(', ')}>{peers.slice(0, 5).map((p, k) => <span key={k} className="of-docs-peer" style={{ background: p.color }}><Keep>{(p.name || '?').slice(0, 1).toUpperCase()}</Keep></span>)}</span>}
       <span className="of-hide-sm">{t('{n} characters', { n: stats.chars.toLocaleString() })}</span>
       <span className="of-hide-sm">{lang}</span>
       {track && <span className="badge warn">{t('Track changes on')}</span>}

@@ -5,8 +5,12 @@
 const DAY = 86400000;
 const EPOCH = Date.UTC(1899, 11, 30);
 const D1904 = 1462;
+/* the date system of the workbook being calculated/shown (Book sets it; 1904 = Mac Excel's old system) */
+let SYS1904 = false;
+export function setDate1904(on) { SYS1904 = !!on; }
+export const isDate1904 = () => SYS1904;
 
-function fromParts(y, m, d, h = 0, mi = 0, s = 0, ms = 0, date1904 = false) {
+function fromParts(y, m, d, h = 0, mi = 0, s = 0, ms = 0, date1904 = SYS1904) {
   if (y === 1900 && m === 2 && d === 29) return 60 + (h * 3600000 + mi * 60000 + s * 1000 + ms) / DAY - (date1904 ? D1904 : 0);
   const dt = new Date(0);
   dt.setUTCFullYear(y, m - 1, d);
@@ -17,14 +21,14 @@ function fromParts(y, m, d, h = 0, mi = 0, s = 0, ms = 0, date1904 = false) {
 }
 
 /** Like Excel DATE(): years 0–1899 get 1900 added, overflowing months/days roll over. m is 1-based. */
-export function serialFromParts(y, m, d, h = 0, mi = 0, s = 0, ms = 0, date1904 = false) {
+export function serialFromParts(y, m, d, h = 0, mi = 0, s = 0, ms = 0, date1904 = SYS1904) {
   y = Math.trunc(y);
   if (y >= 0 && y < 1900) y += 1900;
   return fromParts(y, Math.trunc(m), Math.trunc(d), h, mi, s, ms, date1904);
 }
 
 /** serial → { y, m, d, h, mi, s, ms, dow } (dow 0 = Sunday, Excel-compatible incl. serial 0 = 1900-01-00) */
-export function partsFromSerial(serial, date1904 = false) {
+export function partsFromSerial(serial, date1904 = SYS1904) {
   if (date1904) serial += D1904;
   const total = Math.round(serial * DAY);
   const days = Math.floor(total / DAY);
@@ -42,12 +46,12 @@ export function partsFromSerial(serial, date1904 = false) {
 }
 
 /** JS Date (local components) → serial */
-export function dateToSerial(date, date1904 = false) {
+export function dateToSerial(date, date1904 = SYS1904) {
   return fromParts(date.getFullYear(), date.getMonth() + 1, date.getDate(), date.getHours(), date.getMinutes(), date.getSeconds(), date.getMilliseconds(), date1904);
 }
 
 /** serial → local JS Date */
-export function serialToDate(serial, date1904 = false) {
+export function serialToDate(serial, date1904 = SYS1904) {
   const p = partsFromSerial(serial, date1904);
   const dt = new Date(2000, 0, 1, p.h, p.mi, p.s, p.ms);
   dt.setFullYear(p.y, p.m - 1, p.d);

@@ -5,6 +5,7 @@
  * engine when the shell has one: see formats.js).
  */
 import * as XLSX from 'xlsx';
+import { cptable } from './codepage.js';
 import { Book, newSheet } from '../model.js';
 import { MAXC } from '../formula/refs.js';
 import { fromOoxml, toOoxml } from '../formula/parser.js';
@@ -14,6 +15,8 @@ import { serialToDate } from '../format/dates.js';
 import { odfContentXml, odfRawFormulas, fromOpenFormula, PLACEHOLDER, patchOdfOutput } from './odf-formula.js';
 
 const K = (r, c) => r * MAXC + c;
+// old .xls / .dbf codepages (TextDecoder-backed table, see codepage.js)
+if (XLSX.set_cptable) XLSX.set_cptable(cptable);
 const ERRNUM = { 0x00: '#NULL!', 0x07: '#DIV/0!', 0x0f: '#VALUE!', 0x17: '#REF!', 0x1d: '#NAME?', 0x24: '#NUM!', 0x2a: '#N/A', 0x2b: '#GETTING_DATA' };
 const ERRCODE = Object.fromEntries(Object.entries(ERRNUM).map(([k, v]) => [v, +k]));
 
@@ -47,7 +50,10 @@ export function readSheetJS(bytes, { loc, settings = {}, ext } = {}) {
           cell.f = fromOoxml(of != null ? of : String(c.f).replace(/^=/, '')); cell._cached = cell.v; cell._cachedF = cell.f;
         }
         if (c.F && c.F !== a && !c.f) { /* array formula member */ }
-        const s = nfStyle(typeof c.z === 'number' ? XLSX.SSF._table[c.z] : c.z);
+        let s = nfStyle(typeof c.z === 'number' ? XLSX.SSF._table[c.z] : c.z);
+        // .xls fills SheetJS CE reads (cellStyles): keep them
+        const fg = c.s && c.s.patternType === 'solid' && c.s.fgColor && c.s.fgColor.rgb;
+        if (fg && /^[0-9A-F]{6}$/i.test(String(fg).slice(-6)) && String(fg).slice(-6).toUpperCase() !== 'FFFFFF') s = book.styles.intern({ ...(s || {}), fill: `#${String(fg).slice(-6)}` });
         if (s) cell.s = s;
         if (c.l && c.l.Target) cell.link = c.l.Target;
         if (c.c && c.c.length) { cell.note = c.c.map((x) => x.t).join('\n'); cell.noteAuthor = c.c[0].a || ''; }

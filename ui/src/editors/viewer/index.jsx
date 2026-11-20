@@ -26,8 +26,9 @@ import { parseGoogleFile, GOOGLE } from './google.js';
 import { binaryStrings } from './extract.js';
 import './style.css';
 import { Keep, Raw } from '../_shared/keep.jsx';
+import { FileTypeIcon } from '../../lib/fileIcons.jsx';
 
-const IMAGES = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico', 'avif'];
+const IMAGES = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico', 'avif', 'emf', 'wmf'];
 const VISIO = ['vsdx', 'vsdm', 'vstx', 'vssx', 'vstm'];
 const CONVERT = ['vsd', 'vss', 'vst', 'pub', 'odg', 'otg', 'fodg', 'odf', 'wpd', 'wps', 'wri', 'abw', 'lwp', 'hwp', 'sxw', 'sxi', 'sxc', 'et', 'dps', 'xps', 'oxps'];
 const IWORK = ['pages', 'key', 'numbers'];
@@ -94,7 +95,7 @@ function Preview({ bytes, ext, name }) {
   const I = KIND_ICON[view] || FileIcon;
   return (
     <div className="of-view-preview">
-      {coverUrl ? <img className="of-view-cover" src={coverUrl} alt="" /> : info.card ? <Avatar c={info.card} size={40} /> : <span className="of-view-picon"><I size={22} /></span>}
+      {coverUrl ? <img className="of-view-cover" src={coverUrl} alt="" /> : info.card ? <Avatar c={info.card} size={40} /> : <span className="of-view-picon"><FileTypeIcon name={name} size={40} /></span>}
       <div className="of-view-ptext">
         <b className="of-view-ellipsis"><Keep>{info.title}</Keep></b>
         {info.sub && <span className="small muted of-view-ellipsis"><Keep>{info.sub}</Keep></span>}

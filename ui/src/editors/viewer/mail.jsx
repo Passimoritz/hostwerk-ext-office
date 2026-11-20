@@ -11,6 +11,7 @@ import { readMail, htmlToText } from './mime.js';
 import { readMsg } from './msg.js';
 import { ActionRow, SafeFrame, fmtSize, fmtDate } from './common.jsx';
 import { Keep } from '../_shared/keep.jsx';
+import { FileTypeIcon } from '../../lib/fileIcons.jsx';
 
 export function parseMailFile(bytes, ext) { return ext === 'msg' ? readMsg(bytes) : readMail(bytes); }
 
@@ -62,7 +63,7 @@ export default function MailView({ file, bytes, host }) {
     <div className="of-view-mail">
       <div className="of-view-mailhead card">
         <div className="card-body stack">
-          <h2 className="of-view-subject"><Mail size={18} /> {mail.subject ? <Keep>{mail.subject}</Keep> : t('(no subject)')}</h2>
+          <h2 className="of-view-subject"><FileTypeIcon name={file.name} size={22} /> {mail.subject ? <Keep>{mail.subject}</Keep> : t('(no subject)')}</h2>
           <dl className="kv of-view-hdr">
             <dt>{t('From')}</dt><dd><Keep>{people(mail.from) || '–'}</Keep></dd>
             {mail.to.length > 0 && <><dt>{t('To')}</dt><dd><Keep>{people(mail.to)}</Keep></dd></>}
