@@ -109,11 +109,12 @@ class OsDefault {
   openWith(ext, bytes, name) {
     if (!this.win) throw Object.assign(new Error('Only on Windows.'), { status: 409, code: 'ENOTWINDOWS' });
     const file = this.sample(ext, bytes, name);
-    const hasOpenWith = fs.existsSync(path.win32.join(this.systemRoot, 'System32', 'OpenWith.exe'));
+    // file-system check with the host's path rules (identical on Windows; lets the tests run on Linux CI too)
+    const hasOpenWith = fs.existsSync(path.join(this.systemRoot, 'System32', 'OpenWith.exe'));
     const c = openWithCommand(file, { systemRoot: this.systemRoot, hasOpenWith });
     this.spawn(c.cmd, c.args, { windowsVerbatimArguments: c.verbatim });
     this.cache = null;
-    return { opened: true, ext: String(ext).toLowerCase(), file, cmd: path.basename(c.cmd) };
+    return { opened: true, ext: String(ext).toLowerCase(), file, cmd: path.win32.basename(c.cmd) };
   }
   /** Settings → Default apps (ShellExecute) → { opened, uri } */
   openSettings(appName) {

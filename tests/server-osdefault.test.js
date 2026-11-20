@@ -95,8 +95,9 @@ function fake(platform = 'win32') {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'of-osd-'));
   const calls = { run: [], spawn: [] };
   const osd = new OsDefault({ dir: path.join(dir, 'openwith'), platform, systemRoot: dir,
-    run: async (cmd, args) => { calls.run.push([path.basename(cmd), ...args]); return { code: 0, stdout: REG_OUT }; },
-    spawn: (cmd, args, opts) => { calls.spawn.push({ cmd: path.basename(cmd), args, opts }); } });
+    // commands are Windows paths – take their base name with Windows rules, also when the tests run on Linux CI
+    run: async (cmd, args) => { calls.run.push([path.win32.basename(cmd), ...args]); return { code: 0, stdout: REG_OUT }; },
+    spawn: (cmd, args, opts) => { calls.spawn.push({ cmd: path.win32.basename(cmd), args, opts }); } });
   return { dir, osd, calls };
 }
 
