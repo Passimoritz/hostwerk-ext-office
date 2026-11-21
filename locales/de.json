@@ -4302,5 +4302,13 @@
   "Sub folders of the template folder become categories in the gallery.": "Unterordner des Vorlagenordners werden zu Kategorien in der Galerie.",
   "Folder “Vorlagen” in the Office documents": "Ordner „Vorlagen“ in den Office-Dokumenten",
   "Empty = the folder “Vorlagen” in the Office documents.": "Leer = der Ordner „Vorlagen“ in den Office-Dokumenten.",
-  "In the template folder it appears under “New”.": "Im Vorlagenordner erscheint sie unter „Neu“."
+  "In the template folder it appears under “New”.": "Im Vorlagenordner erscheint sie unter „Neu“.",
+  "Open by {by} since {time}": "Geöffnet von {by} seit {time}",
+  "Open by {by}": "Geöffnet von {by}",
+  "Hidden in the slide show": "In der Bildschirmpräsentation ausgeblendet",
+  "1 animation": "1 Animation",
+  "{n} animations": "{n} Animationen",
+  "1 comment": "1 Kommentar",
+  "{n} comments": "{n} Kommentare",
+  "Page display": "Seitenanzeige"
 }

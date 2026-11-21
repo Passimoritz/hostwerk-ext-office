@@ -36,6 +36,46 @@ export function pager(sections, gap, keep = []) {
 const r1 = (v) => Math.round(v * 10) / 10;
 
 /**
+ * the first position (new document) a transaction changed – the print layout measures again from there; `dirty` is the
+ * position still to measure from before it (Infinity = nothing). Mark and attribute steps (font size, bold, a cell's
+ * shading …) have an EMPTY step map: their own position counts too, or a formatting change never moved the page breaks.
+ */
+export function firstChange(tr, dirty = Infinity) {
+  const maps = tr.mapping.maps;
+  let d = dirty === Infinity ? Infinity : tr.mapping.map(dirty, -1);
+  const fwd = (pos, k) => { let p = pos; for (let j = k + 1; j < maps.length; j++) p = maps[j].map(p, -1); return p; };
+  maps.forEach((map, k) => map.forEach((oldStart, oldEnd, newStart) => { const p = fwd(newStart, k); if (p < d) d = p; }));
+  tr.steps.forEach((step, k) => {
+    const at = step.from != null ? step.from : step.pos;
+    if (at == null) return;
+    const p = fwd(at, k);
+    if (p < d) d = p;
+  });
+  return d;
+}
+
+/** Word's "keep with next": headings (Word's heading styles have it) unless switched off, paragraphs that have it */
+export const keepsNext = (n) => !!n && (n.type.name === 'heading' ? n.attrs.keepNext !== false : !!(n.attrs && n.attrs.keepNext));
+
+/**
+ * does a page break start a new page? Not when a next-page section break follows right away: the break ended its
+ * paragraph and Word keeps the paragraph mark (the section break) with it – before, every such section came after an
+ * empty page
+ */
+export const pageBreakCounts = (next) => !(next && next.type.name === 'sectionBreak' && next.attrs.type !== 'continuous');
+
+/**
+ * the page a block ends on: its CONTENT bottom decides, not its space after – a paragraph whose space after runs past
+ * the text area stays on its page (Word drops that space at a page end). Counting the space made the next block
+ * "already on the next page" without a spacer, so it was drawn over the footer and the page gap.
+ */
+export function pageAfter(P, page, contentBottom) {
+  let p = page;
+  while (contentBottom > P.E(p) + 1 && P.pages.length < 5000) p = P.next(p);
+  return p;
+}
+
+/**
  * a block of text lines (natural tops/bottoms) that starts on page `page`, already moved by `shift` → spacers
  * { whole, spacers: [{ line, height }], added, page }. whole = not even the first line fits (move the block).
  */

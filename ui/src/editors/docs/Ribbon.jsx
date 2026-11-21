@@ -13,8 +13,10 @@ import {
   AArrowUp, AArrowDown, FilePen, FileDigit, Languages, Code, Unlink, ImageUp, Type, Maximize, SquareCode,
   Workflow, Braces, RefreshCw, CheckSquare, Sparkles, GitCompare, Users, LayoutGrid, ChevronUp, Save, SquareSplitVertical, ChevronsUpDown, Wand2,
 } from 'lucide-react';
+import { useRef } from 'react';
 import { t } from '@hostwerk/i18n';
-import { RB, Drop, MenuItem, ColorGrid, Group, HIGHLIGHTS } from './ui.jsx';
+import { RB, Drop, MenuItem, ColorGrid, Group, HIGHLIGHTS, FitCtx } from './ui.jsx';
+import { useRibbonFit } from '../_shared/ribbonfit.js';
 import { TableGrid, EmojiGrid, dateFormats } from './dialogs.jsx';
 import { withKeys } from '../_shared/keys.js';
 import { builtinTableStyles, tableLook } from './io/tables.js';
@@ -47,6 +49,7 @@ export function currentStyle(editor) {
 }
 
 export function Ribbon({ editor, readOnly, tab, setTab, s, act, host = {} }) {
+  const groupsRef = useRef(null);
   const e = editor;
   const c = () => e.chain().focus();
   const inTable = e.isActive('table');
@@ -423,6 +426,8 @@ export function Ribbon({ editor, readOnly, tab, setTab, s, act, host = {} }) {
   );
 
   const link = !readOnly && e.isActive('link');
+  // adaptive ribbon: groups that don't fit become drop-downs (not in the one-line mini ribbon – that one scrolls)
+  const fit = useRibbonFit(groupsRef, { key: `${cur}:${s.mini ? 'mini' : ''}`, off: !!s.mini });
   const onTabKey = (ev) => {
     if (ev.key !== 'ArrowRight' && ev.key !== 'ArrowLeft') return;
     const k = tabs.findIndex((x) => x.id === cur);
@@ -451,7 +456,8 @@ export function Ribbon({ editor, readOnly, tab, setTab, s, act, host = {} }) {
         {link && <div className="of-docs-linkbar small"><Link size={13} /><span className="mono of-docs-linkurl">{e.getAttributes('link').href}</span><RB icon={Link} title="Edit link" onClick={act.link} /><RB icon={Unlink} title="Remove link" onClick={() => c().extendMarkRange('link').unsetLink().run()} /></div>}
         <RB icon={ChevronUp} className={`of-docs-minbtn ${s.mini ? 'of-flip' : ''}`} title={s.mini ? 'Show the full ribbon' : 'Small ribbon (one line) – double-click a tab does the same'} onClick={act.toggleMini} />
       </div>
-      <div className="of-docs-groups" key={cur}>
+      <FitCtx.Provider value={fit}>
+      <div className="of-docs-groups" key={cur} ref={groupsRef}>
         {cur === 'home' && home}
         {cur === 'insert' && insert}
         {cur === 'layout' && layout}
@@ -461,6 +467,7 @@ export function Ribbon({ editor, readOnly, tab, setTab, s, act, host = {} }) {
         {cur === 'tlayout' && tlayout}
         {cur === 'picture' && picture}
       </div>
+      </FitCtx.Provider>
     </div>
   );
 }

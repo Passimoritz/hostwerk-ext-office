@@ -42,6 +42,22 @@ export function readShared(ydoc) {
   }
   return { ...base, slides: out };
 }
+/**
+ * same content apart from the random ids every load gives slides/elements (a room left over from the last opening holds
+ * the file as it was saved): ids are replaced by their order of first appearance, then the JSON is compared
+ */
+export function sameContent(a, b) {
+  if (!a || !b) return false;
+  const canon = (doc) => {
+    const ids = new Map();
+    const walk = (o) => { if (Array.isArray(o)) o.forEach(walk); else if (o && typeof o === 'object') for (const k of Object.keys(o).sort()) { const v = o[k]; if ((k === 'id' || k === 'sourceId') && typeof v === 'string' && !ids.has(v)) ids.set(v, `#${ids.size}`); walk(v); } };
+    walk(doc);
+    // key order differs between a loaded doc and one rebuilt from the room → sorted keys
+    return JSON.stringify(doc, (k, v) => (typeof v === 'string' && ids.has(v) ? ids.get(v) : v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.keys(v).sort().map((x) => [x, v[x]])) : v));
+  };
+  try { return canon(a) === canon(b); } catch { return false; }
+}
+
 /** push the difference prev → next into the shared state */
 export function pushDiff(ydoc, prev, next) {
   if (prev === next) return;
@@ -67,14 +83,15 @@ export function pushDiff(ydoc, prev, next) {
 }
 
 /**
- * connect an editor: session from host.collab.join; getDoc() → current doc; setDoc(doc) applies a remote doc;
+ * connect an editor: session from host.collab.join; getDoc() → current doc; setDoc(doc, initial, same) applies a remote doc
+ * (same = the room holds exactly what the editor loaded, only with the room's ids – nothing unsaved);
  * onPeers(list) for presence. Returns { push(doc), presence(state), close() }.
  */
 export function connect(session, { getDoc, setDoc, onPeers, me }) {
   const { ydoc, awareness } = session;
   let synced = getDoc();
   const shared = readShared(ydoc);
-  if (shared && shared.slides.length) { synced = shared; setDoc(shared, true); } else seed(null, ydoc, synced);
+  if (shared && shared.slides.length) { const same = sameContent(shared, synced); synced = shared; setDoc(shared, true, same); } else seed(null, ydoc, synced);
   let timer = null;
   const onUpdate = (ev, tr) => {
     if (tr && tr.origin === 'local') return;

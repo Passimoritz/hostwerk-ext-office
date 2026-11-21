@@ -2,9 +2,10 @@
  * Dialogs of the docs editor (Hostwerk Modal / SideSheet): symbols, emoji, link, header & footer, page setup,
  * paragraph spacing, word count, equation, macros, table grid picker, date & time.
  */
+import { SwitchRow } from '../_shared/switchrow.jsx';
 import { useMemo, useState } from 'react';
 import * as HUI from '@hostwerk/ui';
-import { Btn, Modal, Field, Seg, Switch, Callout } from '@hostwerk/ui';
+import { Btn, Modal, Field, Seg, Callout } from '@hostwerk/ui';
 import { t } from '@hostwerk/i18n';
 import { Raw } from '../_shared/keep.jsx';
 import { equationHtml } from './io/equation.js';
@@ -87,7 +88,7 @@ export function HeaderFooterDialog({ header, footer, titlePage, onSave, onClose 
         <Field label="Footer"><input className="input" value={f.text || ''} onChange={(e) => setF({ ...f, text: e.target.value })} placeholder={t('e.g. Page {page} of {pages}')} aria-label="Footer" /></Field>
         <Seg value={f.align || 'center'} onChange={(v) => setF({ ...f, align: v })} options={alignOpts} />
         {tokens(setF, f)}
-        <label className="check"><Switch checked={first} onChange={setFirst} /> {t('Different first page (no header/footer on the title page)')}</label>
+        <SwitchRow checked={first} onChange={setFirst} label={t('Different first page (no header/footer on the title page)')} />
       </div>
     </Modal>
   );

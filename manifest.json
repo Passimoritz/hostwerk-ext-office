@@ -9,7 +9,7 @@
     "de": "Dokumente, Tabellen, Präsentationen und PDFs direkt in Hostwerks „Dateien“ erstellen, bearbeiten und lesen – Microsoft Office (docx, xlsx, pptx, auch alte doc/xls/ppt), OpenDocument (odt, ods, odp), Google-Dateien, RTF, Markdown, CSV und mehr. Ein Klick öffnet die Datei, „Neu“ legt Dokumente an, Hostwerk erscheint unter „Öffnen mit“ und wird auf Wunsch Standard-App. Mit Vorlagen, Versionen, Suche, Umwandeln, Teilen und Einstellungen.",
     "en": "Create, edit and read documents, spreadsheets, presentations and PDFs right in Hostwerk's Files – Microsoft Office (docx, xlsx, pptx, also legacy doc/xls/ppt), OpenDocument (odt, ods, odp), Google files, RTF, Markdown, CSV and more. A click opens the file, “New” creates documents, Hostwerk appears under “Open with” and can be the default app. With templates, versions, search, conversion, sharing and settings."
   },
-  "version": "1.3.1",
+  "version": "1.3.2",
   "author": "Hostwerk",
   "homepage": "https://github.com/Passimoritz/hostwerk-ext-office",
   "license": "MIT",

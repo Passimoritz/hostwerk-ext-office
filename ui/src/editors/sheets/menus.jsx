@@ -5,6 +5,7 @@ import { Check, ChevronDown, ChevronRight } from 'lucide-react';
 import { t } from '@hostwerk/i18n';
 import { Keep } from '../_shared/keep.jsx';
 import { keyLabel, withKeys } from '../_shared/keys.js';
+import { colorName } from '../_shared/colors.js';
 
 let openPop = null;
 const host = () => (typeof document !== 'undefined' ? document.querySelector('.app') || document.body : null);
@@ -115,7 +116,8 @@ const THEME = [
 const STANDARD = ['#C00000', '#FF0000', '#FFC000', '#FFFF00', '#92D050', '#00B050', '#00B0F0', '#0070C0', '#002060', '#7030A0'];
 
 export function ColorGrid({ value, onPick, noneLabel = 'No colour', allowNone = true }) {
-  const cell = (c) => <button key={c} type="button" className={`of-sheet-color${String(value || '').toUpperCase() === c ? ' is-on' : ''}`} style={{ background: c }} title={c} aria-label={c} onClick={() => onPick(c)} />;
+  // named like Excel's swatches ("Gold · #FFC000"), not just the hex code
+  const cell = (c) => { const n = `${t(colorName(c))} · ${c}`; return <button key={c} type="button" className={`of-sheet-color${String(value || '').toUpperCase() === c ? ' is-on' : ''}`} style={{ background: c }} title={n} aria-label={n} onClick={() => onPick(c)} />; };
   return (
     <div className="of-sheet-colors">
       {allowNone && <button type="button" className="btn ghost xs of-sheet-color-none" onClick={() => onPick(null)}>{t(noneLabel)}</button>}

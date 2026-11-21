@@ -22,13 +22,14 @@ import { contextMenu } from '@hostwerk/kit';
 import * as KIT from '@hostwerk/kit';
 import { t, pl } from '@hostwerk/i18n';
 import { office, isMissing } from '../lib/api';
+import { CLIENT, refreshMarks, lockSince } from '../lib/locks';
 import { toast } from '../lib/toast';
 import { FORMATS, OFFICE_RE, TEMPLATES, KINDS, extOf, isTemplateName, templateExtFor } from '../lib/formats';
 import { openTemplateFile, TemplateGallery } from './templates';
 import { KIND_COLOR } from '../lib/fileTypes';
 import { prefetchEditor, prefetchFor, warmEditor, kindFor } from '../lib/loader';
 import { keyLabel } from '../editors/_shared/keys.js';
-import { FileIcon, Thumb, Keep, Raw, Highlight, fmtWhen, useDebounced } from './common';
+import { FileIcon, Thumb, Keep, Raw, Highlight, fmtWhen, useDebounced, uiLang } from './common';
 import { settingsNow, useChanged, useOfficeStatus, loadSettings, changed } from './store';
 import { convertTargets, defaultExt, defaultBaseName, dirname, basename, toQuery } from './util';
 import { LIB_ROOT, canon, openEditor, filesRoute, createFile, newFromOwnTemplate, convertEntry, openInDesktop, toggleFavorite, saveAsTemplate, restoreTrash, purgeTrash, emptyTrash, uploadFiles } from './ops';
@@ -166,16 +167,34 @@ export const fileActions = [
 ];
 
 /* ---------------- marks behind the name ---------------- */
-// one request per folder for all three marks (cached for a moment)
+// one request per folder for all marks – shared by the providers of ONE refresh (cached for a moment); every
+// hw:files-marks (ours after an unlock, the broadcast office-lock of another window, a favourite …) starts afresh
 const markCache = new Map();
+const LOCK_RECHECK = 20000;
+let lockRecheck = null;
+let marksWired = false;
+function wireMarks() {
+  if (marksWired || typeof window === 'undefined') return;
+  marksWired = true;
+  window.addEventListener('hw:files-marks', () => markCache.clear());
+  // a lock taken or released in any window (or by another user): the marks of this window follow at once
+  try { if (typeof HAPI.on === 'function') HAPI.on('office-lock', () => refreshMarks()); } catch { /* older Hostwerk */ }
+}
+/** while a lock mark shows: look again now and then (an editor killed without unlocking – the lock expires after 5 min) */
+function recheckLocks() {
+  if (lockRecheck || typeof window === 'undefined') return;
+  lockRecheck = setTimeout(() => { lockRecheck = null; if (typeof document === 'undefined' || !document.hidden) refreshMarks(); else recheckLocks(); }, LOCK_RECHECK);
+}
 function folderMarks(root, path) {
+  wireMarks();
   const k = `${root}|${path}`;
   const hit = markCache.get(k);
   if (hit && Date.now() - hit.t < 1500) return hit.p;
   const legacy = !hasIconSlot();
-  const p = office.marks({ root, path, types: legacy }).then((r) => {
+  const p = office.marks({ root, path, types: legacy, client: CLIENT }).then((r) => {
     const names = { ...((r && r.names) || {}) };
     for (const [n, m] of Object.entries(names)) favCache.set(favKey(root, path ? `${path}/${n}` : n), !!m.favorite);
+    if (Object.values(names).some((m) => m && m.lock)) recheckLocks();
     // Hostwerk without files.icon (3.2.x, SDK 3.15): every office file gets its coloured type mark behind the name
     if (legacy) for (const n of (r && r.types) || []) names[n] = { ...(names[n] || {}), type: true };
     return names;
@@ -184,10 +203,12 @@ function folderMarks(root, path) {
   return p;
 }
 const pick = (fn) => async ({ root, path }) => { const names = await folderMarks(root, path || ''); const out = {}; for (const [n, m] of Object.entries(names)) { const v = fn(m, n); if (v) out[n] = v; } return out; };
+/** tooltip of the lock mark: "Open by Anna since 14:05" (another user or another window – never this window's own editor) */
+export const lockTitle = (lock, lang = uiLang()) => { const since = lockSince(lock && lock.since, lang); return since ? t('Open by {by} since {time}', { by: (lock && lock.by) || '?', time: since }) : t('Open by {by}', { by: (lock && lock.by) || '?' }); };
 export const fileMarks = [
   { id: 'favourite', icon: Star, marks: pick((m) => m.favorite && { title: t('Favourite') }) },
   { id: 'shared', icon: Link2, marks: pick((m) => m.shared && { title: t('Shared by link (read-only)') }) },
-  { id: 'locked', icon: Lock, marks: pick((m) => m.lock && { title: t('Open in an editor by {by}', { by: m.lock.by || '?' }) }) },
+  { id: 'locked', icon: Lock, marks: pick((m) => m.lock && { title: lockTitle(m.lock) }) },
 ];
 /*
  * File types on Hostwerk 3.2.x (SDK 3.15 has no files.icon – Files draws a grey file symbol for office files): a

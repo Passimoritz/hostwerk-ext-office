@@ -9,7 +9,7 @@
  * textStyle attrs: letterSpacing (pt), scale (%), position (pt, + raised / − lowered), caps ('all'|'small'),
  *   dstrike, hidden, lang (BCP 47)
  */
-import { borderCss, bordersFromEl, bordersXml, P_BORDER_ORDER } from './tables.js';
+import { borderCss, bordersFromEl, bordersXml, P_BORDER_ORDER, parseBorder, isNone, borderPx } from './tables.js';
 
 const r2 = (v) => Math.round(v * 100) / 100;
 const TAB_ALIGN = { left: 'left', start: 'left', right: 'right', end: 'right', center: 'center', decimal: 'decimal', bar: 'bar', clear: 'clear', num: 'left' };
@@ -54,12 +54,31 @@ export function paraPropsXml(a = {}) {
 export const PARA_PROP_TAGS = ['w:keepNext', 'w:keepLines', 'w:widowControl', 'w:pBdr', 'w:shd', 'w:tabs', 'w:outlineLvl', 'w:framePr'];
 
 /** CSS for the editor/export */
+/**
+ * paragraph borders like Word: each border sits `space` pt away from the text (padding) and, left and right, OUTSIDE the
+ * indent – the text keeps its indent, the border and the shading reach into the margin (Word: indent − space − width).
+ * → { 'border-left': …, 'padding-left': …, 'margin-left': … } (CSS property → value)
+ */
+export function paraBoxCss(pborders, indent = 0, rightIndent = 0) {
+  const o = {};
+  if (!pborders) return o;
+  for (const k of ['top', 'left', 'bottom', 'right']) {
+    const b = pborders[k];
+    if (!b || isNone(b)) continue;
+    const sp = parseBorder(b).space || 0;
+    o[`border-${k}`] = borderCss(b);
+    o[`padding-${k}`] = `${sp}pt`;
+    if (k === 'left' || k === 'right') o[`margin-${k}`] = `calc(${r2((k === 'left' ? indent : rightIndent) || 0) - sp}pt - ${borderPx(b)}px)`;
+  }
+  return o;
+}
+
 export function paraCss(a = {}) {
   const s = [];
   if (a.rightIndent) s.push(`margin-right:${a.rightIndent}pt`);
   if (a.lineRule === 'exact' && a.lineExact) s.push(`line-height:${a.lineExact}pt`);
   else if (a.lineRule === 'atLeast' && a.lineExact) s.push(`line-height:max(${a.lineExact}pt, calc(${a.lineHeight || 1} * var(--of-lf, 1) * 1em))`);
-  if (a.pborders) { for (const k of ['top', 'left', 'bottom', 'right']) if (a.pborders[k]) s.push(`border-${k}:${borderCss(a.pborders[k])}`); s.push('padding:1pt 4pt'); }
+  if (a.pborders) for (const [k, v] of Object.entries(paraBoxCss(a.pborders, a.indent, a.rightIndent))) s.push(`${k}:${v}${k.startsWith('margin') ? ' !important' : ''}`);
   if (a.pshading) s.push(`background-color:${a.pshading}`);
   if (a.keepNext) s.push('break-after:avoid');
   if (a.keepLines) s.push('break-inside:avoid');

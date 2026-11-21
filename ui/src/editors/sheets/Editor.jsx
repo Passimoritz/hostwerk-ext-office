@@ -1171,14 +1171,16 @@ export function Editor({ file, bytes, readOnly = false, settings = {}, host = {}
 
 function SheetTab({ sheet, active, readOnly, onClick, onRename, onMenu, onDrop, index }) {
   const [renaming, setRenaming] = useState(false);
+  const [over, setOver] = useState(false);
   const [v, setV] = useState(sheet.name);
   useEffect(() => setV(sheet.name), [sheet.name]);
   if (renaming) return <input className="input xs of-sheet-tabedit" autoFocus value={v} onChange={(e) => setV(e.target.value)} aria-label={t('Sheet name')} onBlur={() => { setRenaming(false); if (v.trim() && v !== sheet.name) onRename(v.trim()); }} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { setV(sheet.name); setRenaming(false); } }} />;
   return (
-    <Raw as="button" type="button" role="tab" aria-selected={active} className={`of-sheet-tab${active ? ' is-on' : ''}`} style={sheet.color ? { '--tab': sheet.color } : undefined}
+    <Raw as="button" type="button" role="tab" aria-selected={active} className={`of-sheet-tab${active ? ' is-on' : ''}${over ? ' is-drop' : ''}`} style={sheet.color ? { '--tab': sheet.color } : undefined}
       draggable={!readOnly} onDragStart={(e) => { e.dataTransfer.setData('text/x-sheet-index', String(index)); e.dataTransfer.effectAllowed = 'move'; }}
-      onDragOver={(e) => { if ([...e.dataTransfer.types].includes('text/x-sheet-index')) e.preventDefault(); }}
-      onDrop={(e) => { const from = Number(e.dataTransfer.getData('text/x-sheet-index')); if (!Number.isNaN(from)) onDrop(from); }}
+      onDragOver={(e) => { if ([...e.dataTransfer.types].includes('text/x-sheet-index')) { e.preventDefault(); if (!over) setOver(true); } }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => { setOver(false); const from = Number(e.dataTransfer.getData('text/x-sheet-index')); if (!Number.isNaN(from)) onDrop(from); }}
       onClick={onClick} onDoubleClick={() => { if (!readOnly) setRenaming(true); }} onContextMenu={(e) => { e.preventDefault(); onMenu({ x: e.clientX, y: e.clientY }); }} title={sheet.name}>
       {sheet.color && <span className="of-sheet-tabcolor" />}<Keep>{sheet.name}</Keep>
     </Raw>

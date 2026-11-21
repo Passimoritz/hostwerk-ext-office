@@ -1,8 +1,9 @@
 /* Data dialogs: sort, AutoFilter menu, text to columns, remove duplicates, data validation, CSV import options. */
 import { useMemo, useState } from 'react';
-import { Modal, Btn, Field, Switch } from '@hostwerk/ui';
+import { Modal, Btn, Field } from '@hostwerk/ui';
 import { t } from '@hostwerk/i18n';
 import { Keep } from '../../_shared/keep.jsx';
+import { SwitchRow } from '../../_shared/switchrow.jsx';
 import { Plus, Trash2, ArrowDownAZ, ArrowUpZA, Search } from 'lucide-react';
 import { colName } from '../formula/refs.js';
 import { sniff, parseCSV } from '../io/csv.js';
@@ -174,7 +175,7 @@ export function ValidationDialog({ rule, toDisplay, fromDisplay, onApply, onClea
         <Field label={t('Error alert (after invalid data)')}>
           <div className="row">
             <select className="input sm" value={v.error.style} onChange={(e) => set({ error: { ...v.error, style: e.target.value } })}><option value="stop">{t('Stop')}</option><option value="warning">{t('Warning')}</option><option value="information">{t('Information')}</option></select>
-            <Switch checked={v.error.show !== false} onChange={(x) => set({ error: { ...v.error, show: x } })} label={t('Show error alert')} />
+            <SwitchRow checked={v.error.show !== false} onChange={(x) => set({ error: { ...v.error, show: x } })} label={t('Show error alert')} />
           </div>
           <input className="input sm" placeholder={t('Title')} value={v.error.title} onChange={(e) => set({ error: { ...v.error, title: e.target.value } })} />
           <textarea className="input" rows={2} placeholder={t('Message')} value={v.error.text} onChange={(e) => set({ error: { ...v.error, text: e.target.value } })} />

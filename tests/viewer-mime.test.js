@@ -65,3 +65,10 @@ test('utf-8 body without charset and html to text', () => {
   assert.equal(m.text.trim(), 'Ärger');
   assert.equal(htmlToText('<p>a<br>b</p><style>x{}</style>&amp;'), 'a\nb\n&');
 });
+test('raw UTF-8 headers (RFC 6532) and raw Windows-1252 headers', () => {
+  const m = readMail(enc('Subject: Projektstand und nächste Schritte für Q4\r\nFrom: Jürgen <j@x.de>\r\n\r\nHi\r\n'));
+  assert.equal(m.subject, 'Projektstand und nächste Schritte für Q4');
+  assert.equal(m.from[0].name, 'Jürgen');
+  const w = readMail(latin1('Subject: Gr\xfc\xdfe\r\n\r\nx\r\n'));
+  assert.equal(w.subject, 'Grüße');
+});

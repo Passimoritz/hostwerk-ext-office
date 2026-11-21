@@ -331,6 +331,14 @@ The parts were built in parallel against this contract; their deviations are now
   starts closed and Docs starts fitted to the width there.
 - **Soft locks** live 5 minutes and the open editor renews them every 2 minutes; leaving the editor, closing the tab or
   reloading releases them (`pagehide` + keepalive request). Only a crashed/killed browser leaves a lock (≤ 5 min).
+  1.3.2 (`ui/src/lib/locks.js`, `server/meta.js`, `server/marks.js`): every lock request carries `{ client, sid, seq }` –
+  the server ignores requests older than the last one of that editor session, so a late heartbeat can't re-lock a closed
+  file; the heartbeat only runs while the window is visible (a hidden tray window renews nothing); lock/unlock
+  broadcast `{ type: 'office-lock', path }` and fire `hw:files-marks`, so Files redraws the mark at once; the user's own
+  stale lock is taken over silently; the mark only shows for other windows/users ("Open by … since …").
+- **Shared editor UI** (1.3.2): `_shared/ribbonfit.js` (`data-group` on each ribbon group + `useRibbonFit` – right-most
+  groups fold into drop-down buttons, nothing folds below 700 px) and `_shared/switchrow.jsx` (Hostwerk's `<Switch
+  label>` is screen-reader only – use `SwitchRow` wherever the text must be visible).
 - **Links** in the plain browser (no Hostwerk window) show the "copy link" dialog – never a browser tab.
 - **Toast:** the core's extension toast has `warn`/`dismiss`/`done` since SDK 3.15 (`ui/src/extNative.js`); `ui/src/lib/toast.js` uses
   them and stays the fallback for older Hostwerk versions.
@@ -793,6 +801,20 @@ or one whose `w:pPrChange` holds a full `w:pPr`, just loses the mark); a co-edit
 the backup center (own daily zip, ≤ 2 GB); MongoDB writes are not atomic; report formats other than the file's own need a
 converter, report e-mails without Hostwerk's mail relay land in Hostwerk's mail catcher; ODS form answers' date columns get no
 width (Excel shows ##### until the column is widened – xlsx gets one).
+
+**Docs – print layout vs Word (checked 2026-11-21 against Word 16 with a real 57–79-page compliance matrix, four
+versions; synthetic copies in `tests/docs-wordlook.test.js`):** Word's rules now followed: space before dropped at the top
+of a page (not after a section break), space after/before collapse to the larger one, keep-with-next chains (headings and
+`w:keepNext`) move with the first line/row after them, a page break right before a next-page section break makes no
+empty page, an empty paragraph that does not fit moves, the document's heading/title styles (size, colour, bold,
+spacing, line height, borders, indent), text colour, header/footer distance, "left ⇥ right" header tabs, cell padding
+with ½ pt borders, lines wrap like Word (no `break-spaces`). Result: same page count for 2 of 4 versions (v0.1: all 640
+table rows on Word's page), ±1 page for the others – the rest is font metrics (Chrome's Arial vs Word's line breaking:
+a line more or less in a long cell shifts a row to the next page). Text lines may end up to ~12 px inside the bottom
+margin (never in the footer or the gap). Saving rewrites word/document.xml from the model (semantically the same, e.g.
+default-valued `w:vAlign top`, `w:rFonts` equal to the document default and `w:val="false"` flags are left out);
+every other part stays byte-identical. Not reproduced: list bullet colour/size (■ shows as a square bullet in the text
+colour).
 
 **Docs:** print layout breaks long paragraphs/lists between lines and long tables between rows (header row repeated) – only a
 single line, a single table row or a picture taller than a page runs over the gap; columns: print layout shows the text in

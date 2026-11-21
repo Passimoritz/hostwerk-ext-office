@@ -6,7 +6,7 @@ import { t } from '@hostwerk/i18n';
 import { parseVCards, formatAdr } from './vcard.js';
 import { ActionRow } from './common.jsx';
 import { decodeText } from './common.jsx';
-import { Keep } from '../_shared/keep.jsx';
+import { Keep, Raw } from '../_shared/keep.jsx';
 
 const TYPE = { work: 'Work', home: 'Private', cell: 'Mobile', mobile: 'Mobile', fax: 'Fax', pager: 'Pager', main: 'Main', other: 'Other', voice: '', pref: '', internet: '', text: 'Text', iphone: 'iPhone' };
 const typeLabel = (types) => (types || []).map((x) => (TYPE[x] === undefined ? x : TYPE[x])).filter(Boolean).map((x) => t(x)).join(', ');
@@ -40,9 +40,9 @@ export default function ContactsView({ file, bytes, host }) {
           <div className="of-view-listhead"><Search size={14} /><input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search contacts" aria-label="Search contacts" /></div>
           <div className="of-view-listbody" role="listbox" aria-label="Contacts">
             {list.map(({ c: x, i }) => (
-              <button key={i} type="button" role="option" aria-selected={i === sel} className={`of-view-item${i === sel ? ' active' : ''}`} onClick={() => setSel(i)}>
+              <Raw as="button" key={i} type="button" role="option" aria-selected={i === sel} className={`of-view-item${i === sel ? ' active' : ''}`} onClick={() => setSel(i)} title={[x.fn, x.org].filter(Boolean).join(' · ') || undefined}>
                 <Avatar c={x} size={28} /><span className="of-view-ellipsis"><b>{x.fn ? <Keep>{x.fn}</Keep> : t('(no name)')}</b>{x.org && <span className="small muted"> · <Keep>{x.org}</Keep></span>}</span>
-              </button>
+              </Raw>
             ))}
             {!list.length && <TileEmpty icon={Search} text={t('Nothing found.')} />}
           </div>
@@ -64,7 +64,7 @@ export default function ContactsView({ file, bytes, host }) {
             </div>
             <div className="card-body stack">
               {c.tel.map((x, i) => <Row key={`t${i}`} icon={Phone} label={typeLabel(x.types) || t('Phone')}><a href={`tel:${x.value.replace(/\s+/g, '')}`} onClick={(e) => e.preventDefault()}><Keep>{x.value}</Keep></a></Row>)}
-              {c.email.map((x, i) => <Row key={`e${i}`} icon={Mail} label={typeLabel(x.types) || t('E-mail')}><span className="mono"><Keep>{x.value}</Keep></span></Row>)}
+              {c.email.map((x, i) => <Row key={`e${i}`} icon={Mail} label={typeLabel(x.types) || t('E-mail')}><span className="of-view-email"><Keep>{x.value}</Keep></span></Row>)}
               {c.adr.map((x, i) => <Row key={`a${i}`} icon={MapPin} label={typeLabel(x.types) || t('Address')}><span className="of-view-pre"><Keep>{formatAdr(x).replace(/, /g, '\n')}</Keep></span></Row>)}
               {c.org && <Row icon={Building2} label={t('Organisation')}><Keep>{c.org}</Keep></Row>}
               {c.url.map((u, i) => <Row key={`u${i}`} icon={Globe} label={t('Website')}><button type="button" className="of-view-link" onClick={() => host.openLink && /^https?:/i.test(u) && host.openLink(u)}><Keep>{u}</Keep></button></Row>)}

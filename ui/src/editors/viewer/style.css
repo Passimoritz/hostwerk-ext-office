@@ -14,7 +14,8 @@
 .of-view-toolbar .btn.on { background: var(--accent-soft); color: var(--accent-text); }
 .of-view-title { display: inline-flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-lg); margin: 0; min-width: 0; }
 .of-view-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-top: 1px solid var(--line); background: var(--surface); flex: none; }
-.of-view-pad .of-view-actions, .of-view-detail .of-view-actions { border: 1px solid var(--line); border-radius: var(--r-lg); }
+.of-view-pad .of-view-actions, .of-view-detail .of-view-actions, .of-view-mail .of-view-actions { border: 1px solid var(--line); border-radius: var(--r-lg); }
+.of-view-email { overflow-wrap: anywhere; user-select: all; }
 
 /* info, facts */
 .of-view-info .card-body p { margin: 0; }

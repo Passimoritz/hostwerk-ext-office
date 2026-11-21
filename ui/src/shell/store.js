@@ -79,8 +79,9 @@ export function useChanged(fn, deps = []) {
     const run = () => { clearTimeout(t); t = setTimeout(() => fn(), 120); };
     window.addEventListener(EVT, run);
     const off = on('office', run);
+    const offLock = on('office-lock', run); // a file opened or closed in an editor (Entry.lock) – no 'office' for heartbeats
     const vis = () => { if (!document.hidden) run(); };
     document.addEventListener('visibilitychange', vis);
-    return () => { clearTimeout(t); window.removeEventListener(EVT, run); if (typeof off === 'function') off(); document.removeEventListener('visibilitychange', vis); };
+    return () => { clearTimeout(t); window.removeEventListener(EVT, run); if (typeof off === 'function') off(); if (typeof offLock === 'function') offLock(); document.removeEventListener('visibilitychange', vis); };
   }, deps); // eslint-disable-line react-hooks/exhaustive-deps
 }

@@ -348,9 +348,11 @@
 .of-shell-ebar { position: relative; gap: var(--sp-2); min-height: 52px; padding: var(--sp-1) var(--sp-3); flex-wrap: nowrap; box-shadow: inset 0 3px 0 var(--of-app); }
 .of-shell-eicon { display: inline-flex; padding: 6px; border-radius: var(--r-md); background: color-mix(in srgb, var(--of-app) 12%, var(--surface)); }
 .of-shell-etitle { display: flex; flex-direction: column; justify-content: center; min-width: 0; flex: 0 1 auto; }
-.of-shell-ename { display: inline-flex; align-items: baseline; max-width: min(44ch, 40vw); padding: 0 var(--sp-1); margin-left: calc(var(--sp-1) * -1); line-height: 1.35; }
-.of-shell-ename-ext { color: var(--muted); font-weight: 400; }
-.of-shell-ename-input { height: 26px; width: min(44ch, 50vw); }
+.of-shell-ename { display: inline-flex; align-items: baseline; justify-content: flex-start; min-width: 0; max-width: min(44ch, 40vw); padding: 0 var(--sp-1); margin-left: calc(var(--sp-1) * -1); line-height: 1.35; text-align: left; }
+/* a long name keeps its beginning and its extension: the ellipsis goes between them ("Bericht-Quart….docx") */
+.of-shell-ename-base { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.of-shell-ename-ext { flex: none; color: var(--muted); font-weight: 400; }
+.of-shell-ename-input { height: 26px; min-width: 16ch; max-width: min(70ch, 50vw); }
 .of-shell-crumbs { display: flex; align-items: center; gap: 2px; min-width: 0; color: var(--muted); white-space: nowrap; overflow: hidden; }
 .of-shell-crumb { border: 0; background: none; padding: 0; color: var(--muted); font: inherit; cursor: pointer; text-decoration: none; }
 .of-shell-crumb:hover { color: var(--text); text-decoration: underline; }
@@ -630,3 +632,27 @@
 .of-set-pane .setting-row:has(> .switch) { flex-wrap: nowrap; align-items: center; }
 .of-set-pane .setting-row:has(> .switch) > .txt { flex: 1 1 auto; }
 .of-set-num > span { min-width: 4.6em; }
+
+/* ---------- 1.3.2: editor top bar + banners on narrow windows ---------- */
+/* the place shortens with "…" (full name on hover), the save state ("Read only", "Saved") is never cut */
+.of-shell-crumb { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.of-shell-crumbs .of-shell-save { flex: none; }
+.of-shell-banner-t { min-width: 0; }
+@media (max-width: 600px) {
+  /* phones: the place is the Back button's target anyway – the save state gets the room */
+  .of-shell-crumbs .of-shell-crumb { display: none; }
+  .of-shell-crumbs .of-shell-save { margin-left: 0; padding-left: 0; border-left: 0; }
+  /* "parts can't be edited": at most two lines (full text on hover), the button keeps its icon */
+  .of-shell-banner-t { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  .of-shell-banner-l { display: none; }
+  .of-shell-banner-act { padding: 0 6px; }
+  /* Save shows its icon only (name + shortcut stay in the tooltip / for screen readers) – the file name gets the room */
+  .of-shell-ebar .btn.of-shell-esave { font-size: 0; gap: 0; padding: 0 var(--sp-2); }
+  .of-shell-ebar .btn.of-shell-esave svg { margin: 0; }
+  /* format/Drive badges ("ppt → pptx") would squeeze the name away – the info stays in the editor's status */
+  .of-shell-ebar > .badge:not(.warn) { display: none; }
+  .of-shell-crumbs .of-shell-save { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .of-shell-etitle { flex: 1 1 auto; }
+  .of-shell-ebar > .grow { display: none; }
+  .of-shell-ename { max-width: 100%; }
+}

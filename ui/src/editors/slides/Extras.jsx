@@ -108,11 +108,12 @@ export function OutlineView({ doc, change, readOnly, onOpen, spellcheck, curId }
                 <input className="of-slides-outtitle" value={bodyText(title.text)} readOnly={readOnly} spellCheck={spellcheck} aria-label={t('Slide title')} placeholder={t('Click to add title')}
                   onChange={(e) => change((d) => updateEls(d, s.id, [title.id], (x) => ({ ...x, text: mergeBody(x.text, e.target.value) })), `outline:t:${s.id}`)}
                   onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter' && !readOnly) { e.preventDefault(); addAfter(i); } }} />
-              ) : h('div', { className: 'of-slides-outtitle muted' }, slideTitle(s) || t('(no title)'))}
-              {els.map((el) => {
+              ) : els.length ? null : h('div', { className: 'of-slides-outtitle muted' }, slideTitle(s) || t('(no title)'))}
+              {/* no title placeholder (text boxes only): the first text box is the slide's title – shown once, as the title */}
+              {els.map((el, k) => {
                 const v = bodyLines(el.text);
                 const set = (nv) => change((d) => updateEls(d, s.id, [el.id], (x) => ({ ...x, text: mergeBody(x.text, nv) })), `outline:${el.id}`);
-                return <textarea key={el.id} className="of-slides-outbody" value={v} readOnly={readOnly} spellCheck={spellcheck} rows={Math.max(1, v.split('\n').length)} aria-label={t('Slide text')} placeholder={t('Click to add text')} onChange={(e) => set(e.target.value)} onKeyDown={(e) => { e.stopPropagation(); tabKey(e, set); }} />;
+                return <textarea key={el.id} className={`of-slides-outbody${!title && k === 0 ? ' is-lead' : ''}`} value={v} readOnly={readOnly} spellCheck={spellcheck} rows={Math.max(1, v.split('\n').length)} aria-label={t('Slide text')} placeholder={t('Click to add text')} onChange={(e) => set(e.target.value)} onKeyDown={(e) => { e.stopPropagation(); tabKey(e, set); }} />;
               })}
             </div>
           </div>
@@ -268,13 +269,14 @@ export function CompareDialog({ doc, file, host, readAny, onClose, onGoto }) {
       {!old && (
         <div className="stack">
           <p className="small muted">{t('Pick an older version – each slide is compared and the changes are marked.')}</p>
-          {!versions && !err && <Loading text={t('Loading versions …')} />}
-          {versions && !versions.length && <p className="small">{t('This file has no saved versions yet.')}</p>}
-          <div className="of-slides-verlist">
+          {/* small loading line – Hostwerk's dialog never shrinks again, a big spinner would leave an empty area */}
+          {!versions && !err && <div className="row-tight small muted"><Loading inline />{t('Loading versions …')}</div>}
+          {versions && !versions.length && <div className="of-slides-noversions"><History size={18} aria-hidden="true" /><span className="small">{t('This file has no saved versions yet.')}</span></div>}
+          {versions && versions.length > 0 && <div className="of-slides-verlist">
             {(versions || []).map((v) => <button key={v.id} type="button" className="of-slides-verrow" disabled={busy} onClick={() => load(v)}><History size={14} />{h('span', { className: 'grow' }, `${when(v.time)}${v.label ? ` · ${v.label}` : ''}`)}<span className="small muted">{Math.round((v.size || 0) / 1024)} KB</span></button>)}
-          </div>
+          </div>}
           <button type="button" className="btn sm" onClick={pickLocal} disabled={busy}><FileText size={14} />{t('Compare with another file …')}</button>
-          {busy && <Loading />}
+          {busy && <div className="row-tight small muted"><Loading inline /></div>}
         </div>
       )}
       {old && (

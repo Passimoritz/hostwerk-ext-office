@@ -20,7 +20,8 @@ import { get } from '@hostwerk/api';
 import { Btn, Modal, Empty, toast, confirmDialog } from '@hostwerk/ui';
 import { ErrorBoundary, useAiContext } from '@hostwerk/kit';
 import { t } from '@hostwerk/i18n';
-import { office, download, BASE } from '../lib/api';
+import { office, download } from '../lib/api';
+import { editorLock } from '../lib/locks';
 import { loadEditor } from '../lib/loader';
 import { FORMATS, EXPORTS, extOf } from '../lib/formats';
 import { KIND_COLOR } from '../lib/fileTypes';
@@ -239,14 +240,18 @@ export default function EditorHost({ target, opts = {}, bare = false }) {
   /* ---------------- soft lock ---------------- */
   useEffect(() => {
     if (phase !== 'ready' || readOnly || virtual) return undefined;
-    const f = { root: file.root, path: file.path };
-    const lock = () => office.lock(f).then((r) => { const l = r && (r.lock || r); if (l && l.other) setLockInfo(l); }).catch((e) => { if (e.status === 409 || e.status === 423) setLockInfo({ by: (e.lock && e.lock.by) || (e.data && e.data.lock && e.data.lock.by) || null, text: e.message }); });
-    lock();
-    const h = setInterval(lock, 120000);
-    // window closed or reloaded: React cleanups do not run – release the lock with a request that survives the page
-    const bye = () => { try { fetch(`${BASE}/unlock`, { method: 'POST', keepalive: true, credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify(f) }); } catch { /* the lock expires on its own */ } };
-    window.addEventListener('pagehide', bye);
-    return () => { clearInterval(h); window.removeEventListener('pagehide', bye); office.unlock(f).catch(() => {}); };
+    // ui/src/lib/locks.js: renewed while visible, released on unmount (Back, Close, route change), pagehide (tab/window
+    // closed, reload) and beforeunload – keepalive requests in order (sid/seq); Files' marks follow right after
+    const l = editorLock({
+      file: { root: file.root, path: file.path },
+      dirty: () => dirtyRef.current,
+      onResult: (r, e) => {
+        if (r) { const x = r.lock || r; setLockInfo(x && x.other ? x : null); return; }
+        if (e && (e.status === 409 || e.status === 423)) setLockInfo({ by: (e.lock && e.lock.by) || null, text: e.message });
+      },
+    });
+    l.start();
+    return () => { l.stop(); };
   }, [phase, readOnly, file.path, file.root, virtual]);
 
   /* ---------------- open → interactive, breadcrumb ---------------- */
@@ -718,14 +723,15 @@ export default function EditorHost({ target, opts = {}, bare = false }) {
       <span className="of-shell-eicon"><FileIcon entry={{ name: file.name }} size={20} /></span>
       <div className="of-shell-etitle">
         {renaming ? (
-          <Raw as="input" className="input of-shell-ename-input" autoFocus value={nameDraft} onFocus={(e) => { const i = nameDraft.lastIndexOf('.'); e.target.setSelectionRange(0, i > 0 ? i : nameDraft.length); }} onChange={(e) => setNameDraft(e.target.value)} onBlur={rename} onKeyDown={(e) => { if (e.key === 'Enter') rename(); if (e.key === 'Escape') setRenaming(false); }} aria-label={t('File name')} />
+          <Raw as="input" className="input of-shell-ename-input" autoFocus value={nameDraft} style={{ width: `${Math.max(16, Math.min(nameDraft.length + 2, 90))}ch` }} title={nameDraft} onFocus={(e) => { const i = nameDraft.lastIndexOf('.'); e.target.setSelectionRange(0, i > 0 ? i : nameDraft.length, 'backward'); e.target.scrollLeft = 0; }} onChange={(e) => setNameDraft(e.target.value)} onBlur={rename} onKeyDown={(e) => { if (e.key === 'Enter') rename(); if (e.key === 'Escape') setRenaming(false); }} aria-label={t('File name')} />
         ) : (
-          <Raw as="button" type="button" className="of-shell-ename" disabled={readOnly || !!virtual} title={virtual ? t('Not saved yet') : t('Rename')} onClick={() => { setNameDraft(file.name); setRenaming(true); }}><Keep>{splitExt(file.name).base}</Keep><span className="of-shell-ename-ext"><Keep>{`.${ext}`}</Keep></span></Raw>
+          <Raw as="button" type="button" className="of-shell-ename" disabled={readOnly || !!virtual} title={virtual ? t('Not saved yet') : `${file.name}
+${t('Rename')}`} onClick={() => { setNameDraft(file.name); setRenaming(true); }}><span className="of-shell-ename-base"><Keep>{splitExt(file.name).base}</Keep></span><span className="of-shell-ename-ext"><Keep>{`.${ext}`}</Keep></span></Raw>
         )}
         <nav className="of-shell-crumbs tiny" aria-label={t('Folder')}>
-          <button type="button" className="of-shell-crumb" onClick={() => doClose()}><Keep>{place || t('Office documents')}</Keep></button>
+          <Raw as="button" type="button" className="of-shell-crumb" title={place || t('Office documents')} onClick={() => doClose()}><Keep>{place || t('Office documents')}</Keep></Raw>
           {folder.slice(-2).map((c, i) => <span key={i} className="of-shell-crumb-sep"><ChevronRight size={12} aria-hidden="true" /><Keep>{c}</Keep></span>)}
-          <span className={`of-shell-save c-${ss.tone} is-${state}`} role="status" aria-live="polite">{state === 'saving' ? <span className="of-shell-savedot" aria-hidden="true" /> : SI && <SI size={12} aria-hidden="true" />}{t(ss.text, ss.vars)}</span>
+          <span className={`of-shell-save c-${ss.tone} is-${state}`} role="status" aria-live="polite" title={t(ss.text, ss.vars)}>{state === 'saving' ? <span className="of-shell-savedot" aria-hidden="true" /> : SI && <SI size={12} aria-hidden="true" />}{t(ss.text, ss.vars)}</span>
         </nav>
       </div>
       {track && track.on && <span className="badge warn" title={t('Changes are recorded – accept or reject them in the Review tab')}><GitCompare size={12} aria-hidden="true" />{track.count != null ? t('Track changes · {n}', { n: track.count }) : t('Track changes')}</span>}
@@ -748,7 +754,7 @@ export default function EditorHost({ target, opts = {}, bare = false }) {
     <>
       {lockInfo && <div className="of-shell-banner is-warn"><Lock size={14} aria-hidden="true" /><span className="small grow">{lockInfo.by || !lockInfo.text ? t('This file is also open elsewhere ({by}). Saving may overwrite the other changes – Office asks if it notices.', { by: lockInfo.by || '?' }) : `${lockInfo.text} ${t('Saving may overwrite the other changes – Office asks if it notices.')}`}</span><button type="button" className="btn xs ghost icon" aria-label={t('Hide')} title={t('Hide')} onClick={() => setLockInfo(null)}><X size={12} /></button></div>}
       {notice && <div className={`of-shell-banner is-${notice.kind}`}><Info size={14} aria-hidden="true" /><span className="small grow">{notice.text}</span>{notice.action && (notice.action.href ? <a className="btn xs" href={notice.action.href}>{notice.action.label}</a> : <button type="button" className="btn xs" onClick={notice.action.onClick}>{notice.action.label}</button>)}<button type="button" className="btn xs ghost icon" aria-label={t('Hide')} title={t('Hide')} onClick={() => setNotice(null)}><X size={12} /></button></div>}
-      {fidelity && !fidelityHidden && <div className="of-shell-banner is-info"><FileWarning size={14} aria-hidden="true" /><span className="small grow">{t(fidelity.kept ? 'Some parts can’t be edited here and are kept unchanged: {list}.' : 'Some parts can’t be edited here: {list}.', { list: fidelity.items.slice(0, 6).join(', ') })}</span><button type="button" className="btn xs" onClick={run(openFull)}><Sparkles size={12} />{t('Open in the full editor')}</button><button type="button" className="btn xs ghost icon" aria-label={t('Hide')} title={t('Hide')} onClick={() => setFidelityHidden(true)}><X size={12} /></button></div>}
+      {fidelity && !fidelityHidden && (() => { const txt = t(fidelity.kept ? 'Some parts can’t be edited here and are kept unchanged: {list}.' : 'Some parts can’t be edited here: {list}.', { list: fidelity.items.slice(0, 6).join(', ') }); return <div className="of-shell-banner is-info"><FileWarning size={14} aria-hidden="true" /><Raw as="span" className="small grow of-shell-banner-t" title={txt}>{txt}</Raw><button type="button" className="btn xs of-shell-banner-act" title={t('Open in the full editor')} aria-label={t('Open in the full editor')} onClick={run(openFull)}><Sparkles size={12} aria-hidden="true" /><span className="of-shell-banner-l">{t('Open in the full editor')}</span></button><button type="button" className="btn xs ghost icon" aria-label={t('Hide')} title={t('Hide')} onClick={() => setFidelityHidden(true)}><X size={12} /></button></div>; })()}
     </>
   );
   let body;

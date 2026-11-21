@@ -9,7 +9,10 @@ import {
   Type, StickyNote, Stamp, ImagePlus, Signature, Undo2, Redo2, Trash2, FilePlus2, FileInput, Files, Scissors, FileOutput, ArrowUp, ArrowDown,
   TextSelect, ScanText, Layers, ListChecks, ChevronsUp, ChevronsDown, EyeOff, GitCompare, Gauge, Lock, LockOpen, KeyRound,
 } from 'lucide-react';
-import { Seg, Switch } from '@hostwerk/ui';
+import { useRef } from 'react';
+import { Seg } from '@hostwerk/ui';
+import { useFitLevel } from '../_shared/ribbonfit.js';
+import { SwitchRow } from '../_shared/switchrow.jsx';
 import { t } from '@hostwerk/i18n';
 import { COLORS, STAMPS } from './annotations.js';
 import { withKeys } from '../_shared/keys.js';
@@ -60,6 +63,9 @@ export default function Toolbar({ st, act }) {
   const showColor = editable && (['highlight', 'underline', 'strike', 'text', ...SHAPES].includes(ctx));
   const showWidth = editable && SHAPES.includes(ctx);
   const showSize = editable && ctx === 'text';
+  // adaptive toolbar: 1 = wide buttons icon-only, 2 = scroll mode as a drop-down + only the chosen colour, 3 = annotation mode as a drop-down, then it scrolls
+  const bodyRef = useRef(null);
+  const fit = useFitLevel(bodyRef, { key: `${shown}:${st.ribbonOpen ? 1 : 0}:${ctx}:${st.selectedAnnot ? 1 : 0}`, max: 3 });
 
   return (
     <div className={`of-pdf-ribbon${st.ribbonOpen ? '' : ' collapsed'}`}>
@@ -71,7 +77,7 @@ export default function Toolbar({ st, act }) {
         <B icon={st.ribbonOpen ? ChevronsUp : ChevronsDown} label={st.ribbonOpen ? t('Collapse the ribbon') : t('Show the ribbon')} title={st.ribbonOpen ? t('Collapse the ribbon (double-click a tab)') : t('Show the ribbon')} onClick={act.toggleRibbon} />
       </div>
       {st.ribbonOpen && (
-        <div className="of-pdf-ribbon-body" key={shown}>
+        <div className={`of-pdf-ribbon-body fit-${fit}${fit >= 1 ? ' fit-ge1' : ''}${fit >= 2 ? ' fit-ge2' : ''}${fit >= 3 ? ' fit-ge3' : ''}`} key={shown} ref={bodyRef}>
           {shown === 'home' && (
             <>
               <B icon={PanelLeft} label={t('Sidebar')} on={st.sidebar} onClick={act.toggleSidebar} />
@@ -96,7 +102,10 @@ export default function Toolbar({ st, act }) {
               <B icon={Maximize} label={t('Whole page')} title={withKeys(t('Whole page'), 'Ctrl+0')} on={st.zoom === 'page-fit'} onClick={() => act.setZoom('page-fit')} />
               <B icon={RotateCw} label={t('Rotate view')} title={`${t('Rotate view')} (R)`} onClick={act.rotateView} />
               <Sep />
-              <Seg value={st.scroll} onChange={act.setScroll} options={[{ id: 'vertical', label: t('Scroll'), title: t('Continuous vertical scroll') }, { id: 'horizontal', label: t('Side by side'), title: t('Horizontal scroll') }, { id: 'page', label: t('Single page'), title: t('One page at a time') }]} />
+              <span className="of-pdf-scrollseg"><Seg value={st.scroll} onChange={act.setScroll} options={[{ id: 'vertical', label: t('Scroll'), title: t('Continuous vertical scroll') }, { id: 'horizontal', label: t('Side by side'), title: t('Horizontal scroll') }, { id: 'page', label: t('Single page'), title: t('One page at a time') }]} /></span>
+              <select className="input of-pdf-scrollsel" value={st.scroll} onChange={(e) => act.setScroll(e.target.value)} aria-label={t('Page display')} title={t('Page display')}>
+                <option value="vertical">{t('Scroll')}</option><option value="horizontal">{t('Side by side')}</option><option value="page">{t('Single page')}</option>
+              </select>
               <Sep />
               <B icon={st.tool === 'hand' ? Hand : TextSelect} label={st.tool === 'hand' ? t('Hand tool') : t('Select text')} title={t('Select text / hand tool (H) – the middle mouse button always pans')} on={st.tool === 'hand'} onClick={() => act.setTool(st.tool === 'hand' ? 'text-select' : 'hand')} />
               <B icon={Moon} label={t('Night reading')} title={t('Night reading – shows the pages dark (the file stays as it is)')} on={st.night} onClick={act.toggleNight} />
@@ -151,7 +160,10 @@ export default function Toolbar({ st, act }) {
               <span className="grow" />
               <span className="of-pdf-mode" title={t('Editable: stay editable here and in other PDF apps. Burned in: become part of the page.')}>
                 <Layers size={14} />
-                <Seg value={st.annotMode} onChange={act.setAnnotMode} options={[{ id: 'annot', label: t('Editable') }, { id: 'burn', label: t('Burned in') }]} />
+                <span className="of-pdf-modeseg"><Seg value={st.annotMode} onChange={act.setAnnotMode} options={[{ id: 'annot', label: t('Editable') }, { id: 'burn', label: t('Burned in') }]} /></span>
+                <select className="input of-pdf-modesel" value={st.annotMode} onChange={(e) => act.setAnnotMode(e.target.value)} aria-label={t('Editable')} title={t('Editable: stay editable here and in other PDF apps. Burned in: become part of the page.')}>
+                  <option value="annot">{t('Editable')}</option><option value="burn">{t('Burned in')}</option>
+                </select>
               </span>
             </>
           )}
@@ -170,7 +182,7 @@ export default function Toolbar({ st, act }) {
               <B icon={FileOutput} label={t('Extract …')} title={t('Save the selected pages as a new PDF')} onClick={act.extract} wide />
               <B icon={Scissors} label={t('Split …')} title={t('Split into several PDFs')} onClick={act.split} wide />
               <span className="grow" />
-              <span className="small muted">{st.selCount > 1 ? t('{n} pages selected', { n: st.selCount }) : t('Ctrl/Shift-click thumbnails to select several pages – drag them to reorder')}</span>
+              {(() => { const hint = st.selCount > 1 ? t('{n} pages selected', { n: st.selCount }) : t('Ctrl/Shift-click thumbnails to select several pages – drag them to reorder'); return <span className="small muted of-pdf-hint" title={hint}>{hint}</span>; })()}
             </>
           )}
           {shown === 'forms' && (
@@ -181,11 +193,11 @@ export default function Toolbar({ st, act }) {
               <Sep />
               {st.formInfo && st.formInfo.fields > 0 ? (
                 <>
-                  <span className="small"><ListChecks size={14} /> {t('{n} form fields – click into the page, Tab moves to the next field', { n: st.formInfo.fields })}</span>
+                  {(() => { const hint = t('{n} form fields – click into the page, Tab moves to the next field', { n: st.formInfo.fields }); return <span className="small of-pdf-hint" title={hint}><ListChecks size={14} aria-hidden="true" /> {hint}</span>; })()}
                   <Sep />
-                  <Switch checked={st.flatten} onChange={act.setFlatten} label={t('Flatten form when saving')} />
+                  <SwitchRow checked={st.flatten} onChange={act.setFlatten} label={t('Flatten form when saving')} />
                 </>
-              ) : <span className="small muted"><ScanText size={14} /> {t('This PDF has no form fields – use text boxes to fill it in.')}</span>}
+              ) : <span className="small muted of-pdf-hint" title={t('This PDF has no form fields – use text boxes to fill it in.')}><ScanText size={14} aria-hidden="true" /> {t('This PDF has no form fields – use text boxes to fill it in.')}</span>}
             </>
           )}
           {shown === 'tools' && (

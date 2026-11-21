@@ -1,7 +1,7 @@
 /* Slides editor – Office 1.1 additions (Hostwerk tokens; colours that must stand out on any slide are marked) */
 /* presentations are orange (like PowerPoint) – the editor's accents follow; modals keep Hostwerk's accent */
-.of-slides-root { --accent: #E8663D; --accent-btn: #C43E1C; --accent-soft: rgba(232, 102, 61, .16); --accent-text: #FF9A73; --of-slides-orange: #E8663D; } /* hostwerk-allow: colors – presentation accent */
-:root[data-theme='light'] .of-slides-root { --accent: #C43E1C; --accent-btn: #C43E1C; --accent-soft: rgba(196, 62, 28, .1); --accent-text: #A83316; --of-slides-orange: #C43E1C; } /* hostwerk-allow: colors */
+.of-slides-root, .of-slides-flyout { --accent: #E8663D; --accent-btn: #C43E1C; --accent-soft: rgba(232, 102, 61, .16); --accent-text: #FF9A73; --of-slides-orange: #E8663D; } /* hostwerk-allow: colors – presentation accent */
+:root[data-theme='light'] .of-slides-root, :root[data-theme='light'] .of-slides-flyout { --accent: #C43E1C; --accent-btn: #C43E1C; --accent-soft: rgba(196, 62, 28, .1); --accent-text: #A83316; --of-slides-orange: #C43E1C; } /* hostwerk-allow: colors */
 .of-slides-tab { transition: color .15s, background-color .15s, border-color .15s; }
 .of-slides-tab.ctx { color: var(--accent-text); background: var(--accent-soft); }
 .of-slides-tab.ctx.on { background: transparent; }
@@ -70,6 +70,7 @@
 .of-slides-outitem.drop-before::before { content: ''; position: absolute; left: 0; right: 0; top: -2px; height: 3px; background: var(--accent); border-radius: var(--r-xs); }
 .of-slides-outgrip { cursor: grab; color: var(--muted); padding-top: 6px; }
 .of-slides-outbody { width: 100%; resize: none; tab-size: 4; }
+.of-slides-outbody.is-lead { font-size: var(--fs-lg); font-weight: 600; padding-left: 4px; }
 
 /* comments */
 .of-slides-thread { border: 1px solid var(--line); border-radius: var(--r-md); padding: var(--sp-2); margin-bottom: var(--sp-2); background: var(--bg); transition: border-color .15s, box-shadow .15s; }
@@ -100,6 +101,7 @@
 .of-slides-idea { display: flex; flex-direction: column; gap: 4px; align-items: center; padding: 4px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg); color: var(--text); cursor: pointer; transition: border-color .15s, transform .15s, box-shadow .15s; font: inherit; }
 .of-slides-idea:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0, 0, 0, .12); }
 .of-slides-idea > .of-slides-view { border-radius: var(--r-xs); box-shadow: 0 0 0 1px var(--line-2); pointer-events: none; }
+.of-slides-noversions { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border: 1px dashed var(--line-2); border-radius: var(--r-md); color: var(--text-2); }
 .of-slides-verlist, .of-slides-planlist { display: flex; flex-direction: column; gap: 2px; max-height: 320px; overflow: auto; }
 .of-slides-verrow { display: flex; align-items: center; gap: var(--sp-2); padding: 6px 8px; border: 1px solid transparent; border-radius: var(--r-sm); background: none; color: var(--text); cursor: pointer; text-align: left; font: inherit; }
 .of-slides-verrow:hover { background: var(--surface-2); border-color: var(--line); }

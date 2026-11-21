@@ -82,8 +82,11 @@ export function parseHeaders(block) {
     if (/^[ \t]/.test(line) && out.length) out[out.length - 1][1] += ` ${line.trim()}`;
     else { const i = line.indexOf(':'); if (i > 0) out.push([line.slice(0, i).trim().toLowerCase(), line.slice(i + 1).trim()]); }
   }
+  for (const h of out) h[1] = raw8(h[1]);
   return out;
 }
+/** raw 8-bit header text (RFC 6532 – mailers write UTF-8 straight into the headers) → text; invalid UTF-8 → Windows-1252 */
+function raw8(v) { return /[\x80-\xff]/.test(v) ? decodeCharset(toBytes(v), 'utf-8') : v; }
 
 /** "text/html; charset=utf-8; name*=…" → { value, params } (RFC 2231 continuations and charsets) */
 export function parseParams(v) {

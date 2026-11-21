@@ -4,6 +4,7 @@
  * footers with rich content (first / even pages), page setup of one section, compare two versions (also the chunk's
  * `Compare` export for the shell's compare view).
  */
+import { SwitchRow } from '../_shared/switchrow.jsx';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
@@ -17,7 +18,7 @@ import TableRow from '@tiptap/extension-table-row';
 import TableCell from '@tiptap/extension-table-cell';
 import TableHeader from '@tiptap/extension-table-header';
 import { Bold, Italic, Underline as UIcon, AlignLeft, AlignCenter, AlignRight, Hash, Sigma, CalendarDays, Image as ImageIcon, Table as TableIcon, FileText, Sparkles, Columns2, Rows3, Check, Copy, Replace, Plus, GitCompare, ArrowRight, Wand2 } from 'lucide-react';
-import { Btn, Modal, Field, Seg, Switch, Callout, Spinner, toast } from '@hostwerk/ui';
+import { Btn, Modal, Field, Seg, Callout, Spinner, toast } from '@hostwerk/ui';
 import { t } from '@hostwerk/i18n';
 import { Keep, Raw } from '../_shared/keep.jsx';
 import { renderLatex, renderMermaid, svgToPng, compareLib } from './lazy.js';
@@ -350,8 +351,8 @@ export function HeaderFooterEditor({ model, onSave, onClose }) {
         </div>
         <HfEditor key={key} label={t(part === 'header' ? 'Header' : 'Footer')} value={docs[key]} onChange={(d) => setDocs((x) => ({ ...x, [key]: d }))} />
         <div className="row of-docs-hfopts">
-          <label className="check"><Switch checked={first} onChange={setFirst} /> {t('Different first page')}</label>
-          <label className="check"><Switch checked={evenOdd} onChange={setEvenOdd} /> {t('Different odd and even pages')}</label>
+          <SwitchRow checked={first} onChange={setFirst} label={t('Different first page')} />
+          <SwitchRow checked={evenOdd} onChange={setEvenOdd} label={t('Different odd and even pages')} />
         </div>
       </div>
     </Modal>
@@ -381,7 +382,7 @@ export function SectionDialog({ attrs, units, onSave, onClose }) {
         </div>
         <div className="grid grid-2">{num('top')}{num('bottom')}{num('left')}{num('right')}</div>
         <Field label="Section starts"><select className="input" value={type} onChange={(e) => setType(e.target.value)} aria-label="Section starts"><option value="nextPage">{t('On the next page')}</option><option value="continuous">{t('On the same page (continuous)')}</option><option value="evenPage">{t('On the next even page')}</option><option value="oddPage">{t('On the next odd page')}</option></select></Field>
-        <label className="check"><Switch checked={first} onChange={setFirst} /> {t('Different first page')}</label>
+        <SwitchRow checked={first} onChange={setFirst} label={t('Different first page')} />
       </div>
     </Modal>
   );

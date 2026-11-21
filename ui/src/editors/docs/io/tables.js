@@ -198,7 +198,27 @@ export function tableStyleXml(def, baseId = null) {
 }
 
 /* ---------------- display: CSS variables + classes for the <table> ---------------- */
-const pad = (v) => `${Math.round(((Number(v) || 0) / 20) * (4 / 3) * 10) / 10}px`;
+const padPx = (v) => ((Number(v) || 0) / 20) * (4 / 3);
+const px3 = (v) => `${Math.round(Math.max(0, v) * 1000) / 1000}px`;
+const pad = (v) => px3(padPx(v));
+/** the CSS width (px) of a border string – 0 for none */
+export function borderPx(s) {
+  if (isNone(s)) return 0;
+  const css = borderCss(s);
+  const m = /^([\d.]+)px/.exec(css);
+  return m ? Number(m[1]) : 0;
+}
+/**
+ * a cell's padding like Word's text area: a CSS border is at least 1px wide where Word draws a ½ pt (0.67px) line, and
+ * a collapsed border puts half of its width into the cell – the excess is taken from the padding, so rows are as tall
+ * as Word's (each row was a quarter point taller: a 200-row table ran over a page further)
+ */
+export const sidePad = (margin, border) => {
+  if (isNone(border)) return pad(margin);
+  const b = parseBorder(border);
+  const word = ((b.sz || 4) / 8) * (4 / 3); // the border as Word draws it (eighths of a point)
+  return px3(padPx(margin) - Math.max(0, borderPx(border) - word) / 2);
+};
 /**
  * table attrs → { cls: [..], vars: { '--x': value } } – the CSS in style.css (.of-wt) turns them into Word's look:
  * outside/inside borders, cell margins, table-style conditional formats (header row, banded rows, first column …)
@@ -211,7 +231,8 @@ export function tableLook(a = {}) {
   const side = { top: '--tb-t', left: '--tb-l', bottom: '--tb-b', right: '--tb-r', insideH: '--tb-ih', insideV: '--tb-iv' };
   for (const [k, v] of Object.entries(side)) vars[v] = borderCss(b[k]);
   const cm = { top: 0, left: 108, bottom: 0, right: 108, ...((spec && spec.cm) || {}), ...(a.cellMargins || {}) };
-  vars['--tc-p'] = `${pad(cm.top)} ${pad(cm.right)} ${pad(cm.bottom)} ${pad(cm.left)}`;
+  const vb = b.insideV != null ? b.insideV : b.left; const hb = b.insideH != null ? b.insideH : b.top;
+  vars['--tc-p'] = `${sidePad(cm.top, hb)} ${sidePad(cm.right, vb)} ${sidePad(cm.bottom, hb)} ${sidePad(cm.left, vb)}`;
   if (spec) {
     if (spec.pAfter != null) vars['--tp-after'] = `${spec.pAfter}pt`;
     if (spec.pLine != null) vars['--tp-lh'] = String(spec.pLine);
@@ -298,7 +319,7 @@ export function cellCss(a = {}) {
   const s = [];
   if (a.vAlign) s.push(`vertical-align:${a.vAlign === 'center' ? 'middle' : a.vAlign === 'bottom' ? 'bottom' : 'top'}`);
   if (a.borders) for (const k of ['top', 'left', 'bottom', 'right']) if (a.borders[k] != null) s.push(`border-${k}:${borderCss(a.borders[k])}`);
-  if (a.margins) for (const k of ['top', 'left', 'bottom', 'right']) if (a.margins[k] != null) s.push(`padding-${k}:${pad(a.margins[k])}`);
+  if (a.margins) for (const k of ['top', 'left', 'bottom', 'right']) if (a.margins[k] != null) s.push(`padding-${k}:${a.borders && a.borders[k] != null ? sidePad(a.margins[k], a.borders[k]) : pad(a.margins[k])}`);
   if (a.textDir === 'btLr') s.push('writing-mode:vertical-rl;transform:rotate(180deg)');
   else if (a.textDir === 'tbRl') s.push('writing-mode:vertical-rl');
   if (a.noWrap) s.push('white-space:nowrap');

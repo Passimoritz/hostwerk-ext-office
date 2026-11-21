@@ -262,7 +262,12 @@ function SlidesEditor({ file, bytes, readOnly: ro0, settings = {}, host = {} }) 
       if (!alive) { s.close(); return; }
       conn = collabConnect(s, {
         me, onPeers: setPeers, getDoc: () => histRef.current.doc,
-        setDoc: (d, initial) => setHist((hs) => (initial ? { ...history(d), past: hs ? hs.past : [] } : histPush(hs, d, 'remote'))),
+        setDoc: (d, initial, same) => setHist((hs) => {
+          if (!initial) return histPush(hs, d, 'remote');
+          // a room left from the last opening with the file as saved: take its ids, but nothing is unsaved
+          if (same && hs && hs.doc === savedDoc.current) savedDoc.current = d;
+          return { ...history(d), past: hs ? hs.past : [] };
+        }),
       });
       conn.isLeader = s.isLeader;
       collabRef.current = conn;
@@ -1028,7 +1033,13 @@ function SlidesEditor({ file, bytes, readOnly: ro0, settings = {}, host = {} }) 
         : pane === 'anim' ? <AnimPane doc={doc} slide={slide} sel={sel} setSel={setSel} change={change} readOnly={readOnly} onClose={() => setPane(null)} selAnimId={selAnimId} setSelAnimId={setSelAnimId} onPreview={() => c.previewAnims()} />
           : pane === 'designer' ? <DesignerPane doc={doc} slide={slide} onClose={() => setPane(null)} onApply={(d) => change((dd) => updateSlide(dd, slide.id, (s) => ({ ...s, elements: d.elements, ...(d.background ? { background: d.background } : {}) })))} /> : null
   ) : null;
-  const promptFn = (e) => t(e.prompt || '');
+  // layouts of real files carry the master's own text ("Click to edit Master title style", "Mastertitelformat bearbeiten") –
+  // on a slide PowerPoint shows "Click to add title/text" instead
+  const promptFn = (e) => {
+    const p = e.prompt || '';
+    if (!/master/i.test(p)) return t(p);
+    return t(/^(title|ctrTitle)/.test(e.ph || '') ? 'Click to add title' : /^subTitle/.test(e.ph || '') ? 'Click to add subtitle' : 'Click to add text');
+  };
   const zoomPct = Math.round(zoom * 100);
   return (
     <div className={`of-slides-root ${readOnly ? 'ro' : ''}`} ref={rootRef} onKeyDown={onKeyDown} tabIndex={-1}>

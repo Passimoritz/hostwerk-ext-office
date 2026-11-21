@@ -1,6 +1,6 @@
 /* Side and alternate views: slide thumbnails with sections, slide sorter, outline, notes page, format pane, comments, animations. */
 import { useEffect, useMemo, useRef, useState, createElement as h } from 'react';
-import { ChevronDown, ChevronRight, EyeOff, Plus, Trash2, ArrowUp, ArrowDown, MessageSquare, Sparkles, Lock, Star } from 'lucide-react';
+import { ChevronDown, ChevronRight, EyeOff, Plus, Trash2, ArrowUp, ArrowDown, MessageSquare, Sparkles, Lock, ArrowRightLeft } from 'lucide-react';
 import { t } from '@hostwerk/i18n';
 import SlideView from './render/SlideView.jsx';
 import { S, emuToCm, cmToEmu, emuToIn, inToEmu } from './units.js';
@@ -28,7 +28,8 @@ export function LazySlide({ eager, w, h: hh, children }) {
 /* ---------------------------------------------------------------- thumbnails */
 export function Thumbs({ doc, curId, selSlides, onSelect, onReorder, onContext, onAdd, onSectionContext, collapsed, setCollapsed, width = 168 }) {
   const W = S(doc.size.w); const H = S(doc.size.h);
-  const scale = (width - 34) / W;
+  // panel width − border − padding (4 + 8) − number column (20) − gap (6) − outline room (2) = picture width
+  const scale = (width - 41) / W;
   const [dropAt, setDropAt] = useState(null);
   const [dragIds, setDragIds] = useState(null);
   const groups = sectionGroups(doc);
@@ -55,7 +56,7 @@ export function Thumbs({ doc, curId, selSlides, onSelect, onReorder, onContext, 
                 draggable onDragStart={(e) => { const ids = selected ? selSlides : [s.id]; e.dataTransfer.setData('text/x-of-slides', ids.join(',')); e.dataTransfer.effectAllowed = 'move'; setDragIds(ids); }} onDragEnd={() => { setDragIds(null); setDropAt(null); }}
                 onDragOver={(e) => { e.preventDefault(); const r = e.currentTarget.getBoundingClientRect(); setDropAt(e.clientY < r.top + r.height / 2 ? i : i + 1); }}
                 onClick={(e) => onSelect(s.id, e)} onContextMenu={(e) => onContext(e, s.id)}>
-                <span className="of-slides-thumbnum">{i + 1}{s.hidden && <EyeOff size={11} aria-label={t('Hidden')} />}{(s.animations || []).length > 0 && <Star size={10} aria-label={t('Animations')} />}</span>
+                <span className="of-slides-thumbnum"><span>{i + 1}</span><ThumbMarks s={s} /></span>
                 <Raw as="div" className="of-slides-thumbimg" style={{ width: W * scale, height: H * scale }} title={slideTitle(s) || undefined}><LazySlide eager={Math.abs(i - curIdx) < 12} w={W * scale} h={H * scale}><SlideView doc={doc} slide={s} index={i} scale={scale} mode="thumb" /></LazySlide></Raw>
               </div>
             );
@@ -66,6 +67,18 @@ export function Thumbs({ doc, curId, selSlides, onSelect, onReorder, onContext, 
       <button type="button" className="btn sm ghost of-slides-addslide" onClick={() => onAdd()}><Plus size={14} />{t('New slide')}</button>
     </div>
   );
+}
+
+/** small markers under the slide number – each with a tooltip: hidden, animations, comments */
+export function ThumbMarks({ s }) {
+  const anims = (s.animations || []).length;
+  const comments = (s.comments || []).filter((x) => !x.parent && !x.done).length;
+  const mark = (Icon, tip, key) => <Raw as="span" key={key} className="of-slides-mark" title={tip} aria-label={tip} role="img"><Icon size={12} aria-hidden="true" /></Raw>;
+  return [
+    s.hidden && mark(EyeOff, t('Hidden in the slide show'), 'h'),
+    anims > 0 && mark(Sparkles, anims === 1 ? t('1 animation') : t('{n} animations', { n: anims }), 'a'),
+    comments > 0 && mark(MessageSquare, comments === 1 ? t('1 comment') : t('{n} comments', { n: comments }), 'c'),
+  ];
 }
 
 /* ---------------------------------------------------------------- slide sorter */
@@ -87,7 +100,7 @@ export function Sorter({ doc, curId, selSlides, onSelect, onOpen, onReorder, onC
                   onDragOver={(e) => { e.preventDefault(); const r = e.currentTarget.getBoundingClientRect(); setDropAt(e.clientX < r.left + r.width / 2 ? i : i + 1); }}
                   onClick={(e) => onSelect(s.id, e)} onDoubleClick={() => onOpen(s.id)} onContextMenu={(e) => onContext(e, s.id)}>
                   <div className="of-slides-sortimg" style={{ width: W * scale, height: H * scale }}><LazySlide eager={i < 24} w={W * scale} h={H * scale}><SlideView doc={doc} slide={s} index={i} scale={scale} mode="thumb" /></LazySlide></div>
-                  <div className="small row-tight"><b>{i + 1}</b>{s.hidden && <EyeOff size={12} />}{s.transition && s.transition.type !== 'none' && <Sparkles size={12} aria-label={t('Transition')} />}{s.transition && s.transition.advanceAfter ? <span className="muted">{Math.round(s.transition.advanceAfter / 100) / 10}s</span> : null}</div>
+                  <div className="small row-tight of-slides-sortmeta"><b>{i + 1}</b><ThumbMarks s={s} />{s.transition && s.transition.type !== 'none' && <Raw as="span" className="of-slides-mark" role="img" title={t('Transition')} aria-label={t('Transition')}><ArrowRightLeft size={12} aria-hidden="true" /></Raw>}{s.transition && s.transition.advanceAfter ? <span className="muted">{Math.round(s.transition.advanceAfter / 100) / 10}s</span> : null}</div>
                 </div>
               );
             })}
@@ -137,10 +150,21 @@ export function Outline({ doc, change, readOnly, onOpen, spellcheck }) {
 /* ---------------------------------------------------------------- notes page */
 export function NotesPage({ doc, slide, index, change, readOnly, spellcheck }) {
   const W = S(doc.size.w);
-  const scale = 560 / W;
+  // the slide picture follows the paper's width (phones: the paper is narrower than 560 px)
+  const paper = useRef(null);
+  const [avail, setAvail] = useState(560);
+  useEffect(() => {
+    const el = paper.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    const fit = () => { const cs = getComputedStyle(el); setAvail(Math.max(120, Math.min(560, el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)))); };
+    fit();
+    const ro = new ResizeObserver(fit); ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const scale = avail / W;
   return (
     <div className="of-slides-notespage">
-      <div className="of-slides-notespaper">
+      <div className="of-slides-notespaper" ref={paper}>
         <div className="of-slides-notesslide"><SlideView doc={doc} slide={slide} index={index} scale={scale} mode="thumb" /></div>
         <textarea className="of-slides-notesbig" value={slide.notes || ''} readOnly={readOnly} spellCheck={spellcheck} placeholder={t('Click to add notes')} aria-label={t('Notes')}
           onKeyDown={(e) => e.stopPropagation()} onChange={(e) => change((d) => updateSlide(d, slide.id, { notes: e.target.value }), `notes:${slide.id}`)} />

@@ -46,7 +46,7 @@ export function FormatCellsDialog({ book, style, value, initialTab = 'number', o
   return (
     <Modal size="wide" title={t('Format cells')} onClose={onClose}
       footer={<><Btn className="ghost" onClick={onClose}>{t('Cancel')}</Btn><Btn className="primary" disabled={readOnly} onClick={ok}>{t('OK')}</Btn></>}>
-      <Tabs tabs={tabs} value={tab} onChange={setTab} />
+      <div className="of-sheet-dlgtabs"><Tabs tabs={tabs} value={tab} onChange={setTab} /></div>
       {tab === 'number' && (
         <div className="of-sheet-fmt">
           <div className="of-sheet-list" role="listbox" aria-label={t('Category')}>

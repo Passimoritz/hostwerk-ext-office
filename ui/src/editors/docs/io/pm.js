@@ -23,6 +23,7 @@
  *   marks:  bold italic underline strike code subscript superscript link {href} highlight {color}
  *           textStyle {color,fontFamily,fontSize} comment {id} insertion {id,author,date} deletion {id,author,date}
  */
+import { paraBoxCss } from './wordprops.js';
 
 export const PAGE_SIZES = {
   A4: { width: 210, height: 297 },
@@ -39,6 +40,44 @@ export const PAGE_SIZES = {
 const LINE_FACTOR = { calibri: 1.2207, 'calibri light': 1.2207, carlito: 1.2207, aptos: 1.2234, 'aptos display': 1.2234, 'aptos narrow': 1.2234, arial: 1.149, 'liberation sans': 1.149, helvetica: 1.149, 'times new roman': 1.149, 'liberation serif': 1.149, cambria: 1.1724, 'courier new': 1.133, consolas: 1.1709, georgia: 1.1362, verdana: 1.2153, tahoma: 1.2075, 'segoe ui': 1.3301, 'trebuchet ms': 1.1626, garamond: 1.1259, 'century gothic': 1.2251, 'palatino linotype': 1.3271, 'franklin gothic medium': 1.1338, 'lucida sans': 1.1612, candara: 1.2207, constantia: 1.2207, corbel: 1.2207, 'comic sans ms': 1.3936, impact: 1.2192 };
 export function lineFactor(font) { const f = String(font || '').split(',')[0].replace(/["']/g, '').trim().toLowerCase(); return LINE_FACTOR[f] || 1.17; }
 
+/**
+ * CSS variables for the document's own heading / title look (model.styleLook from the docx styles): sizes, colours,
+ * bold/italic, font, space before/after and line spacing like Word – unset ones keep the editor's built-in look.
+ * fontCss turns a font name into a CSS font-family list.
+ */
+export function styleLookVars(look, defaults = {}, fontCss = (f) => f) {
+  const out = {};
+  if (!look) return out;
+  const baseLh = defaults.lineHeight || 1.15;
+  for (const [key, l] of Object.entries(look)) {
+    if (!l || !/^(h[1-6]|title|subtitle)$/.test(key)) continue;
+    const v = (n, x) => { out[`--of-${key}-${n}`] = x; };
+    if (l.size) v('size', `${l.size}pt`);
+    if (key === 'title') v('ls', 'normal');
+    if (l.color) v('color', l.color);
+    if (l.b != null) v('weight', l.b ? '700' : '400');
+    if (l.i != null) v('style', l.i ? 'italic' : 'normal');
+    if (l.font) v('font', fontCss(l.font));
+    if (l.before != null) v('mt', `${l.before}pt`);
+    if (l.after != null) v('mb', `${l.after}pt`);
+    if (l.align) v('align', l.align);
+    if (l.pshading) v('bg', l.pshading);
+    const box = paraBoxCss(l.pborders, l.indent, l.rightIndent);
+    for (const [prop, val] of Object.entries(box)) v(prop.replace(/^border-(.).*$/, 'b$1').replace(/^padding-(.).*$/, 'p$1').replace(/^margin-(.).*$/, 'm$1x'), val);
+    if (l.indent && !box['margin-left']) v('mlx', `${l.indent}pt`);
+    const font = l.font || defaults.font;
+    if (l.lineHeight != null || defaults.lineHeight) v('lh', String(Math.round((l.lineHeight != null ? l.lineHeight : baseLh) * lineFactor(font) * 1000) / 1000));
+  }
+  return out;
+}
+
+/** header / footer distance from the paper edge in px: the section's own (Word's pgMar header/footer), else a share of the margin */
+export function hfDist(sectionAttrs, model, key, margin) {
+  const pg = (sectionAttrs && sectionAttrs.page) || (model && model.page) || {};
+  const mm = Number(pg[key]);
+  if (Number.isFinite(mm) && mm >= 0) return Math.max(2, Math.min(mm * (96 / 25.4), margin));
+  return Math.max(6, margin * (key === 'headerMm' ? 0.42 : 0.4));
+}
 export const MM_PX = 96 / 25.4;
 export const PT_PX = 96 / 72;
 export const TWIP_MM = 25.4 / 1440;

@@ -10,6 +10,25 @@
 .of-pdf-rtab:focus-visible { outline: 2px solid var(--pdf); outline-offset: -2px; }
 .of-pdf-ribbon-body { min-height: 44px; border-top: 1px solid var(--line); background: linear-gradient(var(--surface), var(--surface-2)); animation: of-pdf-drop 160ms ease-out; }
 @keyframes of-pdf-drop { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+/* one row that adapts instead of wrapping (fit-geN = at least step N, see Toolbar.jsx), then it scrolls */
+.of-pdf-ribbon-body { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.of-pdf-ribbon-body > * { flex: none; }
+.of-pdf-ribbon-body > .grow { flex: 1 1 0; min-width: var(--sp-2); }
+.of-pdf-ribbon-body > .of-pdf-hint { flex: 0 1 auto; min-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
+.of-pdf-ribbon-body > .of-pdf-hint svg { flex: none; }
+.of-pdf-scrollsel { display: none; height: 28px; padding: 0 6px; width: auto; }
+.of-pdf-ribbon-body.fit-ge1 .of-pdf-wide > span { display: none; }
+.of-pdf-ribbon-body.fit-ge1 .of-pdf-wide { padding-left: 6px; padding-right: 6px; }
+.of-pdf-ribbon-body.fit-ge2 .of-pdf-scrollseg { display: none; }
+/* annotation options: the tool name goes first, then only the chosen colour stays (the colour picker next to it picks others) */
+.of-pdf-ribbon-body.fit-ge1 .of-pdf-context-label { display: none; }
+.of-pdf-ribbon-body.fit-ge2 .of-pdf-colors .of-pdf-swatch:not(.on) { display: none; }
+.of-pdf-ribbon-body.fit-ge2 .of-pdf-scrollsel { display: inline-block; }
+.of-pdf-modesel { display: none; height: 28px; padding: 0 6px; width: auto; }
+.of-pdf-ribbon-body.fit-ge3 .of-pdf-modeseg { display: none; }
+.of-pdf-ribbon-body.fit-ge3 .of-pdf-modesel { display: inline-block; }
+.of-pdf-ribbon-body.fit-ge3 .of-pdf-mode > svg { display: none; }
+.of-pdf-ribbon-body.fit-ge3 .of-pdf-tb { padding-left: 4px; padding-right: 4px; }
 .of-pdf-wide { gap: 6px; }
 .of-pdf-wide span { white-space: nowrap; }
 .of-pdf-ribbon .btn.on { background: var(--pdf-soft); color: var(--pdf-text); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pdf) 30%, transparent); }
@@ -37,14 +56,19 @@
 .of-pdf-thumb { transition: opacity 140ms, transform 140ms, background 140ms; }
 .of-pdf-thumb.dragging { opacity: .4; transform: scale(.95); }
 .of-pdf-thumb[draggable="true"] { cursor: grab; }
-.of-pdf-thumb-img { transition: border-color 140ms, box-shadow 140ms; }
-.of-pdf-thumb-img:hover { box-shadow: 0 0 0 3px var(--pdf-soft); }
-.of-pdf-thumb-img:focus-visible { outline: 2px solid var(--pdf); outline-offset: 2px; }
+/* selection = 2 px ring with offset (same as the slide panel), not a fat border */
+.of-pdf-thumb-img { border: 0; border-radius: 2px; outline: 2px solid transparent; outline-offset: 3px; transition: outline-color 140ms, box-shadow 140ms; }
+.of-pdf-thumb-img canvas { box-shadow: 0 0 0 1px var(--line-2), 0 1px 3px rgba(0, 0, 0, .18); border-radius: 2px; }
+.of-pdf-thumb-img:hover { outline-color: var(--line-2); }
+.of-pdf-thumb-img:focus-visible { outline-color: var(--pdf); box-shadow: 0 0 0 7px var(--pdf-soft); }
+.of-pdf-thumb-bar > .small { font-variant-numeric: tabular-nums; }
 .of-pdf-thumb canvas { opacity: 0; transition: opacity 160ms; }
 .of-pdf-thumb.ready canvas { opacity: 1; }
-.of-pdf-thumb.active .of-pdf-thumb-img { border-color: var(--pdf); }
+.of-pdf-thumb.active .of-pdf-thumb-img { outline-color: var(--pdf); }
 .of-pdf-thumb.active .of-pdf-thumb-bar > .small { color: var(--pdf-text); font-weight: 600; }
-.of-pdf-thumb.selected { background: var(--pdf-soft); }
+.of-pdf-thumb.selected { background: none; }
+.of-pdf-thumb.selected .of-pdf-thumb-img { outline-color: color-mix(in srgb, var(--pdf) 45%, transparent); }
+.of-pdf-thumb.selected.active .of-pdf-thumb-img { outline-color: var(--pdf); }
 .of-pdf-thumb[data-drop="before"]::before, .of-pdf-thumb[data-drop="after"]::after { background: var(--pdf); box-shadow: 0 0 0 3px var(--pdf-soft); animation: of-pdf-pulse 600ms ease-in-out infinite alternate; }
 @keyframes of-pdf-pulse { to { opacity: .55; } }
 
@@ -86,6 +110,10 @@
 .of-pdf-sigdel { position: absolute; top: 4px; right: 4px; opacity: 0; transition: opacity 140ms; }
 .of-pdf-sigcard:hover .of-pdf-sigdel, .of-pdf-sigdel:focus-visible { opacity: 1; }
 
+.of-pdf-sigrow { flex-wrap: wrap; row-gap: var(--sp-1); }
+.of-pdf-sigrow > .grow { flex: 1 1 220px; }
+/* phones: "remember the signature" gets its own line above the buttons */
+@media (max-width: 600px) { .modal-foot:has(.of-pdf-sigremember) { flex-wrap: wrap; } .of-pdf-sigremember { flex-basis: 100%; order: -1; } }
 /* right-click menu */
 .of-pdf-menu { position: fixed; z-index: 2000; min-width: 220px; max-width: 320px; padding: 4px; background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow-lg); animation: of-pdf-pop 120ms ease-out; transform-origin: top left; }
 @keyframes of-pdf-pop { from { opacity: 0; transform: scale(.97); } to { opacity: 1; transform: none; } }
@@ -115,6 +143,9 @@
 .of-pdf-mark-swatch { width: 14px; height: 10px; border-radius: var(--r-xs); background: #111; box-shadow: 0 0 0 1px #e5364a; flex: none; }
 .of-pdf-mark-go .of-pdf-ellipsis { flex: 1; }
 
+/* tools dialogs – never wider than the window (long producer URLs, German table heads) */
+.of-pdf-props { table-layout: fixed; width: 100%; }
+.of-pdf-props th, .of-pdf-props td { overflow-wrap: anywhere; }
 /* tools dialogs */
 .of-pdf-perms { display: grid; grid-template-columns: 1fr 1fr; gap: 6px var(--sp-3); }
 .of-pdf-perms > span { grid-column: 1 / -1; }

@@ -18,7 +18,7 @@
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
-import { pager, planLines, planTable } from './pagemodel.js';
+import { pager, planLines, planTable, pageAfter, firstChange, keepsNext, pageBreakCounts } from './pagemodel.js';
 
 export const pageKey = new PluginKey('ofPages');
 const MM = 96 / 25.4;
@@ -52,6 +52,7 @@ export const Pagination = Extension.create({
         if (s.pos < 0 || s.pos > size) continue;
         if (s.kind === 'row') (s.cells || []).forEach((c, i) => { if (c >= 0 && c <= size) decos.push(Decoration.widget(c, () => rowWidget(s, i), { side: -1, key: `pr${c}_${Math.round(s.height)}_${i ? 0 : bandKey(s.band)}`, ignoreSelection: true })); });
         else if (s.kind === 'cline') decos.push(Decoration.widget(s.pos, () => clineWidget(s), { side: -1, key: `pc${s.pos}_${Math.round(s.height)}_${bandKey(s.band)}`, ignoreSelection: true, marks: [] }));
+        else if (s.kind === 'collapse') decos.push(Decoration.widget(s.pos, () => { const d = document.createElement('div'); d.className = 'of-docs-pgsp of-pgsp-collapse'; d.style.marginTop = `${s.height}px`; d.contentEditable = 'false'; return d; }, { side: -1, key: `pgc${s.pos}_${Math.round(s.height * 10)}`, ignoreSelection: true, marks: [] }));
         else decos.push(Decoration.widget(s.pos, () => { const d = document.createElement(s.kind === 'line' ? 'span' : 'div'); d.className = s.kind === 'line' ? 'of-docs-pgsp of-pgsp-line' : 'of-docs-pgsp'; d.style.height = `${s.height}px`; d.contentEditable = 'false'; return d; }, { side: -1, key: `pg${s.kind}${s.pos}_${Math.round(s.height)}`, ignoreSelection: true, marks: [] }));
       }
       // sections with another text width than the last one (the body column is the last section's)
@@ -75,15 +76,15 @@ export const Pagination = Extension.create({
           const meta = tr.getMeta(pageKey);
           if (meta && meta.spacers) return { spacers: meta.spacers, dirty: meta.dirty != null ? meta.dirty : Infinity, layout: meta.layout || value.layout };
           if (meta && meta.reset) return { spacers: value.spacers, dirty: 0, layout: [] };
-          if (meta && meta.dirtyAt != null) return { ...value, dirty: Math.min(value.dirty === Infinity ? Number.MAX_SAFE_INTEGER : value.dirty, meta.dirtyAt) };
+          if (meta && meta.dirtyAt != null) {
+            // same spacers → same decorations (a new set would make node views redraw – a picture redrawn fires `load`)
+            const next = { ...value, dirty: Math.min(value.dirty === Infinity ? Number.MAX_SAFE_INTEGER : value.dirty, meta.dirtyAt) };
+            if (decoCache.has(value)) decoCache.set(next, decoCache.get(value));
+            return next;
+          }
           if (!tr.docChanged) return value;
           // first changed position (new document coordinates) → measure again from there
-          let dirty = value.dirty === Infinity ? Infinity : tr.mapping.map(value.dirty, -1);
-          const maps = tr.mapping.maps;
-          maps.forEach((map, k) => map.forEach((oldStart, oldEnd, newStart) => {
-            let p = newStart; for (let j = k + 1; j < maps.length; j++) p = maps[j].map(p, -1);
-            if (p < dirty) dirty = p;
-          }));
+          const dirty = firstChange(tr, value.dirty);
           const spacers = [];
           for (const s of value.spacers) {
             const r = tr.mapping.mapResult(s.pos, -1);
@@ -176,7 +177,43 @@ export const Pagination = Extension.create({
           const dirtyPos = pst.dirty;
           const next = (p) => P.next(p, section);
           const env = { k, rect, view, P, gap };
-          const pushBlock = (offset, top) => { const p = next(page); const push = P.C(p) - top; if (push > 0.5) { out.push({ pos: offset, height: r1(push), kind: 'block' }); shift += push; } page = p; return Math.max(0, push); };
+          /** natural flow bottom (moved by `sh`) of what a keep-with-next block at blocks[i] has to share its page with */
+          const chainBottom = (i0, sh) => {
+            let add = 0;
+            for (let q = i0 + 1; q < blocks.length && q <= i0 + 12; q++) {
+              const { node: n, offset: off } = blocks[q];
+              const e = view.nodeDOM(off);
+              if (!e || e.nodeType !== 1) return null;
+              const nm = n.type.name;
+              if (nm === 'pageBreak' || nm === 'sectionBreak') return null;
+              const pe = view.nodeDOM(blocks[q - 1].offset);
+              const emt = margins(e)[0];
+              if (pe && pe.nodeType === 1) add -= Math.min(margins(pe)[1], emt);
+              const bef = heightBefore(off, true);
+              if (keepsNext(n) && blocks[q + 1]) continue; // a chain: it has to fit as well – the block after it decides
+              if (nm === 'table') return firstRowBottom(e, n, off, bef) + sh + add;
+              const ls = lineBoxes(e, k, rect, bef);
+              return (ls.length ? ls[0].bottom : (e.getBoundingClientRect().bottom - rect.top) / k - bef) + sh + add;
+            }
+            return null;
+          };
+          /** natural bottom of a table's header rows + first body row (what Word keeps with a heading before the table) */
+          const firstRowBottom = (e, n, off, bef) => {
+            e.classList.add('of-pg-nat');
+            try {
+              const table = e.querySelector('table') || e;
+              const trs = [...table.rows];
+              let h = 0;
+              while (h < n.childCount - 1 && n.child(h).childCount && Array.from({ length: n.child(h).childCount }, (_, c) => n.child(h).child(c)).every((c) => c.type.name === 'tableHeader')) h++;
+              const tr = trs[Math.min(h, trs.length - 1)];
+              return tr ? (tr.getBoundingClientRect().bottom - rect.top) / k - bef : (e.getBoundingClientRect().bottom - rect.top) / k - bef;
+            } finally { e.classList.remove('of-pg-nat'); }
+          };
+          // Word drops the space before a paragraph at the top of a page (after an automatic or a manual page break)
+          let curMt = 0;
+          // – but not on the first page of a new section (Word keeps the space after a section break)
+          const startAt = (p, top, keepSpace = false) => P.C(p) - top - (p > 0 && !keepSpace ? curMt : 0);
+          const pushBlock = (offset, top) => { const p = next(page); const push = startAt(p, top); if (push > 0.5) { out.push({ pos: offset, height: r1(push), kind: 'block' }); shift += push; } page = p; return Math.max(0, push); };
           const step = () => {
             const sliceStart = performance.now();
             for (; i < blocks.length; i++) {
@@ -187,22 +224,31 @@ export const Pagination = Extension.create({
               measured++;
               const r = el.getBoundingClientRect();
               const [mt, mb] = margins(el);
+              curMt = mt;
               const before = heightBefore(offset, true);
               const inner = heightBefore(offset + node.nodeSize, false) - before;
               const natTop = (r.top - rect.top) / k - before - mt;
               let top = natTop + shift;
               let bottom = (r.bottom - rect.top) / k - before - inner + mb + shift;
               const name = node.type.name;
+              // Word does not add the space after a paragraph and the space before the next one – the larger one counts
+              // (CSS margins collapse the same way, but not between the flex items of the print layout): a zero-height
+              // widget with a negative margin takes the smaller one back
+              if (i > 0 && mt > 0.5) {
+                const pe = view.nodeDOM(blocks[i - 1].offset);
+                const c = pe && pe.nodeType === 1 ? r1(Math.min(margins(pe)[1], mt)) : 0;
+                if (c > 0.5) { out.push({ pos: offset, height: -c, kind: 'collapse' }); shift -= c; top -= c; bottom -= c; }
+              }
               if (forced) {
                 if (forced === 'section') section++;
                 const p = P.add(section);
-                const push = P.C(p) - top;
+                const push = startAt(p, top, forced === 'section');
                 if (push > 0.5) { out.push({ pos: offset, height: r1(push), kind: 'block' }); shift += push; top += push; bottom += push; }
                 page = p; forced = null;
               }
               while (top >= P.E(page) - 1 && P.pages.length < 5000) {
                 page = next(page);
-                if (top < P.C(page)) { const push = P.C(page) - top; out.push({ pos: offset, height: r1(push), kind: 'block' }); shift += push; top += push; bottom += push; }
+                if (top < P.C(page)) { const push = startAt(page, top); out.push({ pos: offset, height: r1(push), kind: 'block' }); shift += push; top += push; bottom += push; }
               }
               const contentH = P.height(page);
               const tall = bottom - top > contentH - 4;
@@ -224,13 +270,17 @@ export const Pagination = Extension.create({
                   for (const sp of res.spacers || []) { const pos = posAtLine(view, el, lines[sp.line], k, rect, before); if (pos == null || pos <= offset + 1 || (out.length && out[out.length - 1].pos >= pos && out[out.length - 1].kind === 'line')) break; out.push({ pos, height: sp.height, kind: 'line' }); shift += sp.height; bottom += sp.height; }
                   if (res.page != null) page = Math.max(page, res.page);
                 } else if (!startOfPage && !tall) { const push = pushBlock(offset, top); top += push; bottom += push; }
-              } else if (name === 'heading' && bottom > P.E(page) - 30 && !startOfPage && blocks[i + 1]) {
-                // keep a heading together with the text after it
-                const push = pushBlock(offset, top); top += push; bottom += push;
+              } else if (!startOfPage && keepsNext(node) && blocks[i + 1]) {
+                // "keep with next" (headings, and paragraphs marked so): the chain of such blocks moves to the next page
+                // when the first line of what follows it (a table: its header and first row) is not on this page
+                const req = chainBottom(i, shift);
+                if (req != null && req > P.E(page) + 0.5 && req - top <= contentH) { const push = pushBlock(offset, top); top += push; bottom += push; }
               }
-              while (bottom > P.E(page) + 1 && P.pages.length < 5000) { page = next(page); }
+              page = pageAfter(P, page, bottom - mb);
               layout.push({ pos: offset, top: Math.round(top), page, section });
-              if (name === 'pageBreak') forced = 'page';
+              // a page break that ends its paragraph right before a next-page section break makes no page of its own
+              // (Word keeps the paragraph mark with the break) – before, every such section started after an empty page
+              if (name === 'pageBreak') { if (pageBreakCounts(blocks[i + 1] && blocks[i + 1].node)) forced = 'page'; }
               else if (name === 'sectionBreak') { if (node.attrs.type === 'continuous') section++; else forced = 'section'; }
               // same layout as before, after the change → the rest stays
               if (startIdx > 0 && offset > dirtyPos && !forced && blocks[i + 1]) {
@@ -282,7 +332,17 @@ export const Pagination = Extension.create({
         if (ro) ro.observe(view.dom);
         schedule(30);
         // pictures and formulas load later and change heights
-        const onLoad = (e) => { if (e.target && e.target.tagName === 'IMG') { markDirty(Math.max(0, posOf(view, e.target) - 1)); schedule(); } };
+        // only a picture whose size changed moves the text (a picture loaded again at the same size must not restart a
+        // running measurement – a long document would never get its pages)
+        const imgH = new WeakMap();
+        const onLoad = (e) => {
+          const img = e.target;
+          if (!img || img.tagName !== 'IMG' || img.classList.contains('ProseMirror-separator')) return;
+          const h = `${img.offsetWidth}x${img.offsetHeight}`;
+          if (imgH.get(img) === h) return;
+          imgH.set(img, h);
+          markDirty(Math.max(0, posOf(view, img) - 1)); schedule();
+        };
         view.dom.addEventListener('load', onLoad, true);
         const onFonts = () => { if (!view.dom.isConnected) return; markDirty(0); schedule(60); };
         const fonts = typeof document !== 'undefined' && document.fonts;
@@ -500,7 +560,12 @@ function inlineRects(el) {
     for (const r of range.getClientRects()) if (r.height > 0 && r.width > 0) out.push(r);
   }
   // an empty paragraph still has a line
-  if (!out.length) for (const p of el.querySelectorAll('p, h1, h2, h3, h4, h5, h6')) { const r = p.getBoundingClientRect(); if (r.height > 0) out.push(r); }
+  if (!out.length) {
+    // an empty paragraph still has a line – the element itself when it is the paragraph (an empty paragraph that did
+    // not fit was not moved: the next block was drawn over the footer)
+    const ps = el.matches && el.matches('p, h1, h2, h3, h4, h5, h6') ? [el] : el.querySelectorAll('p, h1, h2, h3, h4, h5, h6');
+    for (const p of ps) { const r = p.getBoundingClientRect(); if (r.height > 0) out.push(r); }
+  }
   return out;
 }
 /** text lines of a table cell (client coordinates), spacers hidden */

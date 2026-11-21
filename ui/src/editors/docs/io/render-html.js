@@ -6,18 +6,44 @@
 import { escHtml as esc, pageBox, fillFields, footnotesOf, lineFactor } from './pm.js';
 import { equationHtml } from './equation.js';
 import { tableLook, tableWidthCss, gridOf, cellCss, rowCss, wordTableCss } from './tables.js';
+import { paraCss } from './wordprops.js';
 
 const styleOf = (o) => Object.entries(o).filter(([, v]) => v !== null && v !== undefined && v !== '').map(([k, v]) => `${k}:${v}`).join(';');
 
 export function blockStyle(a = {}) {
-  return styleOf({
+  const word = paraCss(a);
+  return [styleOf({
     'text-align': a.textAlign && a.textAlign !== 'left' ? a.textAlign : null,
     'line-height': a.lineHeight ? `calc(${a.lineHeight} * var(--of-lf, 1))` : null,
     'margin-top': a.spaceBefore != null ? `${a.spaceBefore}pt` : null,
     'margin-bottom': a.spaceAfter != null ? `${a.spaceAfter}pt` : null,
     'margin-left': a.indent ? `${a.indent}pt` : null,
     'text-indent': a.firstLine ? `${a.firstLine}pt` : null,
-  });
+  }), word].filter(Boolean).join(';');
+}
+
+/**
+ * a paragraph whose tabs go to a right (or centre) tab stop – the usual header/footer "left text ⇥ right text" – as
+ * flex pieces spread over the line (the editor measures tab stops itself; the static HTML of headers, footers and
+ * exports did not, so the right part sat right after the left one)
+ */
+function tabPieces(nodes) {
+  const pieces = [[]];
+  for (const n of nodes || []) {
+    if (n.type === 'text' && n.text.includes('	')) {
+      n.text.split('	').forEach((part, k) => { if (k) pieces.push([]); if (part) pieces[pieces.length - 1].push({ ...n, text: part }); });
+    } else pieces[pieces.length - 1].push(n);
+  }
+  return pieces;
+}
+export function tabbedParagraph(a, nodes) {
+  const stops = a && a.tabs;
+  if (!stops || !stops.length) return null;
+  const last = [...stops].sort((x, y) => x.pos - y.pos)[stops.length - 1];
+  if (last.align !== 'right' && last.align !== 'center') return null;
+  const pieces = tabPieces(nodes);
+  if (pieces.length < 2 || pieces.length > 3) return null;
+  return pieces;
 }
 const attr = (name, v) => (v === null || v === undefined || v === '' || v === false ? '' : ` ${name}="${esc(v === true ? 'true' : v)}"`);
 
@@ -95,8 +121,10 @@ function renderBlock(n, ctx) {
   const a = n.attrs || {};
   switch (n.type) {
     case 'paragraph': {
-      const st = blockStyle(a);
-      const inner = renderInline(n.content, ctx);
+      let st = blockStyle(a);
+      const tabbed = tabbedParagraph(a, n.content);
+      if (tabbed) st = [st, 'display:flex;justify-content:space-between;gap:4pt'].filter(Boolean).join(';');
+      const inner = tabbed ? tabbed.map((p) => `<span>${renderInline(p, ctx)}</span>`).join('') : renderInline(n.content, ctx);
       return `<p${a.pstyle ? ` data-style="${esc(a.pstyle)}" class="of-p-${esc(a.pstyle)}"` : ''}${st ? ` style="${st}"` : ''}>${inner || (ctx.export ? '<br>' : '')}</p>`;
     }
     case 'heading': { const l = Math.min(6, Math.max(1, a.level || 1)); const st = blockStyle(a); return `<h${l}${st ? ` style="${st}"` : ''}${ctx.ids ? ` id="h${ctx.h = (ctx.h || 0) + 1}"` : ''}>${renderInline(n.content, ctx)}</h${l}>`; }

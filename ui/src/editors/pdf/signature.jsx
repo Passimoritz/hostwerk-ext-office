@@ -6,7 +6,8 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { Trash2, Eraser, Upload, Undo2, PenLine, Keyboard, Image as ImageIcon, Bookmark, Cloud, HardDrive } from 'lucide-react';
-import { Modal, Btn, Field, Switch } from '@hostwerk/ui';
+import { Modal, Btn, Field } from '@hostwerk/ui';
+import { SwitchRow } from '../_shared/switchrow.jsx';
 import { t } from '@hostwerk/i18n';
 import { colorName } from '../_shared/colors.js';
 import { Keep } from '../_shared/keep.jsx';
@@ -100,7 +101,7 @@ function DrawPad({ color, weight, onChange }) {
         <canvas ref={c} className="of-pdf-sigpad" style={{ width: '100%', maxWidth: W, aspectRatio: `${W} / ${H}` }} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} aria-label="Signature pad" />
         <span className="of-pdf-sigline" aria-hidden="true">✕</span>
       </div>
-      <div className="row"><span className="small muted grow">{count ? t('{n} strokes', { n: count }) : t('Sign with the mouse, a pen or your finger.')}</span>
+      <div className="row of-pdf-sigrow"><span className="small muted grow">{count ? t('{n} strokes', { n: count }) : t('Sign with the mouse, a pen or your finger.')}</span>
         <Btn className="sm ghost" icon={Undo2} disabled={!count} onClick={undo}>Undo stroke</Btn><Btn className="sm ghost" icon={Eraser} disabled={!count} onClick={clear}>Clear</Btn></div>
     </div>
   );
@@ -153,7 +154,7 @@ export default function SignatureDialog({ host, defaultName, onClose, onPick }) 
   if (saved.length) tabs.unshift({ id: 'saved', label: t('Saved'), icon: Bookmark });
   return (
     <Modal title="Add signature" subtitle="Click on the page afterwards to place it – drag a corner to resize." onClose={onClose} size="lg"
-      footer={<><Btn onClick={onClose}>Cancel</Btn><span className="grow" />{tab !== 'saved' && <Switch checked={remember} onChange={setRemember} label={where === 'hostwerk' ? t('Keep in Hostwerk') : t('Remember on this device')} />}<Btn className="primary" disabled={!result} onClick={() => use(result)}>Use signature</Btn></>}>
+      footer={<><Btn onClick={onClose}>Cancel</Btn><span className="grow" />{tab !== 'saved' && <SwitchRow className="of-pdf-sigremember" small checked={remember} onChange={setRemember} label={where === 'hostwerk' ? t('Keep in Hostwerk') : t('Remember on this device')} />}<Btn className="primary" disabled={!result} onClick={() => use(result)}>Use signature</Btn></>}>
       <div className="of-pdf-sigtabs" role="tablist">
         {tabs.map((x) => <button key={x.id} type="button" role="tab" aria-selected={tab === x.id} className={`of-pdf-sigtab${tab === x.id ? ' on' : ''}`} onClick={() => setTab(x.id)}><x.icon size={15} /> {x.label}</button>)}
       </div>

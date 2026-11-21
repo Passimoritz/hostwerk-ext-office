@@ -51,7 +51,7 @@ import { BlockHandles } from './extensions/handles.js';
 import { readDocument, writeDocument, EXPORT_FORMATS, MIME } from './io/index.js';
 import { standaloneHtml } from './io/render-html.js';
 import { mdToHtml } from './io/md.js';
-import { lineFactor, PAGE_SIZES, MM_PX, PT_PX, pageBox, uid, sizeName, walk, inlineText, TEXTBLOCKS } from './io/pm.js';
+import { lineFactor, styleLookVars, PAGE_SIZES, MM_PX, PT_PX, pageBox, uid, sizeName, walk, inlineText, TEXTBLOCKS } from './io/pm.js';
 import { vbaModules } from './io/vba.js';
 import { renderLatex, compareLib } from './lazy.js';
 import { office } from '../../lib/api.js';
@@ -918,6 +918,8 @@ function EditorBody({ file, ext, initial, readOnly, settings, host, collab, join
   const paperVars = {
     '--of-font': fontCss(d.font || ds.font || 'Calibri'), '--of-size': `${d.fontSize || 11}pt`, '--of-lh': d.lineHeight || 1.15, '--of-lf': lineFactor(d.font || ds.font || 'Calibri'), '--of-after': `${d.spaceAfter != null ? d.spaceAfter : 8}pt`,
     '--of-paper': page.color || '#ffffff',
+    ...(d.color ? { '--of-color': d.color } : {}),
+    ...styleLookVars(model.styleLook, d, fontCss),
   };
   const lastPage = pages && pages.length ? pages[pages.length - 1] : null;
   // columns in print layout: one sheet as long as the text (CSS columns cannot break into pages while editing)

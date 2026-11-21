@@ -38,7 +38,7 @@ export const office = {
   meta: (path, patch) => put('/office/meta', { ...(path && typeof path === 'object' ? loc(path) : { path }), ...patch }), // { favorite, tags, color, note }
   tags: () => get('/office/tags'),
   /** favourite / shared / lock marks of the office files in a folder of Hostwerk's Files → { names: { name: {…} } } */
-  marks: ({ root, path, types }) => get(`/office/marks?${q({ root, path, types: types ? 1 : undefined })}`),
+  marks: ({ root, path, types, client }) => get(`/office/marks?${q({ root, path, types: types ? 1 : undefined, client })}`),
   /** "Open with" / default app (SDK 3.15) */
   os: () => get('/office/os'),
   versions: (f) => get(`/office/versions?${q(loc(f))}`),

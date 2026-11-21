@@ -1,5 +1,5 @@
 /* Ribbon with the tabs people know from Excel/Calc: Home, Insert, Page layout, Formulas, Data, Review, View. */
-import { useState } from 'react';
+import { createContext, useContext, useRef, useState } from 'react';
 import { t } from '@hostwerk/i18n';
 import {
   Undo2, Redo2, ClipboardPaste, Scissors, Copy, Paintbrush, Bold, Italic, Underline, Strikethrough, Baseline, PaintBucket, Grid3x3,
@@ -9,9 +9,10 @@ import {
   ListChecks, SquareFunction, Calculator, Plus, Trash2, Palette, DecimalsArrowLeft, DecimalsArrowRight, AArrowUp, AArrowDown, Eraser, Group, Ungroup,
   RefreshCw, CodeXml, PanelTop, BetweenHorizontalStart, BetweenVerticalStart, Table, Columns3, Rows3, FileSpreadsheet, Type, Replace, Lock,
   Image as ImageIcon, Shapes, TableProperties, ChartSpline, Radio, Database, ClipboardList, BellRing, Users, GitCompare, Sparkles, Settings2,
-  ChevronUp, Save, CalendarDays, LayoutGrid, Table2, Trash, Pin,
+  ChevronUp, ChevronDown, Save, CalendarDays, LayoutGrid, Table2, Trash, Pin,
 } from 'lucide-react';
-import { DropBtn, SplitBtn, pickColor, anchorOf, showMenu } from './menus.jsx';
+import { DropBtn, SplitBtn, pickColor, anchorOf, showMenu, Floating } from './menus.jsx';
+import { useRibbonFit, firstIcon } from '../_shared/ribbonfit.js';
 import { CHART_TYPES } from './chartData.js';
 import { CATEGORIES, FUNC_INFO } from './formula/funcinfo.js';
 import { localFn } from './formula/i18n.js';
@@ -26,12 +27,32 @@ const Tool = ({ icon: I, label, title, kbd, onClick, active, disabled, wide }) =
     {I && <I size={15} />}{wide && label && <span>{label}</span>}
   </button>
 );
-const Group_ = ({ label, children }) => <div className="of-sheet-rgroup" role="group" aria-label={label}><div className="of-sheet-rgroup-body">{children}</div><div className="of-sheet-rgroup-label">{label}</div></div>;
+/** collapsed group names of the adaptive ribbon (window too narrow → the right-most groups become drop-downs) */
+const FitCtx = createContext(null);
+function Group_({ label, children, icon }) {
+  const fit = useContext(FitCtx);
+  const [at, setAt] = useState(null);
+  if (fit && fit.has(label)) {
+    const I = icon || firstIcon(children) || LayoutGrid;
+    // a command closes the flyout (like Excel); check boxes, fields and menu buttons keep it open
+    const onClick = (e) => { const b = e.target.closest('button'); if (b && !b.getAttribute('aria-haspopup')) setAt(null); };
+    return (
+      <div className="of-sheet-rgroup is-collapsed" data-group={label} role="group" aria-label={label}>
+        <button type="button" className={`of-sheet-gbtn${at ? ' is-open' : ''}`} title={label} aria-haspopup="true" aria-expanded={!!at} onClick={(e) => setAt(at ? null : anchorOf(e.currentTarget))}>
+          <I size={18} aria-hidden="true" /><span className="of-sheet-gbtn-l">{label}</span><ChevronDown size={12} className="of-sheet-chev" aria-hidden="true" />
+        </button>
+        {at && <Floating at={at} onClose={() => setAt(null)} role="group" label={label} className="of-sheet-flyout"><div className="of-sheet-rgroup-body" onClick={onClick}>{children}</div></Floating>}
+      </div>
+    );
+  }
+  return <div className="of-sheet-rgroup" data-group={label} role="group" aria-label={label}><div className="of-sheet-rgroup-body">{children}</div><div className="of-sheet-rgroup-label" title={label}>{label}</div></div>;
+}
 
 export function Ribbon({ run, cur, flags }) {
   const [tab0, setTab] = useState('home');
   const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem('of-sheet-ribbon') === 'min'; } catch { return false; } });
   const [peek, setPeek] = useState(false);
+  const bodyRef = useRef(null);
   const P = flags.plus || {};
   const collapse = (v) => { setCollapsed(v); setPeek(false); try { localStorage.setItem('of-sheet-ribbon', v ? 'min' : ''); } catch { /* private mode */ } };
   const ro = flags.readOnly;
@@ -40,6 +61,7 @@ export function Ribbon({ run, cur, flags }) {
   // contextual tabs (like Excel: they appear while a table, pivot table or object is selected)
   const CTX = [P.inTable && ['ctx-table', t('Table design')], P.inPivot && ['ctx-pivot', t('PivotTable')], P.objSel && ['ctx-obj', P.objSel.kind === 'image' ? t('Picture') : t('Shape format')]].filter(Boolean);
   const tab = tab0.startsWith('ctx-') && !CTX.some((x) => x[0] === tab0) ? 'home' : tab0;
+  const fit = useRibbonFit(bodyRef, { key: `${tab}:${collapsed ? (peek ? 'peek' : 'min') : ''}` });
   const shapeItems = () => [['rect', 'Rectangle'], ['roundRect', 'Rounded rectangle'], ['ellipse', 'Oval'], ['triangle', 'Triangle'], ['diamond', 'Diamond'], ['rightArrow', 'Arrow'], ['star5', 'Star'], ['callout', 'Speech bubble'], ['line', 'Line'], '-', ['textbox', 'Text box']].map((x) => (x === '-' ? '-' : { label: t(x[1]), onClick: () => run('shape', x[0]) }));
   const numPresets = flags.formatPresets;
   const borderItems = () => [
@@ -153,7 +175,7 @@ export function Ribbon({ run, cur, flags }) {
         <button type="button" className="btn ghost xs" onClick={() => run('commandSearch')} title={t('Search commands and functions')}><Search size={13} /><span className="muted">{t('Search')}</span></button>
         <button type="button" className="btn ghost xs icon" onClick={() => collapse(!collapsed)} aria-label={collapsed ? t('Pin the ribbon') : t('Collapse the ribbon')} title={withKeys(collapsed ? t('Pin the ribbon') : t('Collapse the ribbon'), 'Ctrl+F1')}>{collapsed ? <Pin size={13} /> : <ChevronUp size={13} />}</button>
       </div>
-      {(!collapsed || peek) && <div className={`of-sheet-rbody${collapsed ? ' is-peek' : ''}`} role="toolbar" aria-label={([...TABS, ...CTX].find((x) => x[0] === tab) || TABS[0])[1]}>
+      {(!collapsed || peek) && <FitCtx.Provider value={fit}><div ref={bodyRef} className={`of-sheet-rbody${collapsed ? ' is-peek' : ''}`} role="toolbar" aria-label={([...TABS, ...CTX].find((x) => x[0] === tab) || TABS[0])[1]}>
         {tab === 'home' && <>
           <Group_ label={t('Undo')}>
             <Tool icon={Undo2} label={t('Undo')} kbd="Ctrl+Z" disabled={ro || !flags.canUndo} onClick={() => run('undo')} />
@@ -406,7 +428,7 @@ export function Ribbon({ run, cur, flags }) {
             <Tool icon={Trash} label={t('Delete')} kbd="Del" wide disabled={ro} onClick={() => run('objDelete')} />
           </Group_>
         </>}
-      </div>}
+      </div></FitCtx.Provider>}
     </div>
   );
 }

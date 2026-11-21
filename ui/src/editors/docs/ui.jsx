@@ -2,9 +2,10 @@
  * Small building blocks of the docs ribbon: icon buttons that keep the editor selection, drop-down popovers,
  * colour grid, ribbon groups.
  */
-import { useEffect, useRef, useState, useLayoutEffect } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, LayoutGrid } from 'lucide-react';
+import { firstIcon } from '../_shared/ribbonfit.js';
 import { t } from '@hostwerk/i18n';
 import { withKeys, keyLabel } from '../_shared/keys.js';
 import { colorName } from '../_shared/colors.js';
@@ -20,6 +21,9 @@ export function RB({ icon: Icon, label, title, keys, active, disabled, onClick, 
   );
 }
 
+/** open drop-down panels, oldest first */
+const OPEN = [];
+
 /** a drop-down: trigger button + panel (portal, positioned under the trigger) */
 export function Drop({ icon: Icon, label, title, keys, disabled, active, children, wide, panelClass = '', split = null, className = '' }) {
   const [open, setOpen] = useState(false);
@@ -34,10 +38,14 @@ export function Drop({ icon: Icon, label, title, keys, disabled, active, childre
   }, [open]);
   useEffect(() => {
     if (!open) return undefined;
-    const down = (e) => { if (panel.current && !panel.current.contains(e.target) && btn.current && !btn.current.contains(e.target)) setOpen(false); };
-    const key = (e) => { if (e.key === 'Escape') { e.stopPropagation(); setOpen(false); } };
+    const me = panel.current;
+    if (me) OPEN.push(me);
+    // a click into a panel opened later (a drop-down inside a collapsed group's flyout) keeps this one open
+    const later = (target) => OPEN.slice(OPEN.indexOf(me) + 1).some((b) => b && b.contains(target));
+    const down = (e) => { if (panel.current && !panel.current.contains(e.target) && btn.current && !btn.current.contains(e.target) && !later(e.target)) setOpen(false); };
+    const key = (e) => { if (e.key === 'Escape' && OPEN[OPEN.length - 1] === me) { e.stopPropagation(); setOpen(false); } };
     window.addEventListener('mousedown', down, true); window.addEventListener('keydown', key, true);
-    return () => { window.removeEventListener('mousedown', down, true); window.removeEventListener('keydown', key, true); };
+    return () => { const i = OPEN.indexOf(me); if (i >= 0) OPEN.splice(i, 1); window.removeEventListener('mousedown', down, true); window.removeEventListener('keydown', key, true); };
   }, [open]);
   const tip = withKeys(t(title || label || ''), keys);
   const host = typeof document !== 'undefined' ? document.querySelector('.app') || document.body : null;
@@ -88,11 +96,27 @@ export function ColorGrid({ colors = THEME_COLORS, onPick, noneLabel = 'Automati
   );
 }
 
-export function Group({ label, children, className = '' }) {
+/** collapsed group names of the adaptive ribbon (Set from useRibbonFit) */
+export const FitCtx = createContext(null);
+/** a ribbon group; when the window is too narrow it becomes one drop-down with the group's controls (like Word) */
+export function Group({ label, children, className = '', icon }) {
+  const fit = useContext(FitCtx);
+  if (fit && fit.has(label)) {
+    return (
+      <div className={`of-docs-group is-collapsed ${className}`} data-group={label} role="group" aria-label={t(label)}>
+        <Drop icon={icon || firstIcon(children) || LayoutGrid} label={label} title={label} wide className="of-docs-gbtn" panelClass="of-docs-flyout">
+          {(close) => (
+            // a command closes the flyout; check boxes, fields and nested drop-downs keep it open
+            <div className={`of-docs-group-body ${className}`} onClick={(e) => { const b = e.target.closest('button'); if (b && !b.getAttribute('aria-haspopup') && b.getAttribute('role') !== 'menuitem') close(); }}>{children}</div>
+          )}
+        </Drop>
+      </div>
+    );
+  }
   return (
-    <div className={`of-docs-group ${className}`} role="group" aria-label={t(label)}>
+    <div className={`of-docs-group ${className}`} data-group={label} role="group" aria-label={t(label)}>
       <div className="of-docs-group-body">{children}</div>
-      <div className="of-docs-group-label">{label}</div>
+      <div className="of-docs-group-label" title={t(label)}>{label}</div>
     </div>
   );
 }

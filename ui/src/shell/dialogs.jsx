@@ -355,7 +355,9 @@ export function VersionsSheet({ file, onClose, onRestored, beforeRestore, onComp
   // group the timeline by day
   const days = useMemo(() => { const m = []; for (const v of list || []) { const d = new Date(v.time).toDateString(); const g = m[m.length - 1]; if (g && g.d === d) g.items.push(v); else m.push({ d, when: v.time, items: [v] }); } return m; }, [list]);
   return (
-    <Modal size="xwide" title="Versions" subtitle={<Keep>{file.name}</Keep>} onClose={onClose}
+    // full size only with versions to show: Hostwerk's dialog never shrinks again, so loading and "no versions yet" use the
+    // normal size (growing to xwide later is fine) – no big empty dialog
+    <Modal size={list && list.length ? 'xwide' : ''} title="Versions" subtitle={<Keep>{file.name}</Keep>} onClose={onClose}
       footer={cur ? <>
         <Btn className="ghost" icon={Pencil} onClick={() => label(cur)}>Name …</Btn>
         <Btn className="ghost" icon={Download} onClick={() => dl(cur)}>Download</Btn>
@@ -364,7 +366,7 @@ export function VersionsSheet({ file, onClose, onRestored, beforeRestore, onComp
         {onCompare && <Btn icon={GitCompare} onClick={() => onCompare(cur)}>Compare with now</Btn>}
         <Btn className="primary" icon={RotateCcw} onClick={() => restore(cur)}>Restore</Btn>
       </> : <Btn onClick={onClose}>Close</Btn>}>
-      {err ? <Callout kind="err" dismissible={false}>{err}</Callout> : !list ? <div className="of-shell-versions"><div className="of-shell-timeline">{[0, 1, 2, 3].map((i) => <i key={i} className="sk of-shell-sk-row" />)}</div><div className="of-shell-skel-page" /></div> : !list.length ? (
+      {err ? <Callout kind="err" dismissible={false}>{err}</Callout> : !list ? <div className="of-shell-timeline">{[0, 1, 2].map((i) => <i key={i} className="sk of-shell-sk-row" />)}</div> : !list.length ? (
         <Empty icon={History} title="No versions yet" text={t('Every save keeps the previous content as a version ({n} at most, for {days} days).', { n: settingsNow().general.keepVersions, days: settingsNow().general.versionDays })} />
       ) : (
         <div className="of-shell-versions">

@@ -17,6 +17,7 @@ const G = require('./google');
 const desktop = require('./desktop');
 const { view: versionView } = require('./versions');
 const { checkName, normRel } = require('./paths');
+const { folderMarks } = require('./marks');
 
 const IMG = /^(png|jpe?g|gif|webp|bmp|avif)$/;
 const ACTIVE = /^(html?|xhtml|svg|xml|mht|mhtml)$/; // could run scripts when opened directly → sandboxed
@@ -95,7 +96,7 @@ function routes(host, o) {
   // live refresh: { type: 'office' } after every successful change (debounced)
   let bcTimer = null;
   r.use('/office', (req, res, next) => {
-    if (req.method !== 'GET' && req.method !== 'HEAD') res.on('finish', () => { if (res.statusCode < 400 && !bcTimer) { bcTimer = setTimeout(() => { bcTimer = null; try { host.broadcast({ type: 'office' }); } catch { /* egal */ } }, 250); if (bcTimer.unref) bcTimer.unref(); } });
+    if (req.method !== 'GET' && req.method !== 'HEAD' && !/^\/(un)?lock\/?$/.test(req.path)) res.on('finish', () => { if (res.statusCode < 400 && !bcTimer) { bcTimer = setTimeout(() => { bcTimer = null; try { host.broadcast({ type: 'office' }); } catch { /* egal */ } }, 250); if (bcTimer.unref) bcTimer.unref(); } });
     next();
   });
   r.get('/office/settings', (req, res) => res.json(o.settings()));
@@ -163,18 +164,9 @@ function routes(host, o) {
     let list = [];
     try { list = fs.readdirSync(d.full, { withFileTypes: true }); } catch { return res.json({ names: {} }); }
     const shared = new Set(o.shareList().filter((x) => !S.expired(x)).map((x) => x.key));
-    const names = {};
-    // types=1: every office file of the folder (Hostwerk 3.2.x without files.icon shows the file type as a mark)
-    const types = req.query.types === '1' ? [] : null;
-    for (const e of list.slice(0, 5000)) {
-      if (!e.isFile() || !FORMATS[extOf(e.name)]) continue;
-      const key = d.root ? `@${d.root}/${d.rel ? `${d.rel}/` : ''}${e.name}` : (d.rel ? `${d.rel}/${e.name}` : e.name);
-      const f = o.meta.fields(key);
-      const m = { ...(f.favorite ? { favorite: true } : {}), ...(shared.has(key) ? { shared: true } : {}), ...(f.lock ? { lock: { by: f.lock.by } } : {}), ...((f.tags || []).length ? { tags: f.tags } : {}) };
-      if (Object.keys(m).length) names[e.name] = m;
-      if (types) types.push(e.name);
-    }
-    res.json({ names, ...(types ? { types } : {}) });
+    // types=1: every office file of the folder (Hostwerk 3.2.x without files.icon shows the file type as a mark);
+    // client: the asking window – the locks of its own (closed) editors are not shown
+    res.json(folderMarks({ d, list, meta: o.meta, shared, client: req.query.client ? String(req.query.client) : null, types: req.query.types === '1' }));
   });
 
   /* ---------------- raw ---------------- */
@@ -334,13 +326,21 @@ function routes(host, o) {
   r.post('/office/reveal', desk(desktop.reveal));
 
   /* ---------------- locks ---------------- */
-  // soft lock: { ok, lock: { by, since, other } } – 409 { error, lock } when someone else holds it (force: take it over)
+  // soft lock: { ok, lock: { by, since, other } } – 409 { error, lock } when someone else holds it (force: take it over).
+  // body: { root?, path, client?, sid?, seq? } (EditorHost/ui/src/lib/locks.js). The same user (or the same window)
+  // always takes a lock over silently – a stale lock never blocks the one who left it.
+  const lockBody = (req) => { const x = req.body || {}; return { client: x.client ? String(x.client) : null, sid: x.sid ? String(x.sid) : null, seq: Number(x.seq) }; };
+  // the marks in Files of every window follow at once (files.jsx listens) – not on a mere heartbeat
+  const lockChanged = (l, locked) => { try { host.broadcast({ type: 'office-lock', key: l.key, root: l.root || null, path: l.rel, locked }); } catch { /* egal */ } };
   r.post('/office/lock', (req, res) => {
     const l = lib.loc(b(req)); const cur = o.meta.lockOf(l.key); const by = String((req.body || {}).by || o.userName()).slice(0, 80);
-    if (cur && cur.by !== by && !(req.body || {}).force) return res.status(409).json({ error: host.t('{name} is editing this file right now.', { name: cur.by }), lock: { ...cur, other: true } });
-    res.json({ ok: true, lock: { ...o.meta.lock(l.key, by), other: false } });
+    const x = lockBody(req);
+    if (cur && cur.by !== by && !(x.client && cur.client === x.client) && !(req.body || {}).force) return res.status(409).json({ error: host.t('{name} is editing this file right now.', { name: cur.by }), lock: { by: cur.by, since: cur.since, other: true } });
+    const n = o.meta.lock(l.key, by, Date.now(), x);
+    if (!n.ignored && !n.renewed) lockChanged(l, true);
+    res.json({ ok: true, lock: { by: n.by, since: n.since, other: false, ...(n.ignored ? { ignored: true } : {}) } });
   });
-  r.post('/office/unlock', (req, res) => { const l = lib.loc(b(req)); o.meta.unlock(l.key); res.json({ ok: true }); });
+  r.post('/office/unlock', (req, res) => { const l = lib.loc(b(req)); const gone = o.meta.unlock(l.key, lockBody(req)); if (gone) lockChanged(l, false); res.json({ ok: true, released: gone }); });
 
   /* ---------------- shares ---------------- */
   // url: absolute – remote access (own domain first) if it runs, else the address this request came in on

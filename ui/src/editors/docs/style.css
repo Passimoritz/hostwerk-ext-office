@@ -76,23 +76,34 @@
 .of-docs-sheet { position: relative; flex: none; }
 .of-docs-page { position: absolute; left: 0; background: var(--of-paper, #fff); box-shadow: 0 1px 2px rgba(0, 0, 0, .28), 0 10px 28px -12px rgba(0, 0, 0, .45); border-radius: 1px; }
 .of-docs-body { position: absolute; z-index: 1; }
-.of-docs-hf { position: absolute; font-size: 9pt; color: #404040; overflow: hidden; pointer-events: none; max-height: 40%; }
+.of-docs-hf { position: absolute; z-index: 5; font-size: 9pt; color: #404040; overflow: hidden; pointer-events: none; max-height: 40%; }
 .of-docs-hf p { margin: 0; min-height: 0; } .of-docs-hf table { border-collapse: collapse; width: 100%; } .of-docs-hf td, .of-docs-hf th { border: 0; padding: 0 2pt; vertical-align: top; } .of-docs-hf img { max-height: 60px; }
 .of-al-left { text-align: left; } .of-al-center { text-align: center; } .of-al-right { text-align: right; }
 .of-docs-webpage { width: min(100%, 900px); min-width: 320px; background: var(--of-paper, #fff); box-shadow: 0 1px 3px rgba(0, 0, 0, .25); padding: 40px 56px; box-sizing: border-box; min-height: calc(100% - 20px); }
 .of-docs-after { margin-top: var(--sp-3); }
 
 /* ---------- the paper (editor, previews) ---------- */
-.of-docs-paper { color: #000; font-family: var(--of-font, Calibri, Carlito, sans-serif); font-size: var(--of-size, 11pt); line-height: calc(var(--of-lh, 1.15) * var(--of-lf, 1)); }
+.of-docs-paper { color: var(--of-color, #000); font-family: var(--of-font, Calibri, Carlito, sans-serif); font-size: var(--of-size, 11pt); line-height: calc(var(--of-lh, 1.15) * var(--of-lf, 1)); }
 .of-docs-pm { outline: none; caret-color: #000; word-wrap: break-word; white-space: pre-wrap; tab-size: 36pt; }
+/* ProseMirror's own CSS sets break-spaces: a space at the end of a line then takes room and the line wraps one word
+   earlier than in Word (where it hangs into the margin) – taller table rows, other page breaks */
+.ProseMirror.of-docs-pm, .ProseMirror.of-docs-pm td, .ProseMirror.of-docs-pm th { white-space: pre-wrap; }
 .of-print .of-docs-pm { display: flex; flex-direction: column; min-height: 200px; }
 .of-print .of-docs-pm > * { flex: none; }
 .of-docs-pm p { margin: 0 0 var(--of-after, 8pt); min-height: 1lh; }
 .of-docs-pm h1, .of-docs-pm h2, .of-docs-pm h3, .of-docs-pm h4, .of-docs-pm h5, .of-docs-pm h6 { margin: 12pt 0 4pt; line-height: 1.2; font-weight: 600; }
 .of-docs-pm h1 { font-size: 16pt; color: #2f5496; } .of-docs-pm h2 { font-size: 13pt; color: #2f5496; } .of-docs-pm h3 { font-size: 12pt; color: #1f3763; }
 .of-docs-pm h4 { font-size: 11pt; color: #2f5496; font-style: italic; } .of-docs-pm h5 { font-size: 11pt; color: #2f5496; font-weight: 500; } .of-docs-pm h6 { font-size: 11pt; color: #1f3763; font-weight: 500; }
-.of-docs-pm .of-p-title { font-size: 28pt; line-height: 1.1; margin-bottom: 4pt; letter-spacing: -.5pt; }
-.of-docs-pm .of-p-subtitle { font-size: 14pt; color: #5a5a5a; margin-bottom: 12pt; }
+/* the document's own heading / title styles (docx styles.xml → styleLookVars) win over the built-in look */
+.of-docs-pm h1 { font-size: var(--of-h1-size, 16pt); color: var(--of-h1-color, #2f5496); font-weight: var(--of-h1-weight, 600); font-style: var(--of-h1-style, normal); font-family: var(--of-h1-font, inherit); margin-top: var(--of-h1-mt, 12pt); margin-bottom: var(--of-h1-mb, 4pt); line-height: var(--of-h1-lh, 1.2); text-align: var(--of-h1-align); background-color: var(--of-h1-bg, transparent); border-top: var(--of-h1-bt, none); border-bottom: var(--of-h1-bb, none); border-left: var(--of-h1-bl, none); border-right: var(--of-h1-br, none); padding-top: var(--of-h1-pt, 0); padding-bottom: var(--of-h1-pb, 0); padding-left: var(--of-h1-pl, 0); padding-right: var(--of-h1-pr, 0); margin-left: var(--of-h1-mlx, 0); margin-right: var(--of-h1-mrx, 0); }
+.of-docs-pm h2 { font-size: var(--of-h2-size, 13pt); color: var(--of-h2-color, #2f5496); font-weight: var(--of-h2-weight, 600); font-style: var(--of-h2-style, normal); font-family: var(--of-h2-font, inherit); margin-top: var(--of-h2-mt, 12pt); margin-bottom: var(--of-h2-mb, 4pt); line-height: var(--of-h2-lh, 1.2); text-align: var(--of-h2-align); background-color: var(--of-h2-bg, transparent); border-top: var(--of-h2-bt, none); border-bottom: var(--of-h2-bb, none); border-left: var(--of-h2-bl, none); border-right: var(--of-h2-br, none); padding-top: var(--of-h2-pt, 0); padding-bottom: var(--of-h2-pb, 0); padding-left: var(--of-h2-pl, 0); padding-right: var(--of-h2-pr, 0); margin-left: var(--of-h2-mlx, 0); margin-right: var(--of-h2-mrx, 0); }
+.of-docs-pm h3 { font-size: var(--of-h3-size, 12pt); color: var(--of-h3-color, #1f3763); font-weight: var(--of-h3-weight, 600); font-style: var(--of-h3-style, normal); font-family: var(--of-h3-font, inherit); margin-top: var(--of-h3-mt, 12pt); margin-bottom: var(--of-h3-mb, 4pt); line-height: var(--of-h3-lh, 1.2); text-align: var(--of-h3-align); background-color: var(--of-h3-bg, transparent); border-top: var(--of-h3-bt, none); border-bottom: var(--of-h3-bb, none); border-left: var(--of-h3-bl, none); border-right: var(--of-h3-br, none); padding-top: var(--of-h3-pt, 0); padding-bottom: var(--of-h3-pb, 0); padding-left: var(--of-h3-pl, 0); padding-right: var(--of-h3-pr, 0); margin-left: var(--of-h3-mlx, 0); margin-right: var(--of-h3-mrx, 0); }
+.of-docs-pm h4 { font-size: var(--of-h4-size, 11pt); color: var(--of-h4-color, #2f5496); font-weight: var(--of-h4-weight, 600); font-style: var(--of-h4-style, italic); font-family: var(--of-h4-font, inherit); margin-top: var(--of-h4-mt, 12pt); margin-bottom: var(--of-h4-mb, 4pt); line-height: var(--of-h4-lh, 1.2); text-align: var(--of-h4-align); background-color: var(--of-h4-bg, transparent); border-top: var(--of-h4-bt, none); border-bottom: var(--of-h4-bb, none); border-left: var(--of-h4-bl, none); border-right: var(--of-h4-br, none); padding-top: var(--of-h4-pt, 0); padding-bottom: var(--of-h4-pb, 0); padding-left: var(--of-h4-pl, 0); padding-right: var(--of-h4-pr, 0); margin-left: var(--of-h4-mlx, 0); margin-right: var(--of-h4-mrx, 0); }
+.of-docs-pm h5 { font-size: var(--of-h5-size, 11pt); color: var(--of-h5-color, #2f5496); font-weight: var(--of-h5-weight, 500); font-style: var(--of-h5-style, normal); font-family: var(--of-h5-font, inherit); margin-top: var(--of-h5-mt, 12pt); margin-bottom: var(--of-h5-mb, 4pt); line-height: var(--of-h5-lh, 1.2); text-align: var(--of-h5-align); background-color: var(--of-h5-bg, transparent); border-top: var(--of-h5-bt, none); border-bottom: var(--of-h5-bb, none); border-left: var(--of-h5-bl, none); border-right: var(--of-h5-br, none); padding-top: var(--of-h5-pt, 0); padding-bottom: var(--of-h5-pb, 0); padding-left: var(--of-h5-pl, 0); padding-right: var(--of-h5-pr, 0); margin-left: var(--of-h5-mlx, 0); margin-right: var(--of-h5-mrx, 0); }
+.of-docs-pm h6 { font-size: var(--of-h6-size, 11pt); color: var(--of-h6-color, #1f3763); font-weight: var(--of-h6-weight, 500); font-style: var(--of-h6-style, normal); font-family: var(--of-h6-font, inherit); margin-top: var(--of-h6-mt, 12pt); margin-bottom: var(--of-h6-mb, 4pt); line-height: var(--of-h6-lh, 1.2); text-align: var(--of-h6-align); background-color: var(--of-h6-bg, transparent); border-top: var(--of-h6-bt, none); border-bottom: var(--of-h6-bb, none); border-left: var(--of-h6-bl, none); border-right: var(--of-h6-br, none); padding-top: var(--of-h6-pt, 0); padding-bottom: var(--of-h6-pb, 0); padding-left: var(--of-h6-pl, 0); padding-right: var(--of-h6-pr, 0); margin-left: var(--of-h6-mlx, 0); margin-right: var(--of-h6-mrx, 0); }
+.of-docs-pm .of-p-title { font-size: var(--of-title-size, 28pt); color: var(--of-title-color, inherit); font-weight: var(--of-title-weight, inherit); font-style: var(--of-title-style, inherit); font-family: var(--of-title-font, inherit); margin-top: var(--of-title-mt, 0); margin-bottom: var(--of-title-mb, 4pt); line-height: var(--of-title-lh, 1.1); text-align: var(--of-title-align); background-color: var(--of-title-bg, transparent); border-top: var(--of-title-bt, none); border-bottom: var(--of-title-bb, none); border-left: var(--of-title-bl, none); border-right: var(--of-title-br, none); padding-top: var(--of-title-pt, 0); padding-bottom: var(--of-title-pb, 0); padding-left: var(--of-title-pl, 0); padding-right: var(--of-title-pr, 0); margin-left: var(--of-title-mlx, 0); margin-right: var(--of-title-mrx, 0); }
+.of-docs-pm .of-p-subtitle { font-size: var(--of-subtitle-size, 14pt); color: var(--of-subtitle-color, #5a5a5a); font-weight: var(--of-subtitle-weight, inherit); font-style: var(--of-subtitle-style, inherit); font-family: var(--of-subtitle-font, inherit); margin-top: var(--of-subtitle-mt, 0); margin-bottom: var(--of-subtitle-mb, 12pt); line-height: var(--of-subtitle-lh, inherit); text-align: var(--of-subtitle-align); background-color: var(--of-subtitle-bg, transparent); border-top: var(--of-subtitle-bt, none); border-bottom: var(--of-subtitle-bb, none); border-left: var(--of-subtitle-bl, none); border-right: var(--of-subtitle-br, none); padding-top: var(--of-subtitle-pt, 0); padding-bottom: var(--of-subtitle-pb, 0); padding-left: var(--of-subtitle-pl, 0); padding-right: var(--of-subtitle-pr, 0); margin-left: var(--of-subtitle-mlx, 0); margin-right: var(--of-subtitle-mrx, 0); }
+.of-docs-pm .of-p-title { letter-spacing: var(--of-title-ls, -.5pt); }
 .of-docs-pm .of-p-listparagraph { margin-left: 36pt; }
 .of-docs-pm blockquote { margin: 8pt 24pt; padding-left: 10pt; border-left: 3px solid #b4b4b4; color: #404040; font-style: italic; }
 .of-docs-pm pre { font-family: Consolas, "Courier New", monospace; font-size: 10pt; background: #f4f4f4; padding: 6pt 8pt; border-radius: 3px; white-space: pre-wrap; margin: 0 0 8pt; }
@@ -265,8 +276,8 @@
 /* =====================================================================================================================
    1.1 – Word-like blue for the documents app, a lighter ribbon, interaction helpers, new document structures
    ===================================================================================================================== */
-.of-docs { --of-app: #4f8fe8; --of-app-strong: #79a9f0; --of-app-soft: rgba(79, 143, 232, .16); --of-canvas: #15171b; --of-gap: var(--of-canvas); --of-ease: cubic-bezier(.2, .8, .2, 1); }
-:root[data-theme='light'] .of-docs { --of-app: #185abd; --of-app-strong: #103f85; --of-app-soft: rgba(24, 90, 189, .1); --of-canvas: #d9dde4; }
+.of-docs, .of-docs-flyout { --of-app: #4f8fe8; --of-app-strong: #79a9f0; --of-app-soft: rgba(79, 143, 232, .16); --of-canvas: #15171b; --of-gap: var(--of-canvas); --of-ease: cubic-bezier(.2, .8, .2, 1); }
+:root[data-theme='light'] .of-docs, :root[data-theme='light'] .of-docs-flyout { --of-app: #185abd; --of-app-strong: #103f85; --of-app-soft: rgba(24, 90, 189, .1); --of-canvas: #d9dde4; }
 
 /* ribbon: quick access · own tab bar with the app colour · contextual tabs slide in · one-line mode */
 .of-docs-tabsrow { gap: var(--sp-2); min-height: 38px; }
@@ -363,6 +374,11 @@
 .of-docs-secbreak { display: flex; align-items: center; gap: 8px; margin: 10px 0; color: #6b7280; font: 11px system-ui, sans-serif; user-select: none; }
 .of-docs-secbreak::before, .of-docs-secbreak::after { content: ''; flex: 1; border-top: 2px double #b8bfca; }
 .of-docs-secbreak .btn { order: 3; }
+/* print layout: a next-page section break takes no room on the page (Word draws it only with the formatting marks) –
+   the marker hangs into the empty rest of the page; with room it pushed text, or made an empty page of its own */
+.of-print .of-docs-secbreak.is-next { height: 0; margin: 0; align-items: flex-start; overflow: visible; }
+.of-print .of-docs-secbreak.is-next > * { transform: translateY(4px); }
+.of-print .of-docs-secbreak.is-next::before, .of-print .of-docs-secbreak.is-next::after { margin-top: 12px; }
 .of-docs-secbreak.ProseMirror-selectednode { outline: 2px solid #4a86e8; outline-offset: 2px; }
 .of-docs-diagram { display: inline-block; position: relative; max-width: 100%; vertical-align: bottom; cursor: default; }
 .of-docs-diagram img { display: block; max-width: 100%; height: auto; }
@@ -507,3 +523,18 @@
 .of-docs-tstyle:hover, .of-docs-tstyle.of-on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .of-docs-tstyles table.of-docs-tswatch { width: 100% !important; min-width: 56px; border-collapse: collapse; table-layout: fixed; --of-paper: #fff; }
 .of-docs-tswatch td { height: 7px; padding: 0 !important; }
+
+/* ---------- adaptive ribbon (1.3.2): a group that no longer fits becomes one drop-down (icon over the group name) */
+.of-docs-group.is-collapsed { justify-content: center; padding: 0 var(--sp-1); }
+.of-docs-gbtn > .of-docs-rb.btn { flex-direction: column; justify-content: center; height: auto; min-height: 64px; min-width: 56px; padding: 4px 6px; gap: 2px; }
+.of-docs-gbtn > .of-docs-rb.btn > svg:first-child { width: 18px; height: 18px; }
+.of-docs-gbtn > .of-docs-rb.btn > span { max-width: 84px; min-width: min-content; white-space: normal; text-align: center; line-height: 1.2; text-wrap: balance; hyphens: auto; -webkit-hyphens: auto; font-size: var(--fs-xs); }
+.of-docs-flyout { padding: var(--sp-2); }
+.of-docs-flyout .of-docs-group-body { display: flex; gap: 2px; max-width: min(460px, 90vw); }
+.of-docs-flyout .of-docs-group-body:not(:has(.of-docs-row)) { flex-direction: row; flex-wrap: wrap; align-items: center; }
+.of-docs-flyout .of-docs-group-body:has(.of-docs-row) { flex-direction: column; }
+.of-docs-flyout .of-docs-row { display: flex; align-items: center; gap: 2px; }
+/* the tab row never pushes the mini-ribbon button over a tab: tabs scroll, everything else keeps its size */
+.of-docs-tabs { flex: 0 1 auto; min-width: 0; }
+.of-docs-tabsrow > :not(.of-docs-tabs):not(.grow) { flex: none; }
+.of-docs-tab { flex: none; }

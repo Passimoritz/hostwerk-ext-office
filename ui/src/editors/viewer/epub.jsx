@@ -11,7 +11,7 @@ import { Btn, Seg, Loading, Callout } from '@hostwerk/ui';
 import { t } from '@hostwerk/i18n';
 import { parseXml, kids, text as xtext, local } from '../_shared/xmltree.js';
 import { ActionRow } from './common.jsx';
-import { Keep } from '../_shared/keep.jsx';
+import { Keep, Raw } from '../_shared/keep.jsx';
 import { FileTypeIcon } from '../../lib/fileIcons.jsx';
 
 const dirOf = (p) => p.slice(0, p.lastIndexOf('/') + 1);
@@ -205,7 +205,7 @@ export default function EpubView({ file, bytes, host }) {
     <div className="of-view-epub" onKeyDown={onKey} tabIndex={-1}>
       <div className="of-view-toolbar">
         <button type="button" className={`btn sm ghost${toc ? ' on' : ''}`} onClick={() => setToc(!toc)} aria-pressed={toc} title="Table of contents"><List size={16} /> {t('Contents')}</button>
-        <span className="of-view-ellipsis"><FileTypeIcon name={file.name} size={20} /> <b><Keep>{book.title || file.name}</Keep></b>{book.author && <span className="muted"> · <Keep>{book.author}</Keep></span>}</span>
+        <Raw as="span" className="of-view-ellipsis" title={[book.title || file.name, book.author].filter(Boolean).join(' · ')}><FileTypeIcon name={file.name} size={20} /> <b><Keep>{book.title || file.name}</Keep></b>{book.author && <span className="muted"> · <Keep>{book.author}</Keep></span>}</Raw>
         <span className="grow" />
         <button type="button" className="btn sm ghost icon" title="Smaller text" aria-label="Smaller text" onClick={() => setSz(Math.max(70, size - 10))}><AArrowDown size={16} /></button>
         <span className="small muted">{size} %</span>

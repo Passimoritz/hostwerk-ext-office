@@ -1,7 +1,8 @@
 /* Small UI pieces of the slides editor: ribbon buttons, popovers, colour picker, number field, shape gallery. */
-import { useEffect, useLayoutEffect, useRef, useState, createElement as h } from 'react';
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, createElement as h } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronDown, Ban, Pipette } from 'lucide-react';
+import { ChevronDown, Ban, Pipette, LayoutGrid } from 'lucide-react';
+import { firstIcon } from '../_shared/ribbonfit.js';
 import { t } from '@hostwerk/i18n';
 import { css, SCHEME_KEYS } from './themes.js';
 import { SHAPES, SHAPE_GROUPS, shapePath } from './render/geometry.js';
@@ -20,9 +21,28 @@ export function RB({ icon: Icon, label, title, onClick, active, disabled, big, c
     </button>
   );
 }
-export function Group({ label, children }) {
-  return <div className="of-slides-rgroup" role="group" aria-label={label}><div className="of-slides-rgroup-body">{children}</div><div className="of-slides-rgroup-label">{label}</div></div>;
+/** collapsed group names of the adaptive ribbon (Set from useRibbonFit) */
+export const FitCtx = createContext(null);
+/** a ribbon group; when the ribbon is too narrow it becomes one drop-down button with the group's controls */
+export function Group({ label, children, icon, keep }) {
+  const fit = useContext(FitCtx);
+  if (fit && fit.has(label)) {
+    return (
+      <div className="of-slides-rgroup is-collapsed" data-group={label} role="group" aria-label={label}>
+        <Pop big icon={icon || firstIcon(children) || LayoutGrid} label={label} className="of-slides-rgroup-btn" content={(close) => (
+          // a command closes the flyout (like Office); check boxes, fields and nested drop-downs keep it open
+          <div className="of-slides-flyout" role="group" aria-label={label} onClick={(e) => { const b = e.target.closest('button'); if (b && !b.getAttribute('aria-haspopup') && !b.closest('.of-slides-trgallery, .of-slides-themestrip')) close(); }}>
+            <div className="of-slides-rgroup-body">{children}</div>
+          </div>
+        )} />
+      </div>
+    );
+  }
+  return <div className="of-slides-rgroup" data-group={label} data-fit={keep ? 'keep' : undefined} role="group" aria-label={label}><div className="of-slides-rgroup-body">{children}</div><div className="of-slides-rgroup-label" title={label}>{label}</div></div>;
 }
+
+/** open popovers, oldest first – a click into a popover opened later (nested) does not close the earlier one */
+const OPEN = [];
 
 /** button that opens a popover; content(close) */
 export function Pop({ icon, label, title, disabled, content, big, className = '', width, active, split, onMain, kbd }) {
@@ -42,17 +62,21 @@ export function Pop({ icon, label, title, disabled, content, big, className = ''
   }, [open, width]);
   useEffect(() => {
     if (!open) return undefined;
-    const down = (e) => { if (box.current && !box.current.contains(e.target) && btn.current && !btn.current.contains(e.target)) setOpen(false); };
-    const key = (e) => { if (e.key === 'Escape') { e.stopPropagation(); setOpen(false); } };
+    const me = box.current;
+    if (me) OPEN.push(me);
+    const later = (target) => { const i = OPEN.indexOf(me); return OPEN.slice(i + 1).some((b) => b && b.contains(target)); };
+    const down = (e) => { if (box.current && !box.current.contains(e.target) && btn.current && !btn.current.contains(e.target) && !later(e.target)) setOpen(false); };
+    // Esc closes the newest popover only
+    const key = (e) => { if (e.key === 'Escape' && OPEN[OPEN.length - 1] === me) { e.stopPropagation(); setOpen(false); } };
     window.addEventListener('mousedown', down, true); window.addEventListener('keydown', key, true);
-    return () => { window.removeEventListener('mousedown', down, true); window.removeEventListener('keydown', key, true); };
+    return () => { const i = OPEN.indexOf(me); if (i >= 0) OPEN.splice(i, 1); window.removeEventListener('mousedown', down, true); window.removeEventListener('keydown', key, true); };
   }, [open]);
   const host = typeof document !== 'undefined' ? document.querySelector('.app') || document.body : null;
   const Icon = icon;
   return (
     <>
       <span className={`of-slides-popwrap ${split ? 'split' : ''}`}>
-        {split && <RB icon={icon} title={title || label} onClick={onMain} disabled={disabled} active={active} big={big} kbd={kbd} />}
+        {split && <RB icon={icon} label={big ? label : undefined} title={title || label} onClick={onMain} disabled={disabled} active={active} big={big} kbd={kbd} />}
         <button type="button" ref={btn} className={`of-slides-rb ${big ? 'big' : ''} ${open ? 'on' : ''} ${active && !split ? 'on' : ''} ${className}`} disabled={disabled} title={title || label} aria-label={title || label} aria-haspopup="true" aria-expanded={open}
           onMouseDown={(e) => e.preventDefault()} onClick={() => setOpen((o) => !o)}>
           {!split && Icon && <Icon size={big ? 22 : 16} aria-hidden="true" />}
@@ -61,7 +85,7 @@ export function Pop({ icon, label, title, disabled, content, big, className = ''
         </button>
       </span>
       {open && host && createPortal(
-        <div ref={box} className="of-slides-pop" style={{ left: pos.left, top: pos.top, width }} onMouseDown={(e) => { if (!/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) e.preventDefault(); }}>
+        <div ref={box} className="of-slides-pop" style={{ left: pos.left, top: pos.top, width: width ? Math.min(width, (typeof window !== 'undefined' ? window.innerWidth : 9999) - 16) : undefined }} onMouseDown={(e) => { if (!/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) e.preventDefault(); }}>
           {content(() => setOpen(false))}
         </div>, host)}
     </>

@@ -199,6 +199,7 @@ export const SectionBreak = Node.create({
       dom.className = 'of-docs-secbreak';
       const draw = (n) => {
         const a = n.attrs; const p = a.page || {};
+        dom.classList.toggle('is-next', a.type !== 'continuous');
         dom.innerHTML = '';
         const l = document.createElement('span');
         l.textContent = `${a.type === 'continuous' ? t('Section break (continuous)') : t('Section break (next page)')}${p.size ? ` · ${p.size === 'custom' ? '' : p.size} ${p.orientation === 'landscape' ? t('Landscape') : t('Portrait')}` : ''}`;
@@ -239,7 +240,7 @@ export const Diagram = Node.create({
       };
       draw(node);
       dom.addEventListener('dblclick', (e) => { e.preventDefault(); if (this.options.onEdit) this.options.onEdit(typeof getPos === 'function' ? getPos() : null, node); });
-      return { dom, update: (n) => { if (n.type.name !== 'diagram') return false; node = n; draw(n); return true }, ignoreMutation: () => true, selectNode: () => dom.classList.add('of-sel'), deselectNode: () => dom.classList.remove('of-sel') };
+      return { dom, update: (n) => { if (n.type.name !== 'diagram') return false; if (n.attrs !== node.attrs) draw(n); node = n; return true }, ignoreMutation: () => true, selectNode: () => dom.classList.add('of-sel'), deselectNode: () => dom.classList.remove('of-sel') };
     };
   },
 });

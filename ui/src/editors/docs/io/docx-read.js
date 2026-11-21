@@ -104,6 +104,8 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
     const dppr = dd && kid(kid(dd, 'w:pPrDefault'), 'w:pPr');
     if (drpr && W(drpr, 'lang')) docLang = W(drpr, 'lang').a['w:val'] || null;
     if (drpr) { const f = fontOf(W(drpr, 'rFonts')); if (f) model.defaults.font = f; const sz = W(drpr, 'sz'); if (sz) model.defaults.fontSize = Number(val(sz)) / 2; }
+    // the document's text colour (Word: docDefaults / Normal) – the page showed black instead
+    const dcol = drpr && val(W(drpr, 'color')); if (dcol && dcol !== 'auto' && /^[0-9A-Fa-f]{6}$/.test(dcol)) model.defaults.color = `#${dcol}`;
     if (dppr) { const sp = W(dppr, 'spacing'); if (sp) { if (sp.a['w:after'] != null) model.defaults.spaceAfter = Number(sp.a['w:after']) / 20; if (sp.a['w:line'] && (sp.a['w:lineRule'] || 'auto') === 'auto') model.defaults.lineHeight = Math.round((Number(sp.a['w:line']) / 240) * 100) / 100; } } else { model.defaults.spaceAfter = 0; model.defaults.lineHeight = 1; }
     for (const s of kids(sr, 'w:style')) {
       const id = s.a['w:styleId'];
@@ -113,6 +115,7 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
       if (st.def && st.type === 'paragraph') {
         // "Normal" may carry the real default font/size/spacing
         const rp = st.rPr; if (rp) { const f = fontOf(W(rp, 'rFonts')); if (f) model.defaults.font = f; const sz = W(rp, 'sz'); if (sz) model.defaults.fontSize = Number(val(sz)) / 2; }
+        const ncol = rp && val(W(rp, 'color')); if (ncol && ncol !== 'auto' && /^[0-9A-Fa-f]{6}$/.test(ncol)) model.defaults.color = `#${ncol}`;
         const pp = st.pPr; const sp = pp && W(pp, 'spacing'); if (sp) { if (sp.a['w:after'] != null) model.defaults.spaceAfter = Number(sp.a['w:after']) / 20; if (sp.a['w:line'] && (sp.a['w:lineRule'] || 'auto') === 'auto') model.defaults.lineHeight = Math.round((Number(sp.a['w:line']) / 240) * 100) / 100; }
       }
     }
@@ -139,6 +142,29 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
     }
     return 0;
   };
+  // the look of the document's own heading / title styles (Word shows them – the editor's built-in look was used before:
+  // other sizes, colours and spacing, so every heading moved the text and the page breaks)
+  const lookOf = (id) => {
+    const o = {};
+    for (const st of styleChain(id)) {
+      if (st.def) continue;
+      if (st.pPr) {
+        const pp = plainPara(st.pPr); for (const k of ['before', 'after', 'lineHeight', 'align', 'indent']) if (pp[k] != null) o[k] = pp[k];
+        const xp = paraPropsFromPPr(st.pPr, { kid, kids }); for (const k of ['pborders', 'pshading', 'rightIndent']) if (xp[k] != null) o[k] = xp[k];
+      }
+      if (st.rPr) { const rr = plainRun(st.rPr); for (const k of ['size', 'color', 'font', 'b', 'i']) if (rr[k] != null) o[k] = rr[k]; }
+    }
+    return Object.keys(o).length ? o : null;
+  };
+  model.styleLook = {};
+  for (const st of Object.values(styles)) {
+    if (st.type !== 'paragraph') continue;
+    const m = /^(?:heading|überschrift)\s*([1-6])$/i.exec(st.name);
+    const key = m ? `h${m[1]}` : st.name === 'title' || st.name === 'titel' ? 'title' : st.name === 'subtitle' || st.name === 'untertitel' ? 'subtitle' : null;
+    if (!key || model.styleLook[key]) continue;
+    const look = lookOf(st.id);
+    if (look) model.styleLook[key] = look;
+  }
   const roleOfStyle = (id) => {
     const s = styles[id]; if (!s) return null;
     const n = s.name;
@@ -173,7 +199,9 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
     const n = nums[numId]; if (!n) return null;
     const l = (abstracts[n.abs] || {})[ilvl] || (abstracts[n.abs] || {})[0];
     if (!l || l.fmt === 'none') return null;
-    if (l.fmt === 'bullet') return { kind: /[☐☑☒□■]/.test(l.text) ? 'task' : 'bullet', start: 1 };
+    // only ballot boxes make a check list – ■ / □ / ▪ are ordinary (square) bullets in Word: a list with them showed
+    // check boxes in front of every item
+    if (l.fmt === 'bullet') return /^[☐☑☒]$/.test(l.text.trim()) ? { kind: 'task', start: 1 } : { kind: 'bullet', start: 1, listStyle: /^[■□▪▫◼◻]$/.test(l.text.trim()) ? 'square' : /^[○◦o]$/.test(l.text.trim()) ? 'circle' : null };
     const ls = { lowerLetter: 'lower-alpha', upperLetter: 'upper-alpha', lowerRoman: 'lower-roman', upperRoman: 'upper-roman' }[l.fmt] || (/%\d\.%\d/.test(l.text) ? 'outline' : null);
     return { kind: 'ordered', listStyle: ls, start: n.over[ilvl] != null ? n.over[ilvl] : l.start };
   };
@@ -602,9 +630,11 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
     const ind = W(pPr, 'ind');
     if (ind) {
       const l = ind.a['w:left'] || ind.a['w:start'];
-      if (l != null) o.indent = Math.round(Number(l) / 20);
-      if (ind.a['w:hanging']) o.firstLine = -Math.round(Number(ind.a['w:hanging']) / 20);
-      else if (ind.a['w:firstLine']) o.firstLine = Math.round(Number(ind.a['w:firstLine']) / 20);
+      // to 0.05 pt (= 1 twip): whole points moved text (8.5 pt became 9 pt) and changed it on saving
+      const pt = (v) => Math.round(Number(v) / 20 * 20) / 20;
+      if (l != null) o.indent = pt(l);
+      if (ind.a['w:hanging']) o.firstLine = -pt(ind.a['w:hanging']);
+      else if (ind.a['w:firstLine']) o.firstLine = pt(ind.a['w:firstLine']);
     }
     if (W(pPr, 'pageBreakBefore') && onOff(W(pPr, 'pageBreakBefore'))) o.pageBreakBefore = true;
     return o;
@@ -788,6 +818,9 @@ export async function readDocx(bytes, settings, { ext = 'docx' } = {}) {
     }
     const mar = W(sect, 'pgMar');
     if (mar) page.margins = { top: twipToMm(Math.abs(Number(mar.a['w:top'] || 1440))), right: twipToMm(mar.a['w:right'] || 1440), bottom: twipToMm(Math.abs(Number(mar.a['w:bottom'] || 1440))), left: twipToMm(mar.a['w:left'] || 1440) };
+    // where Word puts the header / footer (distance from the paper edge) – only for the print layout, the writer keeps the original pgMar values
+    if (mar && mar.a['w:header'] != null) page.headerMm = twipToMm(mar.a['w:header']);
+    if (mar && mar.a['w:footer'] != null) page.footerMm = twipToMm(mar.a['w:footer']);
     const cols = W(sect, 'cols');
     page.columns = cols && Number(cols.a['w:num']) > 1 ? Math.min(3, Number(cols.a['w:num'])) : 1;
     const hf = {};
@@ -905,7 +938,7 @@ function nestList(run) {
       }
       const type = l.kind === 'ordered' ? 'orderedList' : l.kind === 'task' ? 'taskList' : 'bulletList';
       if (!cur || cur.type !== type || (cur.__num !== l.numId && level === minLevel && type === 'orderedList')) {
-        cur = { type, attrs: type === 'orderedList' ? { start: l.start || 1, listStyle: l.listStyle || null, ox: l.numId ? { numId: l.numId } : null } : type === 'bulletList' ? { listStyle: null, ox: l.numId ? { numId: l.numId } : null } : {}, content: [], __num: l.numId };
+        cur = { type, attrs: type === 'orderedList' ? { start: l.start || 1, listStyle: l.listStyle || null, ox: l.numId ? { numId: l.numId } : null } : type === 'bulletList' ? { listStyle: l.listStyle || null, ox: l.numId ? { numId: l.numId } : null } : {}, content: [], __num: l.numId };
         lists.push(cur);
       }
       const p = it.node.type === 'heading' ? { ...it.node, type: 'paragraph', attrs: { ...it.node.attrs } } : it.node;

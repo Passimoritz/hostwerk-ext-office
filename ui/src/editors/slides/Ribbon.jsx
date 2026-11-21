@@ -1,5 +1,5 @@
 /* The ribbon: Home, Insert, Design, Transitions, Animations, Slide show, Review, View (+ contextual Format tab). */
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Plus, LayoutTemplate, RotateCcw, FolderPlus, ClipboardPaste, Scissors, Copy, Paintbrush, Bold, Italic, Underline, Strikethrough, Superscript, Subscript,
   RemoveFormatting, Baseline, Highlighter, CaseSensitive, AArrowUp, AArrowDown, List, ListOrdered, IndentDecrease, IndentIncrease, AlignLeft, AlignCenter,
@@ -16,7 +16,8 @@ import { IconPicker, EffectGallery } from './Extras.jsx';
 import { effectLabel, CLASS_LABEL } from './anim.js';
 import { createElement as h } from 'react';
 import { t } from '@hostwerk/i18n';
-import { RB, Group as G, Pop, Menu, ColorPop, ColorGrid, Num, ShapeGallery, ShapeIcon } from './controls.jsx';
+import { RB, Group as G, Pop, Menu, ColorPop, ColorGrid, Num, ShapeGallery, ShapeIcon, FitCtx } from './controls.jsx';
+import { useRibbonFit } from '../_shared/ribbonfit.js';
 import SlideView from './render/SlideView.jsx';
 import { THEMES, LAYOUT_KINDS, themeData, buildLayouts, css } from './themes.js';
 import { SIZES, S } from './units.js';
@@ -99,6 +100,7 @@ function TablePicker({ onPick, close }) {
 
 export default function Ribbon({ c, tab, setTab, collapsed, setCollapsed }) {
   const [peek, setPeek] = useState(false);
+  const bodyRef = useRef(null);
   const { doc, slide, selEls, fmt, readOnly, state } = c;
   const has = selEls.length > 0;
   const hasText = has && selEls.some((e) => e.text || e.type === 'table');
@@ -110,6 +112,7 @@ export default function Ribbon({ c, tab, setTab, collapsed, setCollapsed }) {
   const cur = tabs.some((x) => x.id === tab) ? tab : 'home';
   const tr = (slide && slide.transition) || { type: 'none' };
   const selAnim = c.selAnim || null;
+  const fit = useRibbonFit(bodyRef, { key: `${cur}:${ctxTab || ''}:${collapsed ? 'min' : ''}` });
 
   const fontGroup = (
     <G label={t('Font')}>
@@ -202,7 +205,8 @@ export default function Ribbon({ c, tab, setTab, collapsed, setCollapsed }) {
         <RB icon={Presentation} label={t('Present')} title={t('Present from the current slide')} kbd="Shift+F5" onClick={() => c.present('current')} />
         {setCollapsed && <RB icon={collapsed ? ChevronDown : ChevronUp} title={collapsed ? t('Show the ribbon') : t('Collapse the ribbon')} kbd="Ctrl+F1" className="of-slides-ribbontoggle" onClick={() => { setCollapsed(!collapsed); setPeek(false); }} />}
       </div>
-      <div className="of-slides-rbody" role="tabpanel">
+      <FitCtx.Provider value={fit}>
+      <div className="of-slides-rbody" role="tabpanel" ref={bodyRef}>
         {cur === 'home' && <>
           <G label={t('Slides')}>
             <Pop icon={Plus} label={t('New slide')} big split onMain={() => c.newSlide()} kbd="Ctrl+M" disabled={ro} width={500} content={(close) => <LayoutPicker doc={doc} close={close} onPick={(k) => c.newSlide(k)} />} />
@@ -436,6 +440,7 @@ export default function Ribbon({ c, tab, setTab, collapsed, setCollapsed }) {
           <G label={t('Size')}><RB icon={PanelRight} label={t('Format pane')} big active={state.pane === 'format'} onClick={() => c.togglePane('format')} /></G>
         </>}
       </div>
+      </FitCtx.Provider>
     </div>
   );
 }
@@ -491,7 +496,7 @@ function BackgroundPop({ c, close }) {
       )}
       {kind === 'image' && <button type="button" className="btn sm" onClick={() => { close(); c.backgroundPicture(); }}><ImagePlus size={14} />{t('Choose picture …')}</button>}
       <label className="row-tight small"><input type="checkbox" checked={slide.showMaster === false} onChange={(e) => c.hideBackgroundGraphics(e.target.checked)} />{t('Hide background graphics')}</label>
-      <div className="row-tight">
+      <div className="row-tight of-slides-wraprow">
         <button type="button" className="btn xs" onClick={() => { close(); c.backgroundToAll(); }}>{t('Apply to all')}</button>
         <button type="button" className="btn xs ghost" onClick={() => { close(); c.setBackground(null); }}>{t('Reset background')}</button>
       </div>

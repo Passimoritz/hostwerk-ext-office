@@ -40,6 +40,9 @@ function gridCols(node) {
 export class OfTableView extends TableView {
   constructor(node, cellMinWidth) { super(node, cellMinWidth); this.applyWord(node); }
   update(node) { if (!super.update(node)) return false; this.applyWord(node); return true; }
+  /** our own class/style changes on the wrapper (the print layout measures a table without its spacers by a class on
+   *  it) are no edit – read as one, ProseMirror redrew the blocks around the table and pictures there loaded again */
+  ignoreMutation(m) { if (m.type === 'attributes' && m.target === this.dom) return true; return super.ignoreMutation(m); }
   applyWord(node) {
     const a = node.attrs || {};
     const t = this.table;

@@ -1,22 +1,23 @@
 /* Dialogs: header & footer, custom slide size, chart data. */
 import { useState } from 'react';
-import { Modal, Btn, Field, Switch } from '@hostwerk/ui';
+import { Modal, Btn, Field } from '@hostwerk/ui';
 import { Plus, Trash2 } from 'lucide-react';
 import { t } from '@hostwerk/i18n';
 import { emuToCm, cmToEmu, emuToIn, inToEmu } from './units.js';
 import { Raw } from '../_shared/keep.jsx';
+import { SwitchRow } from '../_shared/switchrow.jsx';
 
 export function FooterDialog({ footer, onClose, onApply }) {
   const [f, setF] = useState({ text: '', showFooter: false, showNumber: false, showDate: false, date: '', hideOnTitle: true, ...(footer || {}) });
   return (
     <Modal title={t('Header & footer')} onClose={onClose} footer={<><Btn onClick={onClose}>{t('Cancel')}</Btn><Btn className="primary" onClick={() => { onApply(f); onClose(); }}>{t('Apply to all')}</Btn></>}>
       <div className="stack">
-        <Switch checked={f.showDate} onChange={(v) => setF({ ...f, showDate: v })} label={t('Date and time')} />
+        <SwitchRow checked={f.showDate} onChange={(v) => setF({ ...f, showDate: v })} label={t('Date and time')} />
         {f.showDate && <Field label={t('Fixed date (empty = today)')}><input className="input" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></Field>}
-        <Switch checked={f.showNumber} onChange={(v) => setF({ ...f, showNumber: v })} label={t('Slide number')} />
-        <Switch checked={f.showFooter} onChange={(v) => setF({ ...f, showFooter: v })} label={t('Footer')} />
+        <SwitchRow checked={f.showNumber} onChange={(v) => setF({ ...f, showNumber: v })} label={t('Slide number')} />
+        <SwitchRow checked={f.showFooter} onChange={(v) => setF({ ...f, showFooter: v })} label={t('Footer')} />
         {f.showFooter && <Field label={t('Footer text')}><input className="input" value={f.text} onChange={(e) => setF({ ...f, text: e.target.value })} /></Field>}
-        <Switch checked={f.hideOnTitle} onChange={(v) => setF({ ...f, hideOnTitle: v })} label={t('Don’t show on title slide')} />
+        <SwitchRow checked={f.hideOnTitle} onChange={(v) => setF({ ...f, hideOnTitle: v })} label={t('Don’t show on title slide')} />
       </div>
     </Modal>
   );

@@ -16,6 +16,7 @@ import { t } from '@hostwerk/i18n';
 import { keyLabel } from '../_shared/keys.js';
 import { Keep, Raw } from '../_shared/keep.jsx';
 import { docToHtml } from './io/render-html.js';
+import { hfDist } from './io/pm.js';
 import { pageKey } from './extensions/paginate.js';
 
 /* ---------------- commands ("/" menu, palette, context menu) ---------------- */
@@ -274,8 +275,8 @@ export function PagesLayer({ pages, scrollRef, zoom, model, sectionList, title, 
     const foot = hfFor(model, sa, i, idx, 'footer');
     out.push(
       <div key={i} className="of-docs-page" style={{ top: p.top, height: p.h, width: p.w }} aria-hidden="true" title={t('Double-click the top or bottom margin to edit the header or footer')}>
-        {head && <div className="of-docs-hf of-hf-top of-docs-paper" style={{ top: Math.max(6, p.mt * 0.42), left: p.ml, right: p.mr }} dangerouslySetInnerHTML={{ __html: hfHtml(head, i + 1, pages.length, title) }} />}
-        {foot && <div className="of-docs-hf of-hf-bottom of-docs-paper" style={{ bottom: Math.max(6, p.mb * 0.4), left: p.ml, right: p.mr }} dangerouslySetInnerHTML={{ __html: hfHtml(foot, i + 1, pages.length, title) }} />}
+        {head && <div className="of-docs-hf of-hf-top of-docs-paper" style={{ top: hfDist(sa, model, 'headerMm', p.mt), left: p.ml, right: p.mr }} dangerouslySetInnerHTML={{ __html: hfHtml(head, i + 1, pages.length, title) }} />}
+        {foot && <div className="of-docs-hf of-hf-bottom of-docs-paper" style={{ bottom: hfDist(sa, model, 'footerMm', p.mb), left: p.ml, right: p.mr }} dangerouslySetInnerHTML={{ __html: hfHtml(foot, i + 1, pages.length, title) }} />}
         <span className="of-docs-pageno">{i + 1}</span>
       </div>,
     );

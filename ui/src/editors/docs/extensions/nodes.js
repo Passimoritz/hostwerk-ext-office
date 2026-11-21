@@ -199,7 +199,7 @@ function floatingView(node, editor, getPos) {
   dom.addEventListener('pointercancel', () => { drag = null; dom.classList.remove('is-dragging'); box.style.transform = ''; });
   return {
     dom,
-    update: (n) => { if (n.type.name !== 'preserved' || !n.attrs.float) return false; a = n.attrs; st = paint(); box.append(tag); return true; },
+    update: (n) => { if (n.type.name !== 'preserved' || !n.attrs.float) return false; if (n.attrs === a) return true; a = n.attrs; st = paint(); box.append(tag); return true; },
     selectNode: () => dom.classList.add('of-sel'), deselectNode: () => dom.classList.remove('of-sel'),
     stopEvent: (e) => /^(pointer|mouse|click|dblclick|dragstart)/.test(e.type),
     ignoreMutation: () => true,
@@ -266,7 +266,10 @@ export const ImageEx = Image.extend({
       let cur = node;
       const draw = (n) => {
         const a = n.attrs;
-        img.src = a.src; img.alt = a.alt || ''; img.title = a.alt || '';
+        // the same src again would reload the picture (a new load event → the print layout measures again → the view
+        // updates → load …): set it only when it really changed
+        if (img.getAttribute('src') !== (a.src || '')) img.src = a.src || '';
+        img.alt = a.alt || ''; img.title = a.alt || '';
         img.style.width = a.width ? `${a.width}px` : '';
         wrap.className = `of-docs-img${a.align ? ` of-img-${a.align}` : ''}${a.wrap === 'square' ? ' of-img-wrap' : ''}`;
       };
