@@ -1,5 +1,6 @@
 /* Office – shell (Files integration, editor host, settings, dialogs). Only what Hostwerk's kit lacks, all from tokens. */
 /* hostwerk-allow: colors – thumbnails of documents sit on white paper in both themes */
+/* hostwerk-allow: layout – .of-shell-thumbpage renders off-screen (left: -12000px) at a fixed page width only to take a thumbnail picture */
 
 /* ---------- kind colours (tokens only: blue = info, green = ok, orange = warn, red = err) ---------- */
 .of-shell-k-docs { --of-k: var(--info, var(--accent)); }
@@ -31,8 +32,8 @@
 .of-shell-pick { border: 1px solid var(--line); border-radius: var(--r-lg); padding: var(--sp-2); max-height: 220px; overflow: auto; background: var(--surface); margin-top: var(--sp-2); }
 .of-shell-pick.is-tall { max-height: min(50vh, 420px); margin-top: 0; }
 
-/* main column */
-.btn.on { background: var(--accent-soft); color: var(--accent-text); }
+/* main column – own class: a bare .btn.on would recolour every active button in all of Hostwerk (native ui shares its page) */
+.btn.of-on { background: var(--accent-soft); color: var(--accent-text); }
 
 /* grid */
 .of-shell-tile.is-over, .of-shell-tr.is-over { box-shadow: inset 0 0 0 2px var(--accent); background: var(--accent-soft); }
@@ -271,7 +272,8 @@
 .of-shell-semantic:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .of-shell-hitsinfo { margin-top: calc(var(--sp-2) * -1); }
 
-.of-shell-tabs { display: flex; gap: 2px; padding: 3px; border-radius: var(--r-lg); background: var(--surface-2); border: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+/* wraps instead of scrolling: with a hidden scrollbar the last views (Trash) were out of reach in a narrow pane */
+.of-shell-tabs { display: flex; flex-wrap: wrap; gap: 2px; padding: 3px; border-radius: var(--r-lg); background: var(--surface-2); border: 1px solid var(--line); }
 .of-shell-tab { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 var(--sp-3); border: 0; border-radius: var(--r-md); background: none; color: var(--text-2); font: inherit; font-size: var(--fs-sm); white-space: nowrap; cursor: pointer; transition: background .14s ease, color .14s ease; }
 .of-shell-tab:hover { color: var(--text); background: var(--surface-3); }
 .of-shell-tab.on { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: var(--shadow); }
@@ -551,7 +553,7 @@
 @container ofset (max-width: 760px) {
   .of-set.settings-layout { grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); }
   .of-set .settings-nav-wrap { position: static; }
-  .of-set .settings-nav { flex-direction: row; overflow-x: auto; padding-bottom: 2px; scrollbar-width: thin; }
+  .of-set .settings-nav { flex-direction: row; flex-wrap: wrap; } /* all sections stay visible (a scrolling row hid the last one at 1024 px) */
   .of-set .settings-nav-item { flex: 0 0 auto; }
 }
 .of-set-pane { display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; container-type: inline-size; container-name: ofpane; }

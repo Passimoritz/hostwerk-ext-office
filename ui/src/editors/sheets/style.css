@@ -1,5 +1,6 @@
 /* Spreadsheet editor – only what Hostwerk's kit doesn't have. The sheet area is paper (white, black text) in both themes.
-   hostwerk-allow: colors – grid, cells, notes, charts and the active sheet tab are paper/document colours like in Excel, not UI colours */
+   hostwerk-allow: colors – grid, cells, notes, charts and the active sheet tab are paper/document colours like in Excel, not UI colours
+   hostwerk-allow: scale – form controls inside the sheet (drop-down, button, spin) are drawn like Excel's at cell size, not as Hostwerk controls */
 .of-sheet-root { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; background: var(--bg); color: var(--text); position: relative; }
 .of-sheet-root :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 

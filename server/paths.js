@@ -99,10 +99,12 @@ function uniqueName(name, exists, isDir = false) {
   const m = /^(.*) \((\d+)\)$/.exec(stem0);
   const stem = m ? m[1] : stem0;
   for (let i = m ? Number(m[2]) + 1 : 2; i < 10000; i++) {
-    const n = `${stem} (${i})${ext}`;
+    const suf = ` (${i})${ext}`;
+    const n = `${stem.slice(0, Math.max(1, 200 - suf.length))}${suf}`; // stays a valid name (checkName: at most 200)
     if (!exists(n)) return n;
   }
-  return `${stem}-${Date.now()}${ext}`;
+  const suf = `-${Date.now()}${ext}`;
+  return `${stem.slice(0, Math.max(1, 200 - suf.length))}${suf}`;
 }
 
 /** Hidden or temporary office files that the library never lists (~$x.docx, .~lock.x#, .hidden, Thumbs.db) */

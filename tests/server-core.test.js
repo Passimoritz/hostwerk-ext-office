@@ -64,6 +64,11 @@ test('unique names', () => {
   assert.strictEqual(P.uniqueName('Report (2).docx', ex), 'Report (3).docx');
   assert.strictEqual(P.uniqueName('Folder', ex, true), 'Folder (2)');
   assert.strictEqual(P.uniqueName('a.b.xlsx', ex), 'a.b (2).xlsx');
+  // a counter never pushes a name past the 200 characters checkName allows (the file would be unreachable)
+  const long = `${'x'.repeat(195)}.docx`;
+  const u = P.uniqueName(long, (n) => n === long);
+  assert.ok(u.length <= 200 && u.endsWith(' (2).docx'));
+  assert.strictEqual(P.checkName(u), u);
   assert.ok(P.isJunk('~$Report.docx') && P.isJunk('.~lock.x.odt#') && P.isJunk('Thumbs.db') && !P.isJunk('Report.docx'));
 });
 

@@ -1,5 +1,6 @@
 /* PDF editor 1.1 – look & feel on top of style.css (loaded after it). PDF red from Hostwerk's tokens. */
 /* hostwerk-allow: colors – the page, selection handles and redaction marks sit on white paper in both themes */
+/* hostwerk-allow: scale – page thumbnails keep the small 2 px paper corner (same as the slide and sheet thumbnails) */
 .of-pdf-root { --pdf: var(--err); --pdf-soft: var(--err-soft); --pdf-text: var(--err-text); }
 
 /* ribbon */

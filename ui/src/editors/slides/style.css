@@ -1,4 +1,5 @@
-/* Slides editor – Hostwerk tokens only; slide content itself is rendered with inline styles (same in light/dark). */
+/* Slides editor – Hostwerk tokens only; slide content itself is rendered with inline styles (same in light/dark).
+   hostwerk-allow: scale – slide thumbnails keep the small 2 px paper corner (same as the PDF page thumbnails) */
 .of-slides-root { height: 100%; display: flex; flex-direction: column; min-height: 0; background: var(--bg); color: var(--text); outline: none; position: relative; }
 .of-slides-center { align-items: center; justify-content: center; }
 .of-slides-callout { padding: var(--sp-2) var(--sp-3) 0; }

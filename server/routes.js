@@ -150,7 +150,7 @@ function routes(host, o) {
   r.post('/office/trash', (req, res) => { const entries = lib.toTrash((req.body || {}).paths); res.json({ ids: entries.map((e) => e.id), entries }); });
   r.post('/office/trash/restore', (req, res) => res.json({ entries: lib.restore((req.body || {}).ids) }));
   r.post('/office/trash/purge', (req, res) => res.json({ ok: true, removed: lib.purge((req.body || {}).ids) }));
-  r.put('/office/meta', (req, res) => { const l = lib.loc(b(req)); if (!fs.existsSync(l.full)) throw err(404, 'File not found'); o.meta.set(l.key, req.body || {}); res.json(lib.entry(l)); });
+  r.put('/office/meta', (req, res) => { if (!b(req).path) throw err(400, 'Invalid path'); const l = lib.loc(b(req)); if (!fs.existsSync(l.full)) throw err(404, 'File not found'); o.meta.set(l.key, req.body || {}); res.json(lib.entry(l)); });
   r.get('/office/tags', (req, res) => res.json({ tags: o.meta.tags() }));
   /**
    * Marks for a folder of Hostwerk's Files (files.marks): GET /office/marks?root=&path= → { names: { 'Report.docx':

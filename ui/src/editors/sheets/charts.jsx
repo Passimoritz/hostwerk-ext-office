@@ -141,7 +141,7 @@ function Cartesian({ chart, data, plot }) {
       el.push(<rect key={`b${si}-${i}`} className="of-ch-mark" style={{ animationDelay: `${Math.min(400, i * 25)}ms` }} {...r} fill={s.color}><title>{`${s.name} · ${data.categories[i] ?? ''}: ${fmtNum(v0)}`}</title></rect>);
       if (labelsOn(chart, si)) el.push(horiz ? <text key={`bl${si}-${i}`} x={r.x + r.width + 3} y={r.y + r.height / 2 + 3.5} fontSize={9.5} fill={TEXT}>{fmtNum(v0)}</text> : <text key={`bl${si}-${i}`} x={r.x + r.width / 2} y={r.y - 3} textAnchor="middle" fontSize={9.5} fill={TEXT}>{fmtNum(v0)}</text>);
     }));
-    S.forEach((s, si) => { if (!trendOn(chart, si) || horiz) return; const ln = fit(s.values); if (!ln) return; el.push(<line key={`t${si}`} x1={catPos(0)} x2={catPos(n - 1)} y1={vScale(ln.a)} y2={vScale(ln.a + ln.b * (n - 1))} stroke={s.color} strokeWidth={1.5} strokeDasharray="5 3" />); });
+    S.forEach((s, si) => { if (!trendOn(chart, si) || horiz) return; const ln = fit(s.values); if (!ln) return; el.push(<line key={`tl${si}`} x1={catPos(0)} x2={catPos(n - 1)} y1={vScale(ln.a)} y2={vScale(ln.a + ln.b * (n - 1))} stroke={s.color} strokeWidth={1.5} strokeDasharray="5 3" />); });
   } else if (type === 'line' || type === 'area') {
     const base = new Array(n).fill(0);
     const paths = [];
@@ -170,7 +170,7 @@ function Cartesian({ chart, data, plot }) {
       });
       if (type === 'line') pts.forEach((p, i) => p && el.push(<circle key={`m${si}-${i}`} cx={p.x} cy={p.y} r={3} fill="#fff" stroke={s.color} strokeWidth={1.5}><title>{`${s.name} · ${data.categories[i] ?? ''}: ${fmtNum(p.v)}`}</title></circle>));
       if (labelsOn(chart, si)) pts.forEach((p, i) => p && el.push(<text key={`ml${si}-${i}`} x={p.x} y={p.y - 6} textAnchor="middle" fontSize={9.5} fill={TEXT}>{fmtNum(p.v)}</text>));
-      if (trendOn(chart, si) && !stacked) { const ln = fit(s.values); if (ln) el.push(<line key={`t${si}`} x1={catPos(0)} x2={catPos(n - 1)} y1={vScale(ln.a)} y2={vScale(ln.a + ln.b * (n - 1))} stroke={s.color} strokeWidth={1.5} strokeDasharray="5 3" />); }
+      if (trendOn(chart, si) && !stacked) { const ln = fit(s.values); if (ln) el.push(<line key={`tl${si}`} x1={catPos(0)} x2={catPos(n - 1)} y1={vScale(ln.a)} y2={vScale(ln.a + ln.b * (n - 1))} stroke={s.color} strokeWidth={1.5} strokeDasharray="5 3" />); }
     });
   } else if (scatter) {
     S.forEach((s, si) => s.values.forEach((v, i) => {

@@ -454,7 +454,7 @@ function TemplateStrip({ where }) {
   return (
     <div className="of-shell-carousel">
       <button type="button" className="btn ghost icon sm of-shell-carousel-btn is-prev" aria-label={t('Previous templates')} title={t('Previous templates')} onClick={() => scroll(-1)}><ChevronLeft size={16} /></button>
-      <div className="of-shell-carousel-track" ref={strip}>
+      <div className="of-shell-carousel-track" ref={strip} role="listbox" aria-label={t('Templates')}>
         {CAROUSEL.map((x) => {
           const ext = defaultExt(x.kind, settingsNow().general.newFormat);
           return <TemplateCard key={`${x.kind}:${x.id}`} kind={x.kind} ext={ext} tplId={x.id} name={t(x.name)} cat={t(KINDS[x.kind].label)} on={false}

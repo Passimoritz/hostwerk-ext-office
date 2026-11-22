@@ -33,6 +33,10 @@
 .of-docs-font { width: 150px; }
 .of-docs-size { width: 54px; margin-left: 2px; }
 .of-docs-styles { display: grid; grid-auto-flow: column; grid-template-rows: repeat(2, 30px); gap: 2px; overflow-x: auto; max-width: 560px; }
+/* Formatvorlagen-Galerie wächst mit dem Fenster (breit: alle Vorlagen ohne Scrollen), schmal schrumpft sie zuerst und scrollt */
+.of-docs-group.of-docs-styles-group { flex: 0 1 auto; min-width: 200px; }
+.of-docs-styles-group .of-docs-group-body { max-width: none; flex-wrap: nowrap; }
+.of-docs-styles-group .of-docs-styles { max-width: none; min-width: 0; flex: 0 1 auto; grid-auto-columns: minmax(86px, 120px); }
 .of-docs-style { border: 1px solid var(--line); background: #fff; color: #000; border-radius: var(--r-sm); padding: 0 var(--sp-2); min-width: 86px; height: 30px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; font-family: var(--of-font); font-size: var(--fs-xs); }
 .of-docs-style:hover { border-color: var(--accent); }
 .of-docs-style.of-on { outline: 2px solid var(--accent); outline-offset: -1px; }
@@ -305,7 +309,7 @@
 .of-docs-ribbon.of-mini .of-docs-group { padding: 0 var(--sp-1); }
 .of-docs-ribbon.of-mini .of-docs-group-body { flex-direction: row; flex-wrap: nowrap; align-items: center; max-width: none; }
 .of-docs-ribbon.of-mini .of-docs-row + .of-docs-row { margin-left: 2px; }
-.of-docs-ribbon.of-mini .of-docs-styles { grid-template-rows: 28px; max-width: 420px; }
+.of-docs-ribbon.of-mini .of-docs-styles { grid-template-rows: 28px; }
 .of-docs-ribbon.of-mini .of-docs-rb.btn > span { display: none; }
 .of-docs-ribbon.of-mini .of-docs-rb.btn:not(.icon) { padding: 0 6px; }
 

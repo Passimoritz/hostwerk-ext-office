@@ -2,6 +2,7 @@
  * The ribbon: Home · Insert · Layout · Review · View, plus contextual Table and Picture tabs (like Word).
  * Every button keeps the editor selection and names its shortcut in the tooltip. Hostwerk's own shortcuts stay free:
  * link = Ctrl+Shift+K (Ctrl+K is Hostwerk's search), justify = Ctrl+Shift+J (Ctrl+J is Hostwerk's AI panel).
+ * hostwerk-allow: tables – the table-style gallery draws a tiny copy of the document table in each style (like Word), not a Hostwerk list
  */
 import {
   Undo2, Redo2, Scissors, Copy, ClipboardPaste, ClipboardType, Paintbrush, Bold, Italic, Underline, Strikethrough, Subscript, Superscript,
