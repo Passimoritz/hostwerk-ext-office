@@ -1,3 +1,8 @@
+## 1.3.3
+
+- Fixed: active buttons elsewhere in Hostwerk no longer take Office's colour; the header and footer bar shows its active buttons. / Behoben: Aktive Knöpfe anderswo in Hostwerk übernehmen nicht mehr die Office-Farbe; die Kopf- und Fußzeilen-Leiste zeigt ihre aktiven Knöpfe.
+- Fixed: copies of files with very long names stay reachable; the Trash view and the last settings section are reachable in narrow windows; chart labels in spreadsheets. / Behoben: Kopien von Dateien mit sehr langen Namen bleiben erreichbar; Papierkorb-Ansicht und letzter Einstellungs-Abschnitt sind in schmalen Fenstern erreichbar; Diagramm-Beschriftungen in Tabellen.
+
 ## 1.3.2
 
 - Documents look and paginate like Word: page breaks also in documents with pictures (tables no longer run over the footer), the document's own heading and title styles, Word's spacing rules (space at the top of a page, collapsing spacing, keep with next), lines wrap like Word, exact table row heights, headers and footers at Word's distance with tab stops, paragraph borders and text colour like Word; no empty page before sections; formatting changes re-paginate. / Dokumente sehen aus und brechen um wie in Word: Seitenumbrüche auch in Dokumenten mit Bildern (Tabellen laufen nicht mehr über die Fußzeile), die eigenen Überschriften- und Titelformate des Dokuments, Words Abstandsregeln (Abstand oben auf der Seite, zusammenfallende Abstände, mit nächstem Absatz zusammenhalten), Zeilen brechen wie in Word um, exakte Tabellenzeilenhöhen, Kopf- und Fußzeilen mit Words Abstand und Tabstopps, Absatzrahmen und Textfarbe wie in Word; keine leere Seite mehr vor Abschnitten; Formatänderungen brechen neu um.
